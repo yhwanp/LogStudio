@@ -4,6 +4,8 @@
 
 [Windows x64 다운로드](https://github.com/yhwanp/LogStudio/releases/latest) · [macOS 빌드 방법](#macos) · [사용 설명서](docs/USER_GUIDE.md)
 
+https://github.com/user-attachments/assets/bfe612d8-acb8-45b8-8507-1085cf5f9e58
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/main-dark.png">
   <img src="docs/images/main-light.png" alt="필터를 적용한 Android 로그(위)와 timeout 검색 결과(아래)를 보여 주는 LogStudio 화면">
