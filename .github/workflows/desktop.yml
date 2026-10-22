@@ -99,7 +99,7 @@ jobs:
           name: LogStudio-${{ matrix.label }}
           path: artifacts/downloads/*
           if-no-files-found: error
-          retention-days: ${{ startsWith(github.ref, 'refs/tags/') && 1 || 14 }}
+          retention-days: ${{ startsWith(github.ref, 'refs/tags/') && 1 || 90 }}
           compression-level: 0
       - name: Add download link
         if: github.event_name != 'pull_request'
