@@ -1,0 +1,22 @@
+[package]
+name = "logstudio-core"
+version = "0.2.0"
+edition = "2021"
+publish = false
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+grep-regex.workspace = true
+grep-searcher.workspace = true
+grep-matcher.workspace = true
+memchr.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+regex.workspace = true
+tempfile.workspace = true
+chrono.workspace = true
+
+[dev-dependencies]
+# Independent DLT parser, used only as a test oracle for `dlt`.
+dlt_parse = "=0.10.1"

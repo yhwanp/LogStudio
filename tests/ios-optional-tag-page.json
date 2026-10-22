@@ -1,0 +1,192 @@
+{
+  "contextEnd": 0,
+  "contextStart": 0,
+  "count": 4,
+  "datasetId": 1,
+  "generation": 1,
+  "queryId": 1,
+  "rows": [
+    {
+      "date": "2026-09-15",
+      "fieldOffsets": {
+        "date": 0,
+        "message": 53,
+        "pid": 31,
+        "process": 24,
+        "tag": 45,
+        "tid": 36,
+        "time": 11
+      },
+      "highlights": [
+        [
+          24,
+          30
+        ]
+      ],
+      "kind": "parsed",
+      "level": "U",
+      "levelText": null,
+      "lineNumber": 3,
+      "message": "heap used = 58.36 MB, remaining = 5824.17 MB",
+      "pid": "3870",
+      "process": "Runner",
+      "raw": "2026-09-15 10:47:35.134 Runner[3870:481516] [Memory] heap used = 58.36 MB, remaining = 5824.17 MB",
+      "rawBytes": 97,
+      "sourceLineNumber": null,
+      "sourceStartByte": 14,
+      "tag": "Memory",
+      "tags": [
+        "Memory"
+      ],
+      "tid": "481516",
+      "time": "10:47:35.134",
+      "year": "2026"
+    },
+    {
+      "date": "2026-09-15",
+      "fieldOffsets": {
+        "date": 0,
+        "message": 44,
+        "pid": 31,
+        "process": 24,
+        "tid": 36,
+        "time": 11
+      },
+      "highlights": [
+        [
+          24,
+          30
+        ],
+        [
+          44,
+          50
+        ]
+      ],
+      "kind": "parsed",
+      "level": "U",
+      "levelText": null,
+      "lineNumber": 4,
+      "message": "Shader cache pool loaded: 0x1004e7a10",
+      "pid": "3870",
+      "process": "Runner",
+      "raw": "2026-09-15 10:47:35.184 Runner[3870:481490] Shader cache pool loaded: 0x1004e7a10",
+      "rawBytes": 81,
+      "sourceLineNumber": null,
+      "sourceStartByte": 113,
+      "tag": "",
+      "tags": [],
+      "tid": "481490",
+      "time": "10:47:35.184",
+      "year": "2026"
+    },
+    {
+      "date": "2026-09-15",
+      "fieldOffsets": {
+        "date": 5,
+        "message": 49,
+        "pid": 36,
+        "process": 29,
+        "tid": 41,
+        "time": 16
+      },
+      "highlights": [
+        [
+          29,
+          35
+        ],
+        [
+          49,
+          55
+        ]
+      ],
+      "kind": "parsed",
+      "level": "U",
+      "levelText": null,
+      "lineNumber": 5,
+      "message": "Shader cache pool loaded: 0x1004e7a10",
+      "pid": "3870",
+      "process": "Runner",
+      "raw": "0005\t2026-09-15 10:47:35.184 Runner[3870:481490] Shader cache pool loaded: 0x1004e7a10",
+      "rawBytes": 86,
+      "sourceLineNumber": "0005",
+      "sourceStartByte": 195,
+      "tag": "",
+      "tags": [],
+      "tid": "481490",
+      "time": "10:47:35.184",
+      "year": "2026"
+    },
+    {
+      "date": "2026-09-15",
+      "encodingDamage": {
+        "bytes": 1,
+        "mask": "0000000000000000000080",
+        "replacements": 1,
+        "samples": [
+          {
+            "endByte": 88,
+            "hex": "FF",
+            "position": 87,
+            "sourceStartByte": 420,
+            "startByte": 87
+          }
+        ],
+        "samplesTruncated": false
+      },
+      "encodingDamaged": true,
+      "fieldDamage": {
+        "message": {
+          "bytes": 1,
+          "mask": "0000000040",
+          "replacements": 1,
+          "samples": [
+            {
+              "endByte": 88,
+              "hex": "FF",
+              "position": 38,
+              "sourceStartByte": 420,
+              "startByte": 87
+            }
+          ],
+          "samplesTruncated": false
+        }
+      },
+      "fieldOffsets": {
+        "date": 5,
+        "message": 49,
+        "pid": 36,
+        "process": 29,
+        "tid": 41,
+        "time": 16
+      },
+      "highlights": [
+        [
+          29,
+          35
+        ],
+        [
+          49,
+          55
+        ]
+      ],
+      "kind": "parsed",
+      "level": "U",
+      "levelText": null,
+      "lineNumber": 7,
+      "message": "Shader cache pool loaded: 0x1004e7a10 � � 🙂",
+      "pid": "3870",
+      "process": "Runner",
+      "raw": "0007 2026-09-15 10:47:35.184 Runner[3870:481490] Shader cache pool loaded: 0x1004e7a10 � � 🙂",
+      "rawBytes": 97,
+      "sourceLineNumber": "0007",
+      "sourceStartByte": 333,
+      "tag": "",
+      "tags": [],
+      "tid": "481490",
+      "time": "10:47:35.184",
+      "year": "2026"
+    }
+  ],
+  "start": 0,
+  "total": 7
+}

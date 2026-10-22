@@ -1,0 +1,475 @@
+/* Colors live in variables so the dark scheme only swaps values. */
+:root{
+  color-scheme:light;
+  --bg:#edf1f5;--surface:#fff;--surface-2:#f8fafc;--surface-3:#f2f6f8;
+  --text:#182b43;--text-2:#26394e;--muted:#617087;--faint:#8a98a9;
+  --border:#dbe2e9;--border-strong:#cdd7e1;--row-border:#edf1f5;
+  --navy:#14263b;--navy-text:#e8eef4;--navy-muted:#9fb1c4;--brand:#59e0c5;--topbar-edge:transparent;
+  --accent:#0b7568;--on-accent:#fff;--accent-text:#0a6357;--accent-soft:#e4f3f0;--accent-border:#86bdb4;--focus:#5ab9ac;
+  --row-hover:#f0f8f6;--row-selected:#dff4ef;--row-range:#ecf7f4;--row-error:#fff7f8;
+  --raw-text:#7c725d;--mark:#f7dc8b;--mark-text:inherit;--search-hit:#d4a514;--search-hit-bg:#fbefc4;
+  --row-selected-2:#eef1f4;--row-selected-2-border:#c9d2dc;
+  --error-bg:#fff0f1;--error-text:#a83043;--error-border:#f2d0d6;
+  --lv-bg:#f0f3f7;--lv-text:#56687c;--lv-i-bg:#e8f5f2;--lv-i:#087061;--lv-d-bg:#eaf2fb;--lv-d:#3d6fa5;
+  --lv-w-bg:#fff3d9;--lv-w:#956309;--lv-e-bg:#fce9ed;--lv-e:#b3384b;--lv-w-border:#d6b85f;--lv-e-border:#dda3ae;
+  --lv-border:#bcc8d4;--lv-i-border:#86bdb4;--lv-d-border:#a3bfe0;
+  --damage-bg:#fff0d8;--damage-text:#943b00;
+  --shadow:0 3px 15px #14263b0d;--tip-dim:#0a121985;--tip-dim-soft:#0a121952;
+  --row-height:28px;--columns:52px 180px 56px 56px 76px 128px minmax(160px,1fr);--line-column:52px;--table-min-width:708px;
+  font-family:Inter,"Noto Sans KR",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--text);background:var(--bg);font-size:16px;
+}
+@media(prefers-color-scheme:dark){:root{
+  color-scheme:dark;
+  --bg:#0e151d;--surface:#151f2a;--surface-2:#18232f;--surface-3:#1c2835;
+  --text:#dbe4ee;--text-2:#c6d1dc;--muted:#8d9cad;--faint:#6d7c8d;
+  --border:#283544;--border-strong:#344455;--row-border:#1d2935;
+  --navy:#0a1219;--navy-text:#dbe4ee;--navy-muted:#8193a6;--topbar-edge:#263443;
+  --accent:#36b9a3;--on-accent:#0b1a17;--accent-text:#7bdcca;--accent-soft:#16352f;--accent-border:#2c6a60;--focus:#4fc7b2;
+  --row-hover:#1a2a31;--row-selected:#17393a;--row-range:#152d2f;--row-error:#1f1a20;
+  --raw-text:#b3a688;--mark:#7a6110;--mark-text:#fff4cc;--search-hit:#d9b23a;--search-hit-bg:#3b3215;
+  --row-selected-2:#1f2a36;--row-selected-2-border:#3a4a5b;
+  --error-bg:#35181e;--error-text:#ff9fac;--error-border:#5a2a33;
+  --lv-bg:#222e3b;--lv-text:#9aaabb;--lv-i-bg:#143530;--lv-i:#6fd6c2;--lv-d-bg:#182a3f;--lv-d:#8db8e8;
+  --lv-w-bg:#3a2d10;--lv-w:#f0c560;--lv-e-bg:#401c25;--lv-e:#ff8f9f;--lv-w-border:#7a6326;--lv-e-border:#7a3442;
+  --lv-border:#46586b;--lv-i-border:#2c6a60;--lv-d-border:#34557a;
+  --damage-bg:#40290c;--damage-text:#ffb46b;
+  --shadow:none;--tip-dim:#000000a6;--tip-dim-soft:#00000070;
+}}
+*{box-sizing:border-box}
+body{margin:0;overflow:hidden}
+button,input,select{font:inherit;color:inherit}
+button{cursor:pointer;border:0}
+button:disabled{cursor:default;opacity:.5}
+button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible,[tabindex]:focus-visible{outline:3px solid var(--focus);outline-offset:2px}
+input[type=checkbox]{accent-color:var(--accent);width:15px;height:15px;flex-shrink:0;margin:0}
+input[type=search]::-webkit-search-cancel-button{cursor:pointer}
+[hidden]{display:none!important}
+kbd{font:11px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;border:1px solid var(--border-strong);border-bottom-width:2px;border-radius:4px;padding:1px 5px;color:var(--muted);background:var(--surface)}
+.visually-hidden{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+
+/* Buttons */
+.button{border:1px solid var(--border-strong);border-radius:7px;background:var(--surface);color:var(--text-2);padding:7px 14px;font-size:13px;font-weight:600;min-height:34px;white-space:nowrap}
+.button:hover:not(:disabled){background:var(--surface-3)}
+.button.primary{color:var(--on-accent);background:var(--accent);border-color:var(--accent)}
+.button.primary:hover:not(:disabled){background:var(--accent);filter:brightness(1.07)}
+.button.small{min-height:30px;padding:4px 10px;font-size:12px}
+.text-button{background:none;color:var(--accent-text);font-size:13px;padding:3px 0;border-radius:3px;white-space:nowrap}
+.text-button:hover:not(:disabled){text-decoration:underline}
+.mini-button{background:var(--surface);color:var(--text-2);border:1px solid var(--border-strong);border-radius:5px;font-size:12px;padding:2px 8px;min-height:24px;white-space:nowrap}
+.mini-button:hover:not(:disabled){background:var(--surface-3)}
+
+/* Top toolbar: brand, current file and file actions in one row. */
+.topbar{height:52px;background:var(--navy);color:var(--navy-text);display:flex;align-items:center;gap:18px;padding:0 16px;border-bottom:1px solid var(--topbar-edge)}
+.brand{display:flex;gap:9px;align-items:center;flex-shrink:0}
+.brand-mark{font-family:monospace;font-size:26px;color:var(--brand);line-height:1}
+h1{font-size:16px;font-weight:650;letter-spacing:-.02em;margin:0}
+.file-info{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:3px;border-left:1px solid #ffffff1f;padding-left:16px;height:34px}
+.file-text{display:flex;align-items:baseline;gap:10px;min-width:0}
+.file-text strong{font-size:13px;font-weight:600;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;min-width:0}
+.file-size{font-size:12px;color:var(--navy-muted);white-space:nowrap;font-variant-numeric:tabular-nums}
+.file-status{font-size:12px;color:var(--navy-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:1;min-width:0}
+.load-progress{height:3px;border-radius:2px;background:#ffffff1f;overflow:hidden;max-width:420px}
+.load-progress>span{display:block;height:100%;width:0;background:var(--brand);transition:width .2s linear}
+.top-actions{display:flex;align-items:center;gap:8px;flex-shrink:0}
+.topbar .button{background:transparent;color:var(--navy-text);border-color:#ffffff33}
+.topbar .button:hover:not(:disabled){background:#ffffff14}
+.topbar .button.primary{background:var(--brand);border-color:var(--brand);color:#0d2b28}
+.topbar .button.primary:hover:not(:disabled){background:var(--brand)}
+.topbar .button.subtle{border-color:transparent;color:var(--navy-muted)}
+.topbar .help-button{width:34px;padding:0;font-size:15px;border-color:#ffffff33}
+
+/* Workspace: rail, expanding filter track, logs. The filter track expands in
+   flow; auto-hide changes behavior, not geometry. */
+.workspace{position:relative;display:grid;--filter-rail-width:48px;--filter-panel-track:264px;grid-template-columns:calc(var(--filter-rail-width) + 10px) minmax(0,var(--filter-panel-track)) minmax(0,1fr);height:calc(100dvh - 52px);padding:10px 12px;transition:grid-template-columns 180ms ease}
+.workspace.filters-collapsed{--filter-panel-track:0px}
+.filter-rail{width:var(--filter-rail-width);grid-column:1;background:var(--surface-2);border:1px solid var(--border);border-radius:9px;padding:5px;min-height:0}
+.filter-toggle{position:relative;display:flex;flex-direction:column;align-items:center;gap:6px;width:100%;padding:10px 0 7px;border:1px solid transparent;border-radius:6px;background:transparent;color:var(--muted);font-size:11px;line-height:1.3}
+.filter-toggle:hover:not(:disabled){background:var(--surface-3);color:var(--accent-text)}
+.filter-toggle[aria-expanded=true]{background:var(--accent-soft);border-color:var(--accent-border);color:var(--accent-text)}
+.filter-icon{width:20px;height:20px;flex-shrink:0}
+.filter-chevron{width:14px;height:14px;flex-shrink:0}
+.filter-toggle[aria-expanded=true] .filter-chevron{transform:rotate(180deg)}
+.filter-badge{min-width:18px;height:17px;padding:0 5px;border-radius:9px;background:var(--accent);color:var(--on-accent);font-size:10px;font-weight:700;line-height:17px;text-align:center;font-variant-numeric:tabular-nums}
+.filter-panel-slot{grid-column:2;min-width:0;min-height:0;overflow:hidden;visibility:visible;transition:visibility 0s}
+.filters-collapsed .filter-panel-slot{visibility:hidden;transition-delay:180ms}
+.filters{background:var(--surface-2);border:1px solid var(--border);border-radius:9px;padding:16px;margin-left:0;height:100%;width:252px;overflow-y:auto}
+.workspace>.log-panel{grid-column:3}
+.section-title{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:8px}
+h2{font-size:16px;margin:0;font-weight:650}
+.filter-actions{display:flex;gap:12px}
+.filter-auto-hide{margin-bottom:12px;color:var(--muted);font-size:12px}
+.filters fieldset{padding:0;border:0;margin:0 0 14px;min-width:0}
+.filters legend{font-size:13px;font-weight:600;margin-bottom:8px}
+.filters legend span{font-size:12px;color:var(--muted);font-weight:400;margin-left:7px}
+/* Level chips use the row badge colors of their level. A check box, not
+   color alone, tells selected from unselected; dimmed chips have no rows. */
+.level-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px}
+.level-chip{--chip:var(--lv-text);--chip-bg:var(--lv-bg);--chip-border:var(--lv-border);border:1px solid var(--border-strong);border-radius:6px;background:var(--surface);display:grid;grid-template-columns:12px minmax(0,1fr);align-items:center;gap:0 6px;padding:3px 8px;min-height:36px;color:var(--muted);text-align:left}
+.level-chip[data-level=I]{--chip:var(--lv-i);--chip-bg:var(--lv-i-bg);--chip-border:var(--lv-i-border)}
+.level-chip[data-level=D]{--chip:var(--lv-d);--chip-bg:var(--lv-d-bg);--chip-border:var(--lv-d-border)}
+.level-chip[data-level=W]{--chip:var(--lv-w);--chip-bg:var(--lv-w-bg);--chip-border:var(--lv-w-border)}
+.level-chip:is([data-level=E],[data-level=F],[data-level=A]){--chip:var(--lv-e);--chip-bg:var(--lv-e-bg);--chip-border:var(--lv-e-border)}
+.level-chip[aria-pressed=true]{color:var(--chip);background:var(--chip-bg);border-color:var(--chip-border)}
+.level-chip::before{content:'';grid-area:1/1;width:12px;height:12px;border:1.5px solid var(--border-strong);border-radius:3px;background:var(--surface)}
+.level-chip[aria-pressed=true]::before{border-color:var(--chip);background:var(--chip)}
+.level-chip[aria-pressed=true]::after{content:'';grid-area:1/1;justify-self:center;width:3px;height:6px;margin-top:-2px;border:solid var(--surface);border-width:0 2px 2px 0;transform:rotate(45deg)}
+.level-chip .letter{grid-area:1/2;font-size:13px;font-weight:600;line-height:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.level-chip .count{grid-area:2/2;font-size:11px;line-height:14px;font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.level-chip[data-empty=true]{border-style:dashed}.level-chip[data-empty=true] .letter{font-weight:400}
+.level-actions{display:flex;justify-content:space-between;gap:8px;margin-top:6px}
+.level-actions button{font-size:12px}
+.field{font-size:13px;font-weight:600;display:flex;flex-direction:column;gap:5px;margin-bottom:12px}
+.field input,.field select{font-size:13px;color:var(--text);background:var(--surface);border:1px solid var(--border-strong);border-radius:6px;padding:6px 9px;min-height:32px;width:100%}
+.field input::placeholder{color:var(--muted);font-weight:400}
+.field input[aria-invalid=true],.search-box:has(input[aria-invalid=true]){border-color:var(--error-text)}
+.id-fields{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.id-fields .field{margin-bottom:8px}
+/* PID·TID and the time range wait behind dashed + buttons, outlined like
+   the empty fields they open, until a condition uses them. */
+.field-openers{display:flex;flex-wrap:wrap;gap:6px;margin:-4px 0 10px}
+.field-opener{background:none;border:1px dashed var(--border-strong);border-radius:6px;color:var(--accent-text);font-size:12px;font-weight:600;padding:2px 10px;min-height:26px}
+.field-opener:hover{background:var(--accent-soft);border-color:var(--accent-border)}
+/* Field help is collapsed behind a "?" beside the labels. */
+.has-help,.check-row{position:relative}
+.has-help>.help-toggle{position:absolute;top:0;right:0}
+.check-row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px}
+/* Conditions: a showing and a hiding list of cards. The card being edited
+   holds the editor (the level, tag, ID and time fields); a lone showing
+   condition being edited has no header, so the panel reads as one set of
+   fields. */
+.cond-section{margin:0 0 12px}
+.cond-heading{display:flex;align-items:baseline;gap:8px;margin:0 0 6px}
+.cond-heading h3{font-size:13px;font-weight:650;margin:0}
+.cond-heading span{font-size:12px;color:var(--muted)}
+.cond-list{display:flex;flex-direction:column;gap:6px}
+.cond-card{border:1px solid var(--border-strong);border-radius:8px;background:var(--surface);min-width:0}
+.cond-card[data-active=true]{border-color:var(--accent-border);box-shadow:0 0 0 1px var(--accent-border)}
+.cond-card.solo{border:0;background:none;box-shadow:none}
+.cond-card.solo>.cond-head{display:none}
+.cond-head{display:flex;align-items:center;gap:6px;padding:4px 4px 4px 8px;min-height:32px}
+.cond-summary{flex:1;min-width:0;background:none;text-align:left;font-size:12px;color:var(--text-2);padding:4px 2px;border-radius:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cond-card[data-active=true] .cond-summary{font-weight:600;color:var(--accent-text)}
+.cond-card[data-off=true] .cond-summary,.cond-card[data-empty=true] .cond-summary{color:var(--faint);font-weight:400}
+.cond-card[data-off=true] .cond-summary{text-decoration:line-through}
+.cond-card[data-invalid=true] .cond-summary{color:var(--error-text)}
+/* No row of the log matches: dashed, as a level without rows. */
+.cond-card[data-rows=none]:not(.solo){border-style:dashed}
+.cond-alert{margin:0 0 8px;font-size:12px;line-height:1.5;color:var(--muted);border:1px dashed var(--border-strong);border-radius:6px;padding:4px 8px}
+/* Under a card's summary, aligned with its text. */
+.cond-card:not(.solo)>.cond-alert{margin:-4px 0 0;border:0;padding:0 8px 6px 32px;font-size:11px}
+.cond-remove{flex-shrink:0;background:none;color:var(--faint);font-size:15px;line-height:1;width:22px;height:22px;border-radius:5px}
+.cond-remove:hover{background:var(--surface-3);color:var(--text)}
+.cond-card:not(.solo)>.cond-editor{padding:8px 10px 2px;border-top:1px solid var(--border)}
+.add-cond{font-size:12px;margin-top:6px}
+.add-cond:disabled{color:var(--faint);cursor:default}
+.chip-joint{flex-shrink:0;font-size:11px;font-weight:600;color:var(--muted);align-self:center;padding:0 2px}
+.chip-joint.exclude{color:var(--error-text)}
+.filter-chip.exclude{border-color:var(--error-border);background:var(--error-bg);color:var(--error-text)}
+.filter-chip.exclude:hover .chip-remove{background:var(--error-text);color:var(--surface)}
+.filter-chip.no-rows{border-style:dashed}
+.filter-chip .chip-note{flex-shrink:0;font-size:11px;opacity:.85;white-space:nowrap}
+.help-toggle{width:17px;height:17px;border-radius:50%;border:1px solid var(--border-strong);background:var(--surface);color:var(--muted);font-size:11px;font-weight:700;line-height:15px;padding:0;text-align:center;flex-shrink:0}
+.help-toggle:hover,.help-toggle[aria-expanded=true]{background:var(--accent-soft);border-color:var(--accent-border);color:var(--accent-text)}
+.filters .field-help{margin:0 0 10px}
+.field-error{font-size:12px;color:var(--error-text);margin:0 0 12px;line-height:1.5}
+.field+.field-error{margin-top:-4px}
+.check-line{font-size:13px;display:flex;align-items:center;gap:6px;line-height:1.5;white-space:nowrap}
+.small-note{font-size:12px;color:var(--muted);line-height:1.6;margin:8px 0 0}
+.parse-options{border-top:1px solid var(--border);margin-top:12px;padding-top:6px}
+.parse-options>summary{font-size:12px;font-weight:600;color:var(--muted);cursor:pointer;min-height:28px;line-height:28px}
+.parse-options[open]>summary{margin-bottom:10px}
+
+/* Log panel */
+.log-panel{position:relative;min-width:0;min-height:0;background:var(--surface);border:1px solid var(--border);border-radius:9px;box-shadow:var(--shadow);display:flex;flex-direction:column;overflow:hidden}
+.error{font-size:13px;padding:9px 14px;line-height:1.6;flex-shrink:0;background:var(--error-bg);color:var(--error-text);border-bottom:1px solid var(--error-border)}
+.error-bar{display:flex;align-items:center;gap:12px}
+.error-bar>[role=alert]{flex:1;min-width:0}
+.error-bar>.button{flex-shrink:0;background:var(--surface);color:var(--error-text);border-color:var(--error-border)}
+.error-bar>.button:hover:not(:disabled){background:var(--error-bg);border-color:var(--error-text)}
+.log-content{display:flex;flex-direction:column;flex:1;min-height:0}
+.pane-heading{display:flex;align-items:center;gap:6px 12px;padding:5px 12px;background:var(--surface-3);border-bottom:1px solid var(--border);font-size:12px;flex-shrink:0;flex-wrap:wrap;min-height:36px}
+.pane-title{font-size:13px;font-weight:650;white-space:nowrap;flex-shrink:0}
+.pane-nav{display:flex;align-items:center;gap:5px;margin-left:auto;color:var(--muted)}
+.range-text{font-variant-numeric:tabular-nums;white-space:nowrap;margin-right:4px}
+.jump-form{display:flex;align-items:center;gap:4px}
+.jump-form input{width:76px;padding:2px 6px;border:1px solid var(--border-strong);border-radius:5px;min-height:24px;font-size:12px;background:var(--surface);font-variant-numeric:tabular-nums}
+.jump-form input::placeholder{color:var(--muted)}
+.jump-form input[aria-invalid=true]{border-color:var(--error-text)}
+.follow-toggle{font-size:12px;color:var(--muted)}
+/* Following a growing file: pressed (dot filled) while new rows arrive; the dot keeps the width. */
+.follow-file::before{content:'';display:inline-block;box-sizing:border-box;width:7px;height:7px;margin-right:5px;border-radius:50%;border:1px solid currentColor;opacity:.55;vertical-align:0}
+.follow-file[aria-pressed=true],.follow-file[aria-pressed=true]:hover:not(:disabled){background:var(--accent-soft);border-color:var(--accent-border);color:var(--accent-text)}
+.follow-file[aria-pressed=true]::before{background:var(--accent);border-color:var(--accent);opacity:1}
+.table-tools{display:flex;align-items:center;gap:12px}
+.table-tools>.text-button{font-size:12px}
+.view-switch{display:flex;border:1px solid var(--border-strong);border-radius:6px;overflow:hidden;flex-shrink:0}
+.view-switch button{font-size:12px;background:var(--surface);color:var(--muted);padding:3px 9px}
+.view-switch button[aria-pressed=true]{background:var(--accent-soft);color:var(--accent-text);font-weight:600}
+/* Chips, the pending note and the selection share what the title, the list
+   navigation and the tools leave on the heading's line: a zero basis keeps
+   them from wrapping the tools, and chips that still do not fit truncate,
+   then scroll sideways. The pending warning keeps its first words. Only a
+   heading too narrow for the tools wraps. */
+.filter-row{display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px;padding:4px 12px;background:var(--surface-3);border-bottom:1px solid var(--border);font-size:12px;flex-shrink:0}
+.active-filters{display:flex;flex-wrap:wrap;align-items:center;gap:4px;min-width:0}
+.active-filters .filter-chip{max-width:min(32em,100%)}
+.chip-group{display:inline-flex;align-items:center;gap:4px;min-width:0;max-width:100%}
+.logs-main-pane .selection-info{flex:3 1 0;max-width:max-content;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.filter-row .pending-note{white-space:normal}
+.logs-main-pane .pane-nav,.logs-main-pane .table-tools{flex-shrink:0}
+.filter-chip{display:inline-flex;align-items:center;gap:5px;max-width:260px;padding:1px 4px 1px 8px;border-radius:11px;border:1px solid var(--accent-border);background:var(--accent-soft);color:var(--accent-text);font-size:12px;line-height:18px}
+.filter-chip>span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.pending-note{color:var(--lv-w);font-size:12px;white-space:nowrap}
+.filter-chip .chip-remove{flex-shrink:0;font-size:14px;line-height:1;width:16px;height:16px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center}
+.filter-chip:hover .chip-remove{background:var(--accent);color:var(--on-accent)}
+.selection-info{color:var(--accent-text);font-weight:600;white-space:nowrap}
+.selection-info:empty{display:none}
+.pane-hint{color:var(--faint);white-space:nowrap}
+.menu-button::after{content:'';display:inline-block;margin-left:4px;border:4px solid transparent;border-top-color:currentColor;border-bottom-width:0;vertical-align:2px}
+/* Saved filters: a menu button in the log heading and one in the filter panel
+   name the applied filter and mark it once its conditions change. */
+.saved-filter-button{display:inline-flex;align-items:center;gap:6px;min-width:0}
+/* In the heading it shares the space chips use, so it never wraps the tools;
+   while the filter panel is open the panel's own button stands in for it. */
+.pane-heading .saved-filter-button{flex:1 1 0;min-width:7.5em;max-width:max-content}
+.pane-heading .saved-filter-name{max-width:200px}
+.workspace:not(.filters-collapsed) .pane-heading .saved-filter-button{display:none}
+.saved-filter-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.saved-filter-button[data-state=none]{color:var(--muted)}
+.saved-filter-button:is([data-state=applied],[data-state=modified]),.saved-filter-button:is([data-state=applied],[data-state=modified]):hover:not(:disabled){border-color:var(--accent-border);background:var(--accent-soft);color:var(--accent-text);font-weight:600}
+.saved-filter-state{flex-shrink:0;font-size:11px;font-weight:600;color:var(--lv-w)}
+.saved-filter-row{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+.saved-filter-row .saved-filter-button{flex:1;max-width:none;min-height:30px;font-size:13px;padding:3px 9px}
+.saved-filter-row .saved-filter-button::after{margin-left:auto}
+
+/* Upper logs share the panel with the resizable lower region. */
+.logs-main-pane{display:flex;flex-direction:column;flex:1 1 0;min-height:110px;min-width:0;overflow:hidden}
+.pane-splitter{flex:0 0 7px;cursor:row-resize;background:var(--surface-3);border-top:1px solid var(--border);border-bottom:1px solid var(--border);position:relative;touch-action:none}
+.pane-splitter::after{content:'';position:absolute;left:50%;top:2px;width:36px;height:1px;margin-left:-18px;border-top:1px solid var(--faint);border-bottom:1px solid var(--faint);height:3px;box-sizing:border-box;opacity:.7}
+.pane-splitter:hover,.pane-splitter:focus-visible,.resizing-panes .pane-splitter{background:var(--accent-soft)}
+.pane-splitter:focus-visible{outline-offset:-3px}
+.resizing-panes,.resizing-panes *{cursor:row-resize!important;user-select:none!important}
+.lower-pane{display:flex;flex-direction:column;flex:0 0 auto;min-width:0;min-height:0;border-top:1px solid var(--border)}
+.lower-pane.expanded{flex:0 0 calc(var(--lower-ratio,.42)*100%);border-top:0;min-height:150px}
+/* A detail alone takes the height of its text, up to the saved share, so a
+   one-line log does not leave the region mostly empty. */
+.lower-pane.expanded:not(:has(>.search-result-pane:not([hidden]))){flex:0 1 auto;max-height:calc(var(--lower-ratio,.42)*100%);min-height:0}
+.lower-pane.expanded:not(:has(>.search-result-pane:not([hidden])))>.raw-detail,.lower-pane.expanded:not(:has(>.search-result-pane:not([hidden])))>.raw-detail pre{flex:0 1 auto}
+/* Results with a detail keep five result rows (heading 36px, column header
+   27px) and three detail lines (112px) under the 46px search toolbar: the
+   region grows past a smaller saved share, but never past 62% of the logs. */
+.lower-pane.expanded:has(>.search-result-pane:not([hidden])):has(>.raw-detail:not([hidden])){min-height:min(62%,calc(46px + 63px + 5*var(--row-height) + 112px))}
+.lower-pane.expanded:has(>.raw-detail:not([hidden]))>.search-result-pane{min-height:min(100%,calc(63px + 5*var(--row-height)))}
+.search-toolbar{padding:7px 12px;display:flex;gap:12px;align-items:center;flex-shrink:0}
+.search-box{border:1px solid var(--border-strong);border-radius:7px;background:var(--surface);display:flex;align-items:center;gap:8px;padding:0 8px 0 10px;flex:1;min-width:180px}
+.search-box>svg{width:16px;height:16px;color:var(--faint);flex-shrink:0}
+.search-box input{border:0;outline:none!important;background:transparent;padding:6px 0;font-size:13px;width:100%;min-width:0}
+.search-box:focus-within{border-color:var(--accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 30%,transparent)}
+/* A running search's cancel takes the shortcut hint's place in the box. */
+.search-box:has(>.search-cancel:not([hidden]))>kbd{display:none}
+.search-cancel{flex-shrink:0;margin-right:-4px;min-height:22px;padding:1px 8px}
+.search-error{margin:-2px 12px 7px}
+.search-result-pane{display:flex;flex-direction:column;flex:1 1 0;min-height:90px;min-width:0;overflow:hidden;border-top:1px solid var(--border)}
+.result-count{display:flex;align-items:baseline;gap:4px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.result-count strong{font-size:14px}
+.result-count>span{color:var(--muted)}
+
+/* Tables */
+.large-table{overflow-x:auto;overflow-y:hidden;display:flex;flex-direction:column;flex:1;min-height:0;min-width:0;width:100%}
+.table-header{display:grid;grid-template-columns:var(--columns);min-width:var(--table-min-width);background:var(--surface-2);color:var(--muted);font-size:12px;font-weight:600;min-height:26px;align-items:stretch;border-bottom:1px solid var(--border);flex-shrink:0}
+.table-header>span{padding:0 6px;display:flex;align-items:center}
+.column-heading{position:relative;min-width:0}
+.column-heading>span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;pointer-events:none}
+.column-resizer{position:absolute;right:-4px;top:0;bottom:0;width:9px;z-index:2;cursor:col-resize;touch-action:none}
+.column-resizer::after{content:'';position:absolute;top:6px;bottom:6px;left:4px;width:1px;background:var(--border-strong)}
+.column-resizer:hover::after,.column-resizer:focus-visible::after{background:var(--accent);width:2px}
+.column-resizer:focus-visible{outline-offset:-2px}
+.resizing-columns,.resizing-columns *{cursor:col-resize!important;user-select:none!important}
+.large-viewport{flex:1;min-height:0;width:100%;min-width:var(--table-min-width);overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;overflow-anchor:none;position:relative;scroll-behavior:auto}
+/* A focused list rings its whole pane. An outline on the scrolling list is
+   covered by its rows inside and clipped to a line under the header outside. */
+.logs-main-pane,.search-result-pane{position:relative}
+@supports selector(:has(a)){
+  .large-viewport:focus-visible{outline:none}
+  :is(.logs-main-pane,.search-result-pane):has(.large-viewport:focus-visible)::after{content:'';position:absolute;inset:0;border:2px solid var(--focus);pointer-events:none;z-index:3}
+}
+.continuous-space{position:relative;min-width:100%;overflow:hidden;overflow-anchor:none}
+.continuous-space>.large-rows{position:absolute;top:0;left:0;right:0;will-change:transform}
+.log-row{display:grid;grid-template-columns:var(--columns);align-items:center;height:var(--row-height);min-width:var(--table-min-width);border-bottom:1px solid var(--row-border);font:13px ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;background:var(--surface);color:var(--text-2);cursor:pointer}
+.log-row.level-row-E,.log-row.level-row-F,.log-row.level-row-A{background:var(--row-error)}
+.log-row:hover{background:var(--row-hover)}
+/* Every selected row carries a bar, so rows selected apart read at a glance. */
+.log-row.in-selection{background:var(--row-range);box-shadow:inset 3px 0 var(--accent-border)}
+.log-row.selected-log-row{background:var(--row-selected);box-shadow:inset 3px 0 var(--accent),inset 0 0 0 1px var(--accent-border)}
+/* The pane whose row the raw detail does not show keeps a muted selection. */
+.secondary-selection>.log-row.in-selection{box-shadow:inset 3px 0 var(--row-selected-2-border)}
+.secondary-selection>.log-row.selected-log-row{background:var(--row-selected-2);box-shadow:inset 0 0 0 1px var(--row-selected-2-border)}
+.log-row:focus-visible{outline-offset:-3px}
+/* Rows select as rows; text is selectable only in a list's one selected row. */
+.log-row,.virtual-loading-row{-webkit-user-select:none;user-select:none}
+.log-row.selected-log-row:not(.in-selection){-webkit-user-select:text;user-select:text}
+.log-row.selected-log-row:not(.in-selection)>span{cursor:text}
+.log-row>span{padding:0 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.line-number{font-size:12px;color:var(--faint);text-align:right}
+.file-badge{display:inline-block;min-width:16px;margin-right:4px;padding:0 3px;border-radius:4px;background:var(--surface-3);color:var(--muted);font-size:10px;font-weight:700;line-height:15px;text-align:center;vertical-align:1px}
+/* The first row of each later file of a combined log marks the boundary. */
+.log-row.file-start{box-shadow:inset 0 2px var(--accent-border)}
+.timestamp{font-size:12px;color:var(--muted)}
+.pid,.tid,.uptime,.ecu,.apid,.ctid{font-size:12px;color:var(--muted)}
+.uptime{text-align:right;font-variant-numeric:tabular-nums}
+.log-row .level{justify-self:start;margin-left:6px;padding:1px 6px!important;border-radius:4px;font-size:11px;font-weight:700;background:var(--lv-bg);color:var(--lv-text);max-width:calc(100% - 12px)}
+.level-I{background:var(--lv-i-bg)!important;color:var(--lv-i)!important}
+.level-D{background:var(--lv-d-bg)!important;color:var(--lv-d)!important}
+.level-W{background:var(--lv-w-bg)!important;color:var(--lv-w)!important}
+.level-E,.level-F,.level-A{background:var(--lv-e-bg)!important;color:var(--lv-e)!important}
+.tag{font-weight:500;color:var(--accent-text)}
+.message{color:var(--text)}
+.raw-row .raw-content{grid-column:2/-1;color:var(--raw-text)}
+/* Rows of one multi-line log entry read as one log: continuation rows take
+   the entry's level tint, indent under a guide in its level color, and no
+   separator splits the entry. Their field cells stay empty in the logs and
+   dim in search results. */
+.log-row{--guide:var(--lv-text)}
+.log-row.level-row-I{--guide:var(--lv-i)}
+.log-row.level-row-D{--guide:var(--lv-d)}
+.log-row.level-row-W{--guide:var(--lv-w)}
+.log-row.level-row-E,.log-row.level-row-F,.log-row.level-row-A{--guide:var(--lv-e)}
+.log-row.record-continued{border-bottom-color:transparent}
+.log-row>.continuation-text{white-space:pre;tab-size:4;margin-left:6px;padding-left:10px;box-shadow:inset 2px 0 var(--guide);color:var(--text-2);align-self:stretch;line-height:calc(var(--row-height) - 1px)}
+.owner-field{opacity:.5}
+.log-row .level.owner-field{font-weight:600}
+.large-table.raw-mode{--table-min-width:calc(var(--line-column) + 160px)}
+.raw-mode .table-header,.raw-mode .log-row{grid-template-columns:var(--line-column) minmax(160px,1fr)}
+.raw-mode .raw-content{color:var(--text-2)}
+.virtual-loading-row{display:block;height:var(--row-height);padding:5px 6px;color:var(--muted);font-size:12px;border-bottom:1px solid var(--row-border)}
+mark{background:var(--mark);color:var(--mark-text);padding:0;border-radius:2px}
+.encoding-damage{background:var(--damage-bg);color:var(--damage-text);border-bottom:2px dotted currentColor}
+.encoding-badge{font-size:11px;color:var(--damage-text);margin-left:3px}
+.encoding-damaged-row .line-number{color:var(--damage-text)}
+
+/* Raw detail: fills the lower region alone, or shares it with results. */
+.raw-detail{display:flex;flex-direction:column;background:var(--surface-2);border-top:1px solid var(--border);padding:6px 12px 8px;flex:1 1 0;min-height:70px}
+.search-result-pane:not([hidden])~.raw-detail{flex:0 1 auto;max-height:50%}
+.detail-heading{display:flex;justify-content:space-between;align-items:center;gap:10px;min-height:26px;flex-shrink:0}
+.detail-heading strong{font-size:12px}
+.detail-actions{display:flex;align-items:center;gap:5px}
+.large-detail-navigation{display:flex;gap:5px;margin-right:6px}
+.raw-detail pre{font:13px/1.65 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;margin:4px 0 0;user-select:text;overflow:auto;flex:1;min-height:0;color:var(--text)}
+
+/* Empty state and transient overlays */
+.empty-state{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:32px 20px}
+.empty-icon{font:36px monospace;color:var(--accent);width:64px;height:64px;display:flex;align-items:center;justify-content:center;background:var(--accent-soft);border:1px solid var(--accent-border);border-radius:15px;margin-bottom:20px}
+.empty-state h2{font-size:19px}
+.empty-state>p{font-size:14px;color:var(--muted);line-height:1.8;margin:10px 0 22px}
+.empty-actions{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
+.empty-actions .button{min-height:40px;padding:9px 18px;font-size:14px}
+.empty-hints{list-style:none;padding:0;margin:26px 0 0;font-size:13px;color:var(--muted);line-height:2.1}
+.recent-files{margin-top:26px;width:min(520px,100%);text-align:left}
+.recent-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+.recent-heading h3{font-size:13px;margin:0;color:var(--muted);font-weight:600}
+.recent-files ul{list-style:none;margin:0;padding:0;border:1px solid var(--border);border-radius:8px;overflow:hidden}
+.recent-files li{display:flex;align-items:center;border-top:1px solid var(--border)}
+.recent-files li:first-child{border-top:0}
+.recent-open{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;background:none;text-align:left;padding:8px 12px}
+.recent-open:hover{background:var(--row-hover)}
+.recent-open strong{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.recent-open span{font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.recent-remove{background:none;color:var(--faint);font-size:16px;width:34px;height:34px;border-radius:6px;margin-right:4px}
+.recent-remove:hover{background:var(--surface-3);color:var(--text)}
+.toast{position:absolute;right:16px;bottom:14px;background:var(--navy);color:var(--navy-text);border:1px solid #ffffff1f;font-size:13px;padding:8px 14px;border-radius:8px;box-shadow:0 6px 20px #0003;z-index:5;pointer-events:none;white-space:nowrap}
+.toast.has-action{display:flex;align-items:center;gap:14px;padding:5px 8px 5px 14px;pointer-events:auto}
+.toast-action{background:none;color:var(--brand);font-size:13px;font-weight:600;padding:3px 6px;border-radius:5px}
+.toast-action:hover,.toast-action:focus-visible{background:#ffffff1a}
+/* Shown briefly while the page zoom changes; it never takes pointer input. */
+.zoom-indicator{position:fixed;left:50%;top:64px;transform:translateX(-50%);background:var(--navy);color:var(--navy-text);border:1px solid #ffffff1f;font-size:13px;font-variant-numeric:tabular-nums;padding:7px 14px;border-radius:8px;box-shadow:0 6px 20px #0003;z-index:20;pointer-events:none;white-space:nowrap}
+.log-row.bookmarked .line-number{box-shadow:inset 3px 0 var(--lv-w);color:var(--lv-w);font-weight:700}
+/* Upper rows that are current search results: a tinted row cell with a bar
+   on its right edge, apart from the bookmark bar on the left. */
+.log-row.search-hit .line-number{background:var(--search-hit-bg);box-shadow:inset -3px 0 var(--search-hit)}
+.log-row.search-hit.bookmarked .line-number{box-shadow:inset 3px 0 var(--lv-w),inset -3px 0 var(--search-hit)}
+/* Bookmarks share the lower region with search results as a tab. */
+.lower-tabs{display:flex;border:1px solid var(--border-strong);border-radius:7px;overflow:hidden;flex-shrink:0}
+.lower-tabs button{font-size:12px;background:var(--surface);color:var(--muted);padding:5px 11px;white-space:nowrap}
+.lower-tabs button+button{border-left:1px solid var(--border-strong)}
+.lower-tabs button[aria-selected=true]{background:var(--accent-soft);color:var(--accent-text);font-weight:600}
+.lower-tabs button:focus-visible{outline-offset:-3px}
+.bookmark-tools{margin-left:auto}
+.bookmark-row{position:relative}
+.bookmark-row:focus-visible{outline-offset:-3px}
+.bookmark-remove{position:absolute;right:6px;top:50%;transform:translateY(-50%);width:22px;height:22px;border-radius:5px;background:var(--surface-3);color:var(--muted);font-size:15px;line-height:1;display:none;align-items:center;justify-content:center}
+.bookmark-row:hover .bookmark-remove,.bookmark-row:focus-within .bookmark-remove{display:inline-flex}
+.bookmark-remove:hover{background:var(--lv-e-bg);color:var(--lv-e)}
+.row-menu{position:fixed;z-index:30;min-width:200px;max-width:360px;padding:4px;background:var(--surface);color:var(--text);border:1px solid var(--border-strong);border-radius:8px;box-shadow:0 10px 30px #0004;display:flex;flex-direction:column}
+.row-menu>button{background:none;text-align:left;font-size:13px;padding:6px 10px;border-radius:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row-menu>button:hover,.row-menu>button:focus-visible{background:var(--accent-soft);color:var(--accent-text);outline:none}
+.row-menu>hr{border:0;border-top:1px solid var(--border);margin:4px 2px}
+.row-menu:focus{outline:none}
+.row-menu>button[role=menuitemradio]{position:relative;padding-left:28px}
+.row-menu>button[aria-checked=true]{font-weight:600}
+.row-menu>button[aria-checked=true]::before{content:'';position:absolute;left:12px;top:50%;width:4px;height:8px;margin-top:-6px;border:solid currentColor;border-width:0 2px 2px 0;transform:rotate(45deg)}
+.row-menu>.menu-note{margin:0;padding:5px 10px;font-size:12px;line-height:1.5;color:var(--muted);white-space:normal}
+/* Naming a saved filter: a small modal form. */
+.name-dialog{padding:18px 20px 16px;border:1px solid var(--border-strong);border-radius:10px;background:var(--surface);color:var(--text);box-shadow:0 18px 50px #0006;width:min(400px,calc(100vw - 32px))}
+.name-dialog::backdrop{background:#0a121999}
+.name-dialog h2{margin-bottom:14px}
+.name-dialog .field{margin-bottom:8px}
+.name-dialog .small-note{margin:0}
+.name-dialog .field-error{margin:0 0 6px}
+.dialog-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
+/* Confirming that a paste replaces the open log. The form fills the box, so
+   a press on the dialog itself is a press on the backdrop. */
+.paste-dialog{padding:0}
+.paste-dialog form{padding:18px 20px 16px}
+.paste-dialog h2{margin-bottom:10px}
+.paste-dialog p{word-break:keep-all}
+.paste-what{margin:0 0 6px;font-size:14px;font-weight:600;color:var(--text);overflow-wrap:anywhere}
+/* Keyboard shortcut list: a modal dialog opened from the top bar or `?`. */
+.shortcut-dialog{padding:0;border:1px solid var(--border-strong);border-radius:10px;background:var(--surface);color:var(--text);box-shadow:0 18px 50px #0006;width:min(760px,calc(100vw - 32px));max-height:calc(100dvh - 48px);overflow:hidden}
+.shortcut-dialog::backdrop{background:#0a121999}
+.shortcut-content{padding:14px 20px 18px;max-height:calc(100dvh - 50px);overflow:auto}
+.shortcut-groups{columns:2 300px;column-gap:28px}
+.shortcut-groups section{break-inside:avoid}
+.shortcut-groups h3{font-size:12px;font-weight:650;color:var(--muted);margin:0;padding:10px 0 4px}
+.shortcut-groups dl{margin:0}
+.shortcut-groups dl>div{display:grid;grid-template-columns:140px 1fr;gap:10px;align-items:baseline;padding:3px 0;border-top:1px solid var(--row-border);font-size:13px}
+.shortcut-groups dt{color:var(--muted);font-size:12px;line-height:1.9;word-break:keep-all}
+.shortcut-groups kbd{white-space:nowrap}
+.shortcut-groups dd{margin:0;color:var(--text-2);line-height:1.5}
+.shortcut-groups kbd+kbd{margin-left:2px}
+.shortcut-actions{display:flex;align-items:center;gap:6px}
+.tour-button,.tour-button:hover:not(:disabled){background:var(--accent-soft);border-color:var(--accent-border);color:var(--accent-text);font-weight:600}
+.tour-button:hover:not(:disabled){filter:brightness(.97)}
+.shortcut-footer{margin-top:12px;padding-top:10px;border-top:1px solid var(--border);color:var(--muted);font-size:12px}
+/* First-use tips and the tour: the page dims around a lit control and a card
+   points at it. A tip lets every press through to the page; the tour is a
+   modal dialog. */
+.tip-layer{position:fixed;inset:0;width:100%;height:100%;max-width:none;max-height:none;margin:0;padding:0;border:0;background:transparent;color:var(--text);overflow:hidden;z-index:40;pointer-events:none}
+.tip-layer::backdrop{background:transparent}
+.tip-layer.tour-mode{pointer-events:auto}
+.tip-layer.tour-mode.no-spot{background:var(--tip-dim)}
+.tip-spot{position:fixed;border-radius:8px;box-shadow:0 0 0 2px var(--accent),0 0 0 200vmax var(--tip-dim-soft);pointer-events:none;transition:left .2s ease,top .2s ease,width .2s ease,height .2s ease}
+.tour-mode .tip-spot{box-shadow:0 0 0 2px var(--accent),0 0 0 200vmax var(--tip-dim)}
+.tip-card{position:fixed;left:0;top:0;width:min(320px,calc(100vw - 16px));padding:11px 14px 12px 16px;background:var(--surface);color:var(--text);border:1px solid var(--border-strong);border-radius:10px;box-shadow:0 14px 40px #00000059;pointer-events:auto}
+.tip-heading{display:flex;align-items:center;gap:8px;min-height:24px}
+.tip-heading h2{flex:1;min-width:0;font-size:14px}
+.tip-step{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.tip-close{width:24px;height:24px;margin-right:-6px;border-radius:6px;background:none;color:var(--muted);font-size:17px;line-height:1;flex-shrink:0}
+.tip-close:hover{background:var(--surface-3);color:var(--text)}
+.tip-body{margin:6px 0 12px;font-size:13px;line-height:1.7;color:var(--text-2);word-break:keep-all;overflow-wrap:anywhere}
+.tip-line{display:block}
+.tip-line+.tip-line{margin-top:6px}
+.tip-body kbd+kbd{margin-left:2px}
+.tip-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px}
+.tip-off{margin-right:auto;font-size:12px;color:var(--muted)}
+/* The pointer is a turned square on the card edge facing the control; its
+   offset along that edge is --arrow. */
+.tip-arrow{position:absolute;width:12px;height:12px;background:var(--surface);border:1px solid var(--border-strong);transform:rotate(45deg)}
+.tip-card[data-side=bottom]>.tip-arrow{top:-7px;left:calc(var(--arrow,24px) - 6px);border-right:0;border-bottom:0}
+.tip-card[data-side=top]>.tip-arrow{bottom:-7px;left:calc(var(--arrow,24px) - 6px);border-left:0;border-top:0}
+.tip-card[data-side=right]>.tip-arrow{left:-7px;top:calc(var(--arrow,24px) - 6px);border-top:0;border-right:0}
+.tip-card[data-side=left]>.tip-arrow{right:-7px;top:calc(var(--arrow,24px) - 6px);border-bottom:0;border-left:0}
+.tip-card:not([data-side=bottom]):not([data-side=top]):not([data-side=right]):not([data-side=left])>.tip-arrow{display:none}
+.drop-hint{position:fixed;inset:10px;z-index:20;border:2px dashed var(--accent);background:color-mix(in srgb,var(--surface) 88%,transparent);border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:600;color:var(--accent-text);pointer-events:none}
+
+@media(max-width:1000px){.pane-hint{display:none}.table-tools{gap:8px}.file-status{display:none}}
+@media(prefers-reduced-motion:reduce){.workspace,.filter-panel-slot,.filters-collapsed .filter-panel-slot,.load-progress>span,.tip-spot{transition:none}}

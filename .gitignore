@@ -1,0 +1,23 @@
+.env
+.env.*
+!.env.example
+*.log
+*.logcat
+*.dlt
+# Public COVESA samples kept as test fixtures.
+!/tests/fixtures/covesa/*.dlt
+__pycache__/
+*.py[cod]
+.DS_Store
+Thumbs.db
+
+# Build outputs, packaged apps and local verification output (probes,
+# screenshots, raw measurements). Reusable measurements live in bench/.
+/target/
+/src-tauri/target/
+# Tauri regenerates its ACL schemas on every build.
+/src-tauri/gen/
+/artifacts/
+
+# Per-developer Claude Code state: launch configs and agent worktrees.
+/.claude/

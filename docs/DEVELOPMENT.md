@@ -1,0 +1,193 @@
+# LogStudio 개발 문서
+
+설치·실행과 기본 빌드 명령은 [README.md](../README.md), 사용자 기능 규칙은 [USER_GUIDE.md](USER_GUIDE.md), 성능 측정 결과와 미검증 범위는 [LARGE_LOG_VALIDATION.md](LARGE_LOG_VALIDATION.md)를 참고하세요.
+
+## 구성
+
+| 경로 | 역할 |
+| --- | --- |
+| `core/src/source.rs` | 승인된 파일·붙여넣기 원문 읽기, 여러 파일을 순서대로 이은 단일 바이트 공간(`Part`), 파일 첫 4바이트 기반 형식 판별(`Format`: 텍스트·DLT, 혼합 열기 거부), 외부 파일 변경 감지 및 단일 텍스트 파일의 끝부분 추가 확인(`grow`), 공개 오류 메시지 |
+| `core/src/order.rs` | 다중 선택·드롭한 파일의 정렬: 파일 끝 64 KiB의 마지막 로그 시각(없으면 앞 64 KiB의 첫 로그 시각, DLT는 첫 메시지 시각) 기준, 시각이 없거나 모호하면 회전 번호를 고려한 자연 이름순 정렬(`order`, `arrange`) |
+| `core/src/dataset.rs` | 희소 물리 행 인덱스(약 128 KiB 블록 단위, 파일 경계를 넘지 않음), DLT 단위 인덱스(`index_dlt_file`) 및 블록을 행 텍스트로 변환하는 `read_rows`, pane별 쿼리 실행, 레벨 집계, `page`·`locate`·`range`·`record`·`lines`, 내보내기(`export_as`), 실시간 따라가기 |
+| `core/src/fields_index.rs` | 분석 단계에서 생성하는 블록별 PID·TID·태그 메타데이터 표, 필드 필터 적용 시 블록 건너뛰기 및 블록을 읽지 않는 카운트 계산 |
+| `core/src/parser.rs` | Android(`threadtime`·`-v time`·`brief`, `-v uid`·`-v year`·`-v nsec`, Android Studio Logcat 복사본) 및 iOS 필드 파싱, 앞쪽 줄 번호 인식, 데이터셋 형식별 파서 선택(`parse_in`·`starts_entry_in`), DLT 행 필드 분리 |
+| `core/src/dlt.rs` | DLT(프로토콜 버전 1) 단위 분할(`units`), 헤더 파싱, `dlt-viewer` 호환 페이로드 포매팅 및 행 렌더링(`Decoder::render`), 행 필드 추출(`parse_row`), 로컬 시각 변환(`Clock`), 테스트·벤치마크용 합성 생성기(`synth`) |
+| `core/src/search.rs` | 고정 버전 `grep-regex` / `grep-searcher` 기반 문자열·정규식 검색 및 하이라이트 범위 계산 |
+| `core/src/encoding.rs` | 손상된 UTF-8 바이트의 표시용 대체(``) 및 손상 위치 마스크 생성 |
+| `core/src/launch.rs` | CLI 경로 인자(복수 지정 시 병합 열기) 및 `--large-log`(반복 가능) 옵션 해석 |
+| `core/src/lib.rs` | `Engine`: 파일 열기·검증·롤백 복원, IPC 요청 처리, 진행 상태 이벤트 발행 |
+| `src-tauri/src/main.rs` | Tauri 커맨드 핸들러, 동시 요청 수 제한, 파일 선택·드롭 처리(다중 파일은 `order::arrange` 정렬), 시작 인자 오류 보관(`take_startup_error`) |
+| `src-tauri/src/clipboard.rs` | macOS Finder 파일 및 UTF-8 BOM 붙여넣기용 일회성 권한(grant) 발급·연장·폐기 |
+| `src-tauri/src/drag.rs` | 네이티브 드래그 이벤트 판정(`decide`): 실제 파일 경로가 있을 때만 드롭 안내 표시 및 열기 수행 |
+| `src-tauri/src/geometry.rs` | 창 크기·위치·최대화 상태 저장(`window-state.json`) 및 현재 연결된 모니터 작업 영역 안으로 보정 복원 |
+| `src-tauri/src/work.rs` | 파일별 작업 상태 저장(`work-states.json`): 정규 경로·크기·수정 시각으로 식별, 최근 50개 보관, 크기 제한 적용 |
+| `src-tauri/src/filters.rs` | 저장된 필터 관리(`saved-filters.json`): 이름 정규화 및 중복 검사, 크기 제한, 원자적 파일 교체 저장 |
+| `src-tauri/src/recent.rs` | 최근 파일 목록 관리(`recent-files.json`): 프론트엔드에는 ID와 표시 이름만 전달하고 검증된 파일만 재열기 허용 |
+| `src-tauri/tauri.conf.json`, `src-tauri/capabilities/` | 앱 메타데이터·버전·식별자, 프론트엔드 경로(`frontendDist`), CSP 설정, Tauri 권한 정의 |
+| `src-tauri/icons/` | 앱 아이콘 원본(`icon.svg`, `icon-rounded.svg`) 및 생성된 `icon.icns`·`icon.ico`·`icon.png`([빌드와 배포](#빌드와-배포) 참고) |
+| `dist/` | 프론트엔드 소스(번들러 없는 순수 ES 모듈, 실행 파일에 그대로 내장). `index.html`이 `styles.css`와 `app.js`를 로드([화면 모듈](#화면-모듈) 참고) |
+| `desktop/` | macOS `.app` 패키징, 배포용 ZIP·체크섬 생성, 아이콘 생성, 로컬 빌드·실행 스크립트, 팁 초기화 스크립트 |
+| `core/tests/` | Rust 통합 테스트(형식 인식·필터·검색·DLT·멀티라인·따라가기·요청 퍼징 등) 및 파서 골든 데이터(`parser-golden.json`) |
+| `tests/` | Node 프론트엔드 단위 테스트(`*.test.mjs`), 패키징·스크립트 Python 테스트(`test_*.py`), 페이지 골든 데이터(`*-page.json`) |
+| `tests/fixtures/covesa/` | COVESA 공개 DLT 테스트 샘플(MPL-2.0, 테스트 전용, [상세 설명](../tests/fixtures/covesa/README.md)) |
+| `tests/e2e/` | QA 빌드의 내장 WebDriver로 실제 macOS WKWebView를 검증하고 라이트·다크 화면을 캡처하는 E2E 테스트([tests/e2e/README.md](../tests/e2e/README.md)) |
+| `bench/` | 합성 로그 생성기 및 코어 엔진 성능 측정 바이너리([bench/README.md](../bench/README.md)) |
+| `docs/` | 사용 설명서(`USER_GUIDE.md`), 개발 문서(`DEVELOPMENT.md`), 대용량 로그 검증 기록(`LARGE_LOG_VALIDATION.md`) |
+| `artifacts/` | Git에서 제외되는 로컬 빌드(`desktop/`) 및 E2E 테스트(`e2e/`) 출력 폴더 |
+
+### 화면 모듈
+
+| 영역 | 파일 및 역할 |
+| --- | --- |
+| 조립·렌더링 | `app.js`(진입점 및 모듈 연결), `large-view.js`(화면 구성 및 행 렌더링), `continuous-view.js`(가상 연속 스크롤), `columns.js`(텍스트·DLT 열 프로필 및 셀 렌더링), `entries.js`(멀티라인 이어지는 줄 표시 규칙) |
+| 상태·통신 | `controller.js`(pane별 쿼리 수명주기 관리, DOM 비의존), `desktop.js`(Tauri IPC 래퍼), `work-state.js`(다시 열기·작업 복원 및 디바운스 저장), `layout.js`(열 폭·하단 높이 저장), `zoom.js`(화면 배율 제어) |
+| 필터 | `filter-model.js`(레벨 목록, 붙여넣기 25 MiB 상한, 조건 모델 및 입력 검증), `conditions.js`(필터 패널의 조건 카드 UI), `saved-filters.js`(저장된 필터 직렬화·비교·메뉴·이름 대화상자) |
+| 행 선택·목록 | `row-selection.js`(상단·검색·북마크 공통 행 선택 상태 머신, DOM 비의존), `row-gestures.js`(마우스 클릭·드래그·자동 스크롤), `bookmarks.js`(북마크 관리), `recent.js`(최근 파일 메뉴) |
+| 공통·유틸 | `dom.js`(DOM 헬퍼), `demo.js`(빈 화면의 `샘플 로그 보기`용 합성 로그) |
+| 메뉴·대화상자·문구 | `menu.js`(팝업 메뉴), `shortcuts.js`(단축키 안내 대화상자), `clipboard.js`(붙여넣기 대상 판별: 입력란·로그 텍스트·파일 경로), `paste-confirm.js`(열린 로그 교체 확인 대화상자), `tips.js`(첫 사용 팁 및 기능 둘러보기), `describe.js`(진행 상태·오류·필터 요약 문구) |
+
+## 처리 구조
+
+파일 읽기·파싱·필터링·검색은 Tauri에 링크된 단일 Rust 코어(`core/`)가 수행하며, 프론트엔드(`dist/`)는 화면 렌더링과 사용자 입력만 담당합니다. QA WebDriver와 픽스처 열기 커맨드는 `--features qa` 빌드에한해 포함됩니다.
+
+### 인덱싱과 스캔
+
+- **블록 인덱싱:** 원문을 약 128 KiB 크기의 줄 경계 블록으로 나눕니다. 블록마다 UTF-8 유효성, NUL 바이트 여부, 최대 행 길이(1 MiB)를 검사한 뒤 게시하며, 열기를 확정하기 직전에 외부 파일 변경 여부를 한 번 더 확인합니다.
+- **즉시 표시:** `page` 조회와 쿼리 스캔은 전체 파일 인덱싱이 끝나기를 기다리지 않고 이미 게시된 블록부터 즉시 읽습니다. 전체 레벨 통계 및 필드 메타데이터 분석은 인덱싱 완료 후 워커 스레드에서 이어서 실행됩니다.
+- **병렬 스캔:** 각 pane마다 전용 쿼리 스레드가 하나씩 동작하며, 블록 판정은 최대 4개(DLT는 최대 8개, CPU 코어 수의 절반 이하) 워커가 병렬로 처리합니다. 일치 결과는 전체 행 번호 배열 대신 블록별 일치 건수(`ends`)와 비트마스크로 관리해 메모리 사용량을 낮추고 원문 순서를 유지합니다.
+- **제로카피 필드 판정:** 필터 판정 시에는 원문 슬라이스를 빌린(`borrow`) 필드를 사용하며, JSON 행 객체는 화면에 실제로 보낼 페이지 행에 대해서만 생성합니다.
+- **파서 우선순위:** 각 행에 대해 `threadtime`과 iOS(연도로 시작하면 iOS 우선) 파서를 먼저 시도하고, 둘 다 실패한 행에만 `-v time`·`brief`·`-v uid`·Android Studio 형식을 시도합니다(`parser::later`). 줄 앞 몇 바이트만으로 대상이 아닌 줄을 빠르게 걸러내 정규식 오버헤드를 피합니다.
+
+### 필터 조건과 메타데이터 가속
+
+- **포함·제외 조건 모델:** `Filters`는 포함 조건(`include`)과 제외 조건(`exclude`) 목록(각 `Condition`은 `levels`·`tag`·`pid`·`tid`·`timeFrom`·`timeTo` 보유, 합산 최대 32개)으로 구성됩니다. 행은 포함 조건 중 하나에 일치하고(포함 조건이 비어 있으면 모든 행 통과) 제외 조건에는 하나도 일치하지 않아야 남습니다. 하위 호환용 단일 필드(`levels`~`tid`, `excludeTags`)는 `Filter::new`에서 동일한 조건 목록 형태로 변환해 컴파일합니다.
+- **다중 값 매칭:** 조건의 `tag`(쉼표 구분)와 `pid`·`tid`(쉼표·공백 구분)는 앞뒤 공백·빈 값·중복을 제거해 최대 32개까지 파싱합니다. 태그 목록은 대소문자를 무시하는 리터럴 alternation 정규식 하나로 묶어 매칭하고, PID·TID는 단일 값이면 문자열 비교, 복수 값이면 정렬된 배열의 이진 탐색으로 판정합니다.
+- **블록별 필드 메타데이터(`fields_index.rs`):**
+  - 레벨 통계 분석 패스에서 블록별·줄 번호 인식 옵션별로 `(필드 값, 레벨)` 행 수를 집계해 사전과 함께 게시합니다(이어지는 줄은 소속 로그의 필드 값을 따르고 고아 줄은 제외).
+  - 쿼리 시작 시 각 조건의 판정 함수(`accepts_tag`·`accepts_pid`·`accepts_tid`)를 사전의 고유 값들에 대해 한 번씩만 평가해 비트셋을 만듭니다.
+  - 블록마다 조건별로 통과 가능한 `(값, 레벨)` 쌍이 하나도 없으면 해당 블록은 읽지 않고 건너뜁니다. 시간 범위나 검색어가 없고 활성 조건들이 레벨과 단일 필드만 참조하는 경우에는 블록 원문을 읽지 않고 메타데이터 표만으로 즉시 건수를 계산합니다.
+  - 필드 하나의 고유 값 사전이 65,536개를 넘거나 메타데이터 크기가 약 32 MiB를 초과하면 해당 필드 표만 폐기하고 블록 스캔 방식으로 폴백합니다.
+- **일치하는 줄이 없는 조건(0건 조건) 확인:**
+  - 상단(`logs`) pane 쿼리는 활성 `include`·`exclude` 조건 각각에 대해 현재 데이터셋 전체에서 일치하는 줄이 하나라도 있는지 별도로 확인합니다(`some` / `none` / `pending`).
+  - 레벨 표와 필드 표(`FieldIndex::probe`)만으로 판정 가능한 조건은 즉시 확정하고, 시간 범위나 복수 필드 조건처럼 블록을 직접 읽어야 하는 미확정 조건들은 남은 블록을 한 번에 함께 스캔합니다(`Filter::row_hits`, DLT는 헤더만 `dlt_row_hits`).
+  - 확인 작업은 진행 중인 쿼리 스캔에 양보하며, 한 번 확인된 결과는 `(줄 번호 인식 옵션, 조건 정규형)` 단위로 데이터셋에 캐시되어 다른 조건을 수정해도 재계산 없이 바로 재사용됩니다.
+
+### 열기·교체 및 다중 파일 정렬
+
+- **취소와 세대 관리:** 스캔 워커는 블록 전후와 매치 콜백마다 취소 플래그를 확인합니다. 새 쿼리는 이전 쿼리 스레드가 종료(join)된 뒤 시작하며, `datasetId`·`queryId`가 일치하지 않는 이전 응답은 코어와 화면 양쪽에서 폐기합니다.
+- **열기 실패 시 롤백:** 새 파일을 여는 동안 직전에 검증 완료된 소스를 일시 중지 상태로 보관했다가, 새 파일 열기가 실패하거나 취소되면 이전 소스를 즉시 복원합니다(동시 보유 파일 핸들은 최대 2세트).
+- **다중 파일 정렬(`order::arrange`):** 파일 선택 창이나 드래그 앤 드롭으로 받은 2~64개 파일은 엔진에 전달하기 전에 파일당 앞·뒤 64 KiB만 읽어 시각순(또는 회전 로그 번호를 반영한 자연 이름순)으로 정렬합니다. 부팅 직후 시계가 맞춰지기 전의 초기 로그가 파일 앞부분에 섞여 있어도 순서가 깨지지 않도록 파일 끝부분의 마지막 로그 시각을 우선 사용합니다(DLT는 첫 메시지 시각 사용).
+
+### 외부 파일 변경 감지와 실시간 따라가기
+
+- **파일 변경 감지:** 블록을 읽을 때마다 파일 크기와 메타데이터를 대조합니다. 단일 텍스트 파일은 파일 끝에 바이트가 추가된 경우만 허용하며, 파일 식별자(Unix `dev`/`ino`, Windows 생성 시각 및 경로)와 기존 구간의 처음·끝 4 KiB가 그대로인지 확인합니다. 다중 병합 파일은 어떠한 변경도 허용하지 않습니다.
+- **Windows 파일 공유:** Windows에서는 읽기·쓰기·삭제 공유 모드로 파일을 열어, 다른 프로그램이 기록 중인 로그를 열거나 열려 있는 동안 파일 이름이 바뀌거나(로그 회전) 삭제되는 것을 막지 않습니다.
+- **실시간 따라가기(`follow`):** 단일 텍스트 파일에서 따라가기를 켜면 전용 폴링 스레드가 500 ms마다 `Source::grow`로 파일 증가분을 확인하고 새 바이트만 이어서 인덱싱합니다. 아직 줄바꿈이 없는 마지막 미완성 줄은 보류하며, 처음 열 때 줄바꿈 없이 끝났던 마지막 행에 새 바이트가 이어져 완성되면 해당 마지막 블록만 되돌린 뒤 다시 게시합니다(`tailRevision` 증가). 쿼리 결과와 레벨·필드 분석 상태는 마지막 블록 이후의 carry 상태를 보관해 처음부터 다시 스캔하지 않고 증분 처리합니다.
+
+### DLT 파일 처리
+
+파일 첫 4바이트가 `DLT\x01`(또는 `DLT\x02`)이면 DLT 소스로 처리합니다.
+
+- **단위 분할과 블록 인덱싱:** `dlt::units`가 바이트 스트림을 메시지(스토리지 헤더 + `16 + LEN`), 비정상 바이트 구간(최대 64 KiB 단위), 버전 2 데이터 단위로 분할합니다. 모든 블록은 항상 단위 경계에서 끝나므로 블록 바이트만 독립적으로 다시 읽어도 동일한 단위와 행이 보장됩니다. 텍스트로 분류된 파일이 NUL 바이트로 실패할 때는 `dlt::headerless`로 스토리지 헤더가 없는 DLT 파일인지 추가로 확인해 정확한 안내 문구를 반환합니다.
+- **온디맨드 행 렌더링:** 텍스트 파일은 원본 바이트를 그대로 읽고, DLT 파일은 블록을 읽는 시점(`Dataset::read_rows`)에 `Decoder::render`로 각 단위를 LF로 끝나는 UTF-8 행 문자열(`날짜 시간 타임스탬프 카운터 ECU APID CTID 세션 종류 [페이로드]`)로 변환합니다. 로컬 시간대 오프셋은 데이터셋 안에서 UTC 1시간 단위로 캐시해 렌더링의 결정성(determinism)을 보장합니다.
+- **헤더 판정 최적화:** 검색어가 없는 필터 스캔에서 메타데이터 표로 판정할 수 없는 블록(시간 필터, 32 MiB 상한 초과로 태그 표가 폐기된 대용량 DLT 등)은 페이로드를 문자열로 렌더링하지 않고 `Filter::dlt_mask`가 메시지 헤더만 읽어 빠르게 판정합니다.
+
+## 화면과 엔진 사이의 요청 (IPC)
+
+프론트엔드는 `log_request` 커맨드 하나로 엔진에 작업을 요청합니다. 모든 요청에는 `action`, `pane`(`logs` 상단 필터, `search` 하단 검색), `datasetId`, `queryId`가 포함됩니다.
+
+| `action` | 설명 |
+| --- | --- |
+| `status` | 인덱싱 진행률, 레벨 통계, 현재 쿼리 상태 조회(열린 파일이 없으면 `{empty:true}`) |
+| `query` | 필터·검색 쿼리 시작(이전 쿼리는 취소·교체). `filters.recognizeLineNumbers`는 `null`/생략(자동), `true`(켜기), `false`(끄기) |
+| `page` | 결과 순번 기준 최대 200행 조회. 상단 `logs` pane은 하단 검색의 `searchQueryId`를 함께 전달해 일치 행 강조(`highlights`, `searchHit:true`)를 함께 받을 수 있음 |
+| `locate` | 물리 행 번호의 현재 필터·검색 결과 내 순번 조회(결과에 없으면 `found:false`와 다음 결과 위치 `index` 반환) |
+| `range` | 단일 물리 행의 원문 조회(최대 64 KiB 구간) |
+| `record` | 선택한 물리 행이 속한 멀티라인 로그 엔트리 전체(최대 1 MiB·10,000줄)의 64 KiB 구간 조회(`first`·`last`·`recordComplete` 포함) |
+| `lines` | 지정한 오름차순 물리 행 번호 목록(`lineNumbers`, 최대 200개)의 행 데이터를 필터와 무관하게 조회(복원된 북마크 행 로드용) |
+| `follow` | `follow:true`/`false`로 실시간 따라가기 켜기·끄기(단일 텍스트 파일 전용) |
+| `cancel`, `close` | 진행 중인 쿼리 취소 및 파일 닫기(동시 요청 수 제한과 별도로 즉시 처리) |
+
+동시 데이터 요청은 최대 4개까지 허용하며, 초과 시 `Local engine is busy; retry`를 반환해 프론트엔드가 짧게 재시도합니다. 엔진은 상태 변화 시 `source-changed`(`opened`·`validated`·`rollback`·`error`), `files-ordered`, `query-progress` 이벤트를 발행합니다.
+
+진행 완료 플래그 세 가지는 각각 독립적인 단계를 나타냅니다.
+
+- `textComplete`: 파일 끝까지 UTF-8 및 물리 행 경계 인덱싱 완료
+- `query.complete`: 현재 필터·검색 쿼리가 파일 끝까지 스캔 완료
+- `summaryComplete`: 전체 레벨 집계 및 필드 메타데이터 분석 완료
+
+## 연속 스크롤과 화면 동작
+
+- **가상 스크롤(`continuous-view.js`):** 각 목록은 현재 뷰포트 주변의 최대 128개 DOM 행 노드만 유지하며, 행 데이터 캐시는 최대 800행(약 8 MiB)까지 보관합니다. 브라우저 스크롤 트랙 높이는 최대 8,000,000 CSS px로 제한하고 이를 넘는 대용량 목록은 논리 행 위치와 스크롤 좌표를 비례 변환하되, 마우스 휠·키보드·행 번호 이동은 1행 단위 정밀도를 유지합니다.
+- **다중 조건 에디터(`conditions.js`):** 필터 패널은 조건마다 카드를 렌더링하고, 현재 선택된 카드 안으로 단일 입력 폼(`#condEditor`)을 이동시켜 사용합니다. 조건이 켜져 있고 유효한 값이 있는 조건만 코어 엔진으로 전달(`coreFilters`)하므로, 빈 조건을 추가하거나 꺼진 조건을 수정할 때는 불필요한 재쿼리가 발생하지 않습니다.
+- **기능 팁과 둘러보기(`tips.js`):** 단일 `<dialog id="tipLayer">`를 사용해 첫 사용 팁은 비모달(`open` 속성, 포커스 유지 및 포인터 통과)로, 기능 둘러보기는 모달(`showModal()`)로 표시합니다. 확인한 팁 목록은 `localStorage`의 `logstudio.tips.v1`에 저장되며, macOS에서 팁 기록만 초기화하려면 앱을 종료한 뒤 `python3 desktop/reset_tips_macos.py`를 실행합니다.
+- **화면 배율과 창 상태:** macOS WKWebView의 트랙패드 핀치(`gesturestart`/`gesturechange`/`gestureend`)와 Windows/Chromium의 `Ctrl+휠`을 모두 지원하며, 창 위치·크기·최대화 상태는 이동 후 400 ms 디바운스 및 앱 종료 시 `window-state.json`에 저장합니다.
+
+## 파일 접근 및 보안 경계
+
+- **승인된 파일만 접근:** Rust 백엔드는 OS 파일 선택 대화상자, 네이티브 드래그 앤 드롭, 명시적 CLI 인자, macOS Finder 파일 붙여넣기 일회성 권한(grant)으로 사용자가 직접 승인한 파일만 읽습니다. 프론트엔드에는 파일 경로를 직접 열어 볼 수 있는 API가 없으며, 최근 파일(`recent-files.json`), 다시 열기(`reopen_source`), 작업 상태(`work-states.json`) 모두 내부 ID(`datasetId` 또는 항목 ID)로만 통신합니다.
+- **메모리 및 원자적 쓰기:** 로그 원문 전체를 메모리에 복제하지 않고 필요할 때마다 128 KiB 블록 단위로 파일에서 직접 읽으며 반복 읽기는 OS 페이지 캐시를 활용합니다. 결과 내보내기와 설정 파일(`recent-files.json`, `work-states.json`, `saved-filters.json`) 저장은 모두 임시 파일에 먼저 기록한 뒤 원자적으로 교체(atomic rename)합니다.
+
+## 빌드와 배포
+
+CI는 Windows x64 네이티브 러너(`windows-2022`)에서 테스트와 릴리스 빌드를 수행합니다(MSVC 런타임 정적 링크). macOS 앱은 로컬 Mac에서 테스트하고 패키징합니다.
+
+- **아이콘 생성:** 원본은 `src-tauri/icons/icon.svg`(macOS용 정사각형)와 `icon-rounded.svg`(Windows `icon.ico` 및 `icon.png`용)입니다. 아이콘 원본을 수정한 경우 macOS에서 `python3 desktop/make_icons.py`를 실행해 아이콘 자산을 재생성합니다.
+- **서드파티 라이선스 고지:** 배포 ZIP과 macOS 앱 번들에는 `desktop/THIRD_PARTY_NOTICES.md`가 포함됩니다. `Cargo.lock` 의존성을 변경한 경우 아래 명령으로 macOS arm64와 Windows x64 프로덕션 의존성 트리를 확인해 문서를 갱신합니다.
+
+```sh
+for target in aarch64-apple-darwin x86_64-pc-windows-msvc; do
+  cargo tree --locked -e normal,build --target "$target" -p logstudio-desktop --prefix none --format '{p} {l}'
+done | sort -u
+```
+
+### 자동 빌드와 릴리스
+
+- `main` 브랜치 push 및 PR 시 Windows 빌드·테스트·패키징 워크플로([desktop.yml](../.github/workflows/desktop.yml))가 실행됩니다.
+- 앱 버전(`src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, `package.json` 세 곳의 버전이 일치해야 함)과 동일한 `v1.0.0` 형식의 태그를 push하면 빌드 및 체크섬 검증 후 GitHub Releases에 Windows ZIP과 `.zip.sha256` 파일이 자동 게시됩니다.
+
+### macOS에서 한 번에 빌드하고 실행
+
+```sh
+sh build-run-macos.command
+```
+
+- `rustup`으로 설치한 Rust(`rust-toolchain.toml`의 1.99.0), Xcode Command Line Tools, Python 3.9 이상이 필요합니다.
+- `--locked` 릴리스 바이너리를 빌드해 `artifacts/desktop/LogStudio-local.app`으로 패키징한 뒤 실행합니다. 직전 빌드는 `LogStudio-local-backup-<고유번호>.app` 한 개만 백업으로 남기고 오래된 백업은 정리합니다.
+- 중복 실행 방지를 위해 빌드 중에는 `artifacts/desktop/.logstudio-local-build.lock` 잠금 폴더를 사용합니다.
+
+## 검사
+
+```sh
+cargo fmt --all --check
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo test --locked --workspace
+npm test
+npm run check
+python3 -m unittest discover -s tests -p 'test_*.py'
+```
+
+Node 테스트는 외부 패키지 설치(`npm install`) 없이 Node.js 22 이상 내장 테스트 러너로 실행됩니다. `dist/`에 JS 파일을 추가한 경우 `package.json`의 `check` 스크립트 대상에도 함께 추가하세요.
+
+### 실제 WebView 자동 검사
+
+`--features qa` 빌드에 포함된 내장 WebDriver로 실제 macOS WKWebView를 구동해 검증합니다(프로덕션 빌드에는 포함되지 않음).
+
+```sh
+CARGO_TARGET_DIR=target/qa cargo build --release --locked -p logstudio-desktop --features qa
+python3 tests/e2e/run.py target/qa/release/logstudio-desktop
+```
+
+자세한 시나리오 목록과 실행 옵션은 [tests/e2e/README.md](../tests/e2e/README.md)를 참고하세요.
+
+### 브라우저 미리보기
+
+`src-tauri/examples/web_preview`는 `dist/` 화면을 일반 웹 브라우저(`127.0.0.1`)에 띄우는 개발 전용 로컬 서버입니다. 백엔드는 실제 Rust 엔진을 그대로 사용하며, 브라우저 개발자 도구로 접근성이나 스타일을 빠르게 점검할 때 유용합니다.
+
+```sh
+cargo run -p logstudio-desktop --example web_preview -- --port 8790 path/to/synthetic.log
+```
+
+### 성능 측정
+
+`bench/` 워크스페이스 크레이트의 바이너리로 인덱싱·분석·필터·검색·따라가기 성능을 측정합니다. 상세 사용법은 [bench/README.md](../bench/README.md)에, 측정 결과는 [LARGE_LOG_VALIDATION.md](LARGE_LOG_VALIDATION.md)에 정리되어 있습니다.

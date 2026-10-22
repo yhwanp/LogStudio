@@ -1,0 +1,8 @@
+# Test fixtures are compared byte for byte (rendered rows, raw logs), so a
+# checkout must never convert their line endings, e.g. on Windows with
+# core.autocrlf.
+tests/fixtures/** -text
+
+# dist/ is hand-written frontend source, not a build output; keep it in
+# GitHub's language statistics.
+dist/** linguist-vendored=false

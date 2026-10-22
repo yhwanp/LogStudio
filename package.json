@@ -1,0 +1,15 @@
+{
+  "name": "logstudio",
+  "version": "1.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "Frontend checks and tests for LogStudio, a desktop viewer for large Android, iOS and DLT logs",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "check": "node --check dist/app.js && node --check dist/filter-model.js && node --check dist/clipboard.js && node --check dist/paste-confirm.js && node --check dist/demo.js && node --check dist/controller.js && node --check dist/describe.js && node --check dist/dom.js && node --check dist/menu.js && node --check dist/recent.js && node --check dist/bookmarks.js && node --check dist/large-view.js && node --check dist/continuous-view.js && node --check dist/layout.js && node --check dist/desktop.js && node --check dist/zoom.js && node --check dist/entries.js && node --check dist/shortcuts.js && node --check dist/tips.js && node --check dist/work-state.js && node --check dist/columns.js && node --check dist/saved-filters.js && node --check dist/conditions.js && node --check dist/row-selection.js && node --check dist/row-gestures.js"
+  }
+}

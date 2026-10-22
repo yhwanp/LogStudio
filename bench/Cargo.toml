@@ -1,0 +1,15 @@
+# Engine measurements on synthetic logs; never shipped. A workspace member so
+# CI keeps it building against the current core. Inputs are generated (not
+# committed); see README.md for each binary and baseline.sh for comparing an
+# earlier commit.
+[package]
+name = "logstudio-bench"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+logstudio-core = { path = "../core" }
+serde_json.workspace = true

@@ -1,0 +1,1 @@
+{"identifier":"main","description":"Trusted local LogStudio window; no filesystem or shell APIs","windows":["main"],"permissions":["core:event:allow-listen","core:event:allow-unlisten","core:webview:allow-set-webview-zoom"]}

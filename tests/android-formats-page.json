@@ -1,0 +1,215 @@
+{
+  "rows": [
+    {
+      "date": "06-18",
+      "fieldOffsets": {
+        "date": 0,
+        "message": 43,
+        "pid": 36,
+        "tag": 21,
+        "time": 6
+      },
+      "highlights": [
+        [
+          43,
+          50
+        ]
+      ],
+      "kind": "parsed",
+      "level": "D",
+      "lineNumber": 2,
+      "message": "Sending update",
+      "pid": "2983",
+      "raw": "06-18 19:24:01.123 D/AlertsService( 2983): Sending update",
+      "rawBytes": 57,
+      "sourceLineNumber": null,
+      "sourceStartByte": 29,
+      "tag": "AlertsService",
+      "tid": "",
+      "time": "19:24:01.123"
+    },
+    {
+      "highlights": [
+        [
+          4,
+          15
+        ]
+      ],
+      "kind": "raw",
+      "lineNumber": 5,
+      "owner": {
+        "date": "06-18",
+        "level": "E",
+        "lineNumber": 4,
+        "pid": "2983",
+        "tag": "AndroidRuntime",
+        "tid": "",
+        "time": "19:24:02.500"
+      },
+      "raw": "\tat com.example.Main.run(Main.java:10)",
+      "rawBytes": 38,
+      "sourceStartByte": 184
+    },
+    {
+      "date": "2026-06-18",
+      "fieldOffsets": {
+        "date": 0,
+        "message": 100,
+        "pid": 25,
+        "process": 60,
+        "tag": 36,
+        "tid": 30,
+        "time": 11
+      },
+      "highlights": [
+        [
+          60,
+          71
+        ]
+      ],
+      "kind": "parsed",
+      "level": "W",
+      "lineNumber": 6,
+      "message": "Studio 한글 🙂",
+      "pid": "2983",
+      "process": "com.example.app",
+      "raw": "2026-06-18 19:24:03.000  2983-4241  AlertsService           com.example.app                      W  Studio 한글 🙂",
+      "rawBytes": 118,
+      "sourceLineNumber": null,
+      "sourceStartByte": 224,
+      "tag": "AlertsService",
+      "tid": "4241",
+      "time": "19:24:03.000"
+    },
+    {
+      "highlights": [
+        [
+          102,
+          108
+        ]
+      ],
+      "kind": "raw",
+      "lineNumber": 7,
+      "owner": {
+        "date": "2026-06-18",
+        "level": "W",
+        "lineNumber": 6,
+        "pid": "2983",
+        "tag": "AlertsService",
+        "tid": "4241",
+        "time": "19:24:03.000"
+      },
+      "raw": "                                                                                                      second line",
+      "rawBytes": 113,
+      "sourceStartByte": 344
+    },
+    {
+      "date": "06-18",
+      "fieldOffsets": {
+        "date": 0,
+        "message": 54,
+        "pid": 26,
+        "tag": 39,
+        "tid": 32,
+        "time": 6
+      },
+      "highlights": [
+        [
+          54,
+          61
+        ]
+      ],
+      "kind": "parsed",
+      "level": "I",
+      "lineNumber": 9,
+      "message": "uid row",
+      "pid": "2983",
+      "raw": "06-18 19:24:05.000  1000: 2983  4241 I AlertsService: uid row",
+      "rawBytes": 61,
+      "sourceLineNumber": null,
+      "sourceStartByte": 571,
+      "tag": "AlertsService",
+      "tid": "4241",
+      "time": "19:24:05.000"
+    },
+    {
+      "date": "",
+      "fieldOffsets": {
+        "message": 26,
+        "pid": 19,
+        "tag": 2
+      },
+      "highlights": [
+        [
+          26,
+          31
+        ]
+      ],
+      "kind": "parsed",
+      "level": "I",
+      "lineNumber": 10,
+      "message": "brief row",
+      "pid": "1000",
+      "raw": "I/ActivityManager( 1000): brief row",
+      "rawBytes": 35,
+      "sourceLineNumber": null,
+      "sourceStartByte": 634,
+      "tag": "ActivityManager",
+      "tid": "",
+      "time": ""
+    },
+    {
+      "highlights": [
+        [
+          2,
+          7
+        ]
+      ],
+      "kind": "raw",
+      "lineNumber": 11,
+      "owner": {
+        "date": "",
+        "level": "I",
+        "lineNumber": 10,
+        "pid": "1000",
+        "tag": "ActivityManager",
+        "tid": "",
+        "time": ""
+      },
+      "raw": "  brief continuation",
+      "rawBytes": 20,
+      "sourceStartByte": 671
+    },
+    {
+      "date": "2026-06-18",
+      "fieldOffsets": {
+        "date": 0,
+        "message": 101,
+        "pid": 25,
+        "process": 61,
+        "tag": 36,
+        "tid": 30,
+        "time": 11
+      },
+      "highlights": [
+        [
+          61,
+          72
+        ]
+      ],
+      "kind": "parsed",
+      "level": "V",
+      "lineNumber": 16,
+      "message": "유니코드 태그",
+      "pid": "4321",
+      "process": "com.example.app",
+      "raw": "2026-06-18 19:24:08.000  4321-4321  알림🙂                     com.example.app                      V  유니코드 태그",
+      "rawBytes": 126,
+      "sourceLineNumber": null,
+      "sourceStartByte": 871,
+      "tag": "알림🙂",
+      "tid": "4321",
+      "time": "19:24:08.000"
+    }
+  ]
+}

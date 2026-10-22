@@ -1,0 +1,163 @@
+name: Desktop downloads
+
+"on":
+  push:
+    branches: ["main"]
+    tags: ["v*"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-2022
+            target: x86_64-pc-windows-msvc
+            label: windows-x64
+            executable: logstudio-desktop.exe
+            rustflags: -C target-feature=+crt-static
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_TERM_COLOR: always
+      RUSTFLAGS: ${{ matrix.rustflags }}
+      BUILD_TARGET: ${{ matrix.target }}
+      BUILD_EXECUTABLE: ${{ matrix.executable }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "22.22.3"
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.13"
+      - name: Validate release version
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import json, os
+          expected = 'v' + json.load(open('src-tauri/tauri.conf.json'))['version']
+          if os.environ['RELEASE_TAG'] != expected:
+              raise SystemExit('Release tag must match the app version: ' + expected)
+          PY
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.99.0 --profile minimal --component rustfmt,clippy
+          rustup target add "$BUILD_TARGET" --toolchain 1.99.0
+          rustc --version
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        id: rust-cache
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: desktop-${{ runner.os }}-${{ matrix.target }}-rust-1.99.0-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}-static-crt-${{ runner.os == 'Windows' }}
+          restore-keys: desktop-${{ runner.os }}-${{ matrix.target }}-rust-1.99.0-
+      - name: Check frontend and download packaging
+        run: |
+          npm run check
+          npm test
+          python -m unittest discover -s tests -p test_download_package.py
+      - name: Check Rust formatting and lints
+        run: |
+          cargo fmt --all --check
+          cargo clippy --locked --release --workspace --all-targets --target "$BUILD_TARGET" -- -D warnings
+      - name: Test native workspace
+        run: cargo test --locked --release --workspace --target "$BUILD_TARGET"
+      - name: Build production desktop
+        run: cargo build --locked --release -p logstudio-desktop --target "$BUILD_TARGET"
+      - name: Package native download
+        run: |
+          python desktop/package_download.py \
+            --binary "target/$BUILD_TARGET/release/$BUILD_EXECUTABLE" \
+            --target "$BUILD_TARGET" --output artifacts/downloads
+      - name: Upload downloads
+        id: upload
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: LogStudio-${{ matrix.label }}
+          path: artifacts/downloads/*
+          if-no-files-found: error
+          retention-days: ${{ startsWith(github.ref, 'refs/tags/') && 1 || 14 }}
+          compression-level: 0
+      - name: Add download link
+        if: github.event_name != 'pull_request'
+        env:
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+          PLATFORM: ${{ matrix.name }}
+        run: printf '[Download %s](%s)\n' "$PLATFORM" "$ARTIFACT_URL" >> "$GITHUB_STEP_SUMMARY"
+      - name: Save Rust cache including failed-build dependencies
+        if: ${{ always() && !cancelled() && github.event_name != 'pull_request' && steps.rust-cache.outcome == 'success' && steps.rust-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ steps.rust-cache.outputs.cache-primary-key }}
+
+  release:
+    name: Publish versioned downloads
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: LogStudio-windows-x64
+          path: downloads
+          merge-multiple: true
+      - name: Verify download checksums
+        working-directory: downloads
+        run: sha256sum --check *.sha256
+      - name: Publish release after uploading every asset
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        with:
+          script: |
+            const fs = require('node:fs');
+            const {owner, repo} = context.repo;
+            const tag = process.env.RELEASE_TAG;
+            const files = fs.readdirSync('downloads').sort();
+            if (files.filter(f => f.endsWith('.zip')).length !== 1 || files.filter(f => f.endsWith('.zip.sha256')).length !== 1 || files.length !== 2) {
+              throw new Error('Expected one Windows ZIP and one checksum file');
+            }
+            const {data: release} = await github.rest.repos.createRelease({
+              owner, repo, tag_name: tag, target_commitish: context.sha,
+              name: `LogStudio ${tag}`, draft: true, prerelease: tag.includes('-'),
+              body: 'Windows x64: download the ZIP, extract it and open LogStudio.exe. It needs the Microsoft Edge WebView2 Runtime and has no publisher certificate, so SmartScreen may warn. The SHA-256 checksum is attached. The app UI is in Korean; macOS builds from source.\n\nAutomated tests passed on the Windows runner; the Windows UI has not been checked by hand yet.'
+            });
+            for (const name of files) {
+              await github.rest.repos.uploadReleaseAsset({
+                owner, repo, release_id: release.id, name,
+                data: fs.readFileSync(`downloads/${name}`)
+              });
+            }
+            await github.rest.repos.updateRelease({
+              owner, repo, release_id: release.id, draft: false
+            });

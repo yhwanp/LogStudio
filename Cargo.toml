@@ -1,0 +1,21 @@
+[workspace]
+members = ["core","src-tauri","bench"]
+resolver = "2"
+
+[workspace.package]
+license = "MIT"
+repository = "https://github.com/yhwanp/LogStudio"
+
+[workspace.dependencies]
+grep-regex = "=0.1.14"
+grep-searcher = "=0.1.17"
+grep-matcher = "=0.1.9"
+memchr = "=2.8.3"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+regex = "=1.13.1"
+tempfile = "=3.27.0"
+chrono = { version = "=0.4.45", default-features = false, features = ["clock"] }
+
+[profile.release]
+strip = false

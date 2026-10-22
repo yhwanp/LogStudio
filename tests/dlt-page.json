@@ -1,0 +1,256 @@
+{
+  "rows": [
+    {
+      "date": "2026-03-14",
+      "dlt": {
+        "apid": "NAV",
+        "count": "0",
+        "ctid": "RTE",
+        "ecu": "ECU1",
+        "kind": "W",
+        "session": "4242",
+        "uptime": "1234.5678"
+      },
+      "fieldOffsets": {
+        "apid": 44,
+        "ctid": 48,
+        "date": 0,
+        "ecu": 39,
+        "message": 59,
+        "time": 11,
+        "uptime": 27
+      },
+      "highlights": [],
+      "kind": "parsed",
+      "level": "W",
+      "lineNumber": 1,
+      "message": "Route recalculated: 3 km",
+      "pid": "",
+      "raw": "2026-03-14 09:26:53.589793 1234.5678 0 ECU1 NAV RTE 4242 W Route recalculated: 3 km",
+      "rawBytes": 83,
+      "sourceLineNumber": null,
+      "sourceStartByte": 0,
+      "tag": "NAV",
+      "tags": [
+        "ECU1",
+        "NAV",
+        "RTE"
+      ],
+      "tid": "",
+      "time": "09:26:53.589793"
+    },
+    {
+      "date": "2026-03-14",
+      "dlt": {
+        "apid": "HMI",
+        "count": "1",
+        "ctid": "UI",
+        "ecu": "HU",
+        "kind": "I",
+        "session": "4242",
+        "uptime": "1234.5678"
+      },
+      "fieldOffsets": {
+        "apid": 42,
+        "ctid": 46,
+        "date": 0,
+        "ecu": 39,
+        "message": 56,
+        "time": 11,
+        "uptime": 27
+      },
+      "highlights": [],
+      "kind": "parsed",
+      "level": "I",
+      "lineNumber": 2,
+      "message": "경로 안내 시작 🙂 true",
+      "pid": "",
+      "raw": "2026-03-14 09:26:53.600000 1234.5678 1 HU HMI UI 4242 I 경로 안내 시작 🙂 true",
+      "rawBytes": 86,
+      "sourceLineNumber": null,
+      "sourceStartByte": 85,
+      "tag": "HMI",
+      "tags": [
+        "HU",
+        "HMI",
+        "UI"
+      ],
+      "tid": "",
+      "time": "09:26:53.600000"
+    },
+    {
+      "date": "2026-03-14",
+      "dlt": {
+        "apid": "AUD",
+        "count": "2",
+        "ctid": "MIX",
+        "ecu": "ECU1",
+        "kind": "E",
+        "session": "",
+        "uptime": ""
+      },
+      "fieldOffsets": {
+        "apid": 36,
+        "ctid": 40,
+        "date": 0,
+        "ecu": 31,
+        "message": 48,
+        "time": 11
+      },
+      "highlights": [],
+      "kind": "parsed",
+      "level": "E",
+      "lineNumber": 3,
+      "message": "Route volume error -3.50000000",
+      "pid": "",
+      "raw": "2026-03-14 09:26:53.589793 - 2 ECU1 AUD MIX - E Route volume error -3.50000000",
+      "rawBytes": 78,
+      "sourceLineNumber": null,
+      "sourceStartByte": 164,
+      "tag": "AUD",
+      "tags": [
+        "ECU1",
+        "AUD",
+        "MIX"
+      ],
+      "tid": "",
+      "time": "09:26:53.589793"
+    },
+    {
+      "highlights": [],
+      "kind": "raw",
+      "lineNumber": 4,
+      "raw": "!! DLT 메시지가 아닌 데이터 8바이트 · 파일 위치 235: 00 13 72 6f 75 74 65 3f",
+      "rawBytes": 93,
+      "sourceStartByte": 235
+    },
+    {
+      "date": "2026-03-14",
+      "dlt": {
+        "apid": "DA1",
+        "count": "3",
+        "ctid": "DC1",
+        "ecu": "ECU1",
+        "kind": "control:response",
+        "session": "4242",
+        "uptime": "1234.5678"
+      },
+      "fieldOffsets": {
+        "apid": 44,
+        "ctid": 48,
+        "date": 0,
+        "ecu": 39,
+        "message": 74,
+        "time": 11,
+        "uptime": 27
+      },
+      "highlights": [],
+      "kind": "parsed",
+      "level": "U",
+      "lineNumber": 5,
+      "message": "[get_log_info ok] 07 01",
+      "pid": "",
+      "raw": "2026-03-14 09:26:53.589793 1234.5678 3 ECU1 DA1 DC1 4242 control:response [get_log_info ok] 07 01",
+      "rawBytes": 97,
+      "sourceLineNumber": null,
+      "sourceStartByte": 243,
+      "tag": "DA1",
+      "tags": [
+        "ECU1",
+        "DA1",
+        "DC1"
+      ],
+      "tid": "",
+      "time": "09:26:53.589793"
+    }
+  ],
+  "search": [
+    {
+      "date": "2026-03-14",
+      "dlt": {
+        "apid": "NAV",
+        "count": "0",
+        "ctid": "RTE",
+        "ecu": "ECU1",
+        "kind": "W",
+        "session": "4242",
+        "uptime": "1234.5678"
+      },
+      "fieldOffsets": {
+        "apid": 44,
+        "ctid": 48,
+        "date": 0,
+        "ecu": 39,
+        "message": 59,
+        "time": 11,
+        "uptime": 27
+      },
+      "highlights": [
+        [
+          59,
+          64
+        ]
+      ],
+      "kind": "parsed",
+      "level": "W",
+      "lineNumber": 1,
+      "message": "Route recalculated: 3 km",
+      "pid": "",
+      "raw": "2026-03-14 09:26:53.589793 1234.5678 0 ECU1 NAV RTE 4242 W Route recalculated: 3 km",
+      "rawBytes": 83,
+      "sourceLineNumber": null,
+      "sourceStartByte": 0,
+      "tag": "NAV",
+      "tags": [
+        "ECU1",
+        "NAV",
+        "RTE"
+      ],
+      "tid": "",
+      "time": "09:26:53.589793"
+    },
+    {
+      "date": "2026-03-14",
+      "dlt": {
+        "apid": "AUD",
+        "count": "2",
+        "ctid": "MIX",
+        "ecu": "ECU1",
+        "kind": "E",
+        "session": "",
+        "uptime": ""
+      },
+      "fieldOffsets": {
+        "apid": 36,
+        "ctid": 40,
+        "date": 0,
+        "ecu": 31,
+        "message": 48,
+        "time": 11
+      },
+      "highlights": [
+        [
+          48,
+          53
+        ]
+      ],
+      "kind": "parsed",
+      "level": "E",
+      "lineNumber": 3,
+      "message": "Route volume error -3.50000000",
+      "pid": "",
+      "raw": "2026-03-14 09:26:53.589793 - 2 ECU1 AUD MIX - E Route volume error -3.50000000",
+      "rawBytes": 78,
+      "sourceLineNumber": null,
+      "sourceStartByte": 164,
+      "tag": "AUD",
+      "tags": [
+        "ECU1",
+        "AUD",
+        "MIX"
+      ],
+      "tid": "",
+      "time": "09:26:53.589793"
+    }
+  ]
+}
