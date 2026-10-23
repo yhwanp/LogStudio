@@ -1,7 +1,8 @@
 """Recognized Android formats (Android Studio, -v time, uid, brief, year,
 nsec) and iOS rows in columns, level counts, continuation and malformed rows,
 the unrecognized-rows switch, tag filter and search marks, and the brief row
-menu (formats.log)."""
+menu (formats.log); repaired Mac OS Roman mojibake in columns, search and the
+detail (mojibake.log)."""
 import time
 
 import fixtures
@@ -17,6 +18,7 @@ LEVELS = "return Object.fromEntries([...document.querySelectorAll('#levelFilters
 def run(ctx):
     fixtures.formats(ctx.fixtures)
     fixtures.startup(ctx.fixtures)
+    fixtures.mojibake(ctx.fixtures)
     with ctx.launch() as app:
         js, check = app.js, ctx.check
         row = lambda n: js(ROW, n)
@@ -67,3 +69,22 @@ return {cell:c.clientWidth,timeAndEllipsis:Math.ceil(m.measureText('2026-06-18 1
         cls = js("return document.querySelector('#logsRows [data-line-number=\"5\"]').className")
         check('-v year, -v nsec and iOS rows get columns; the stack line continues the iOS entry',
               'continuation-row' in cls and '2026-09-21 12:07:31.386' in stamps and '09-21 12:07:32.386123456' in stamps and any(s.startswith('2026-09-30 21:55:53.776261') for s in stamps), {'stamps': stamps, 'row5': cls})
+
+        # UTF-8 read as Mac OS Roman shows, searches and opens as its text.
+        app.open_fixture('mojibake.log')
+        app.wait_count(2)
+        r1, r2 = row(1), row(2)
+        check('Mac OS Roman mojibake shows repaired in columns; plain accents stay',
+              r1['tag'] == '인사' and r1['message'] == 'Greeting(text : 안녕하세요, lang : ko, city : 대전) 🙂'
+              and r2['message'] == 'café “quoted” – 5 °C', {'r1': r1, 'r2': r2})
+        app.type('searchInput', '안녕')
+        app.wait_count(2)
+        hit = app.wait(lambda: js("return document.querySelector('#largeRows [data-line-number=\"1\"] mark')?.textContent"), what='repaired search hit')
+        check('a search for the repaired text finds and marks it', hit == '안녕', hit)
+        app.click_row(1, pane='largeRows')
+        title = app.wait(lambda: (lambda t: '복원' in t and t)(app.text('largeDetailTitle')), what='repaired detail title')
+        hint = js("return document.getElementById('largeDetailTitle').title")
+        detail = app.text('largeDetailText')
+        check('the detail names the repair and shows the repaired text',
+              title == '1행 원문 · 깨진 문자 복원' and 'Mac OS Roman' in hint and '안녕하세요' in detail, {'title': title, 'hint': hint, 'detail': detail})
+        app.capture('03-mojibake-repaired')

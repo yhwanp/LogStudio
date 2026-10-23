@@ -199,13 +199,19 @@ fn chunk_and_crlf_boundaries_keep_all_rows_and_partial_scalars() {
 fn damage_metadata_is_bounded_and_real_replacement_has_no_bit() {
     let bytes = ["�🙂".as_bytes(), b"\xffa\xff"].concat();
     let display = encoding::decode(&bytes);
-    let m = encoding::damage(&bytes, 0, display.len(), 10);
+    let m = encoding::damage(&bytes, false, 0, display.len(), 10);
     assert_eq!(m["mask"], "28");
     assert_eq!(m["samples"][0]["position"], 3);
     assert_eq!(m["samples"][0]["sourceStartByte"], 17);
     let many = b"\xffa".repeat(MAX_LINE / 2);
     let preview = encoding::decode(&many);
-    let m = encoding::damage(&many, 0, preview.char_indices().nth(4096).unwrap().0, 0);
+    let m = encoding::damage(
+        &many,
+        false,
+        0,
+        preview.char_indices().nth(4096).unwrap().0,
+        0,
+    );
     assert_eq!(m["samples"].as_array().unwrap().len(), 16);
     assert_eq!(m["samplesTruncated"], true);
     assert!(m["mask"].as_str().unwrap().len() <= 1024);

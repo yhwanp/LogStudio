@@ -304,6 +304,18 @@ test('damaged byte marks survive columns, raw view, detail and normal replacemen
   await r.get('logsRows').children[0].dispatch('click');await settle();assert.match(r.get('largeDetailTitle').textContent,/손상/);assert.equal(r.get('largeDetailText').textContent,row.raw);assert.equal(collect(r.get('largeDetailText'),'encoding-damage').length,1);assert.match(collect(r.get('largeDetailText'),'encoding-damage')[0].title,/FF/);
 });
 
+test('detail title names repaired mojibake and clears the note for plain rows',async t=>{
+  const row={lineNumber:1,kind:'raw',raw:'text : 안녕'};
+  let detail={text:row.raw,startByte:0,nextByte:22,totalBytes:22,complete:true,highlights:[],encodingRepaired:true};
+  const r=await rig({rows:[row],detail:()=>detail});t.after(()=>r.controller.close());
+  await r.get('logsRows').children[0].dispatch('click');await settle();
+  assert.match(r.get('largeDetailTitle').textContent,/깨진 문자 복원/);assert.match(r.get('largeDetailTitle').title,/Mac OS Roman/);
+  assert.equal(r.get('largeDetailText').textContent,row.raw);
+  detail={...detail,text:'plain',encodingRepaired:undefined};
+  await r.controller.logs.loadDetail(1);await settle();
+  assert.doesNotMatch(r.get('largeDetailTitle').textContent,/복원/);assert.equal(r.get('largeDetailTitle').title,'');
+});
+
 test('unchanged detail nodes retain selection while new content, damage, query and lifecycle invalidate',async t=>{
   const row={lineNumber:1,kind:'raw',raw:'a� �'};
   let detail={text:row.raw,startByte:0,nextByte:8,totalBytes:8,complete:true,highlights:[[1,2]],encodingDamage:{mask:'02',bytes:1,samples:[{position:1,hex:'FF',sourceStartByte:1}]}};

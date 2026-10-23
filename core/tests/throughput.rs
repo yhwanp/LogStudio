@@ -129,7 +129,7 @@ fn parallel_scan_records_every_block_in_order() {
         let data = d.source.read(b.start, (b.end - b.start) as usize).unwrap();
         let mask = q
             .filter
-            .mask_from(&data, b.rows, &stop, entry)
+            .mask_from(&data, b.rows, &stop, entry, false)
             .unwrap()
             .bits;
         // Bits past the last row are padding.

@@ -1020,7 +1020,7 @@ fn header_masks_equal_rendered_row_masks() {
                 .unwrap()
                 .with_format(Format::Dlt);
             let rendered = filter
-                .mask_from(&text, n, &stop, filter.admits_unparsed())
+                .mask_from(&text, n, &stop, filter.admits_unparsed(), false)
                 .unwrap();
             let headers = filter.dlt_mask(&decoder, &raw, n, &stop).unwrap();
             let bit = |bits: &[u8], i: usize| bits[i / 8] & (1 << (i % 8)) != 0;

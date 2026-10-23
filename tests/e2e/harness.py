@@ -38,18 +38,19 @@ def port_open(port):
         return False
 
 
-# Turns off transitions, forces the dark scheme by switching the stylesheet's
-# prefers-color-scheme:dark media rules to `all` (the app follows the system
-# scheme, which a run does not change) and copies `:hover` rules to a
-# `.qa-hover` class. CSSOM only: the app's CSP rejects injected style elements.
+# Turns off transitions, forces the dark (true) or light (false) scheme by
+# switching the stylesheet's prefers-color-scheme:dark media rules to `all` or
+# `not all`, or restores them (null): the app follows the system scheme, which
+# a run does not change. Copies `:hover` rules to a `.qa-hover` class. CSSOM
+# only: the app's CSP rejects injected style elements.
 THEME = """if(!window.__qa){const sheet=[...document.styleSheets].find(s=>{try{return s.cssRules.length>0}catch{return false}});
 const media=[],hover=[];const walk=(rules,host)=>{for(const r of [...rules]){if(r instanceof CSSMediaRule){if(/prefers-color-scheme:\\s*dark/.test(r.conditionText))media.push(r);walk(r.cssRules,r);}
 else if(r instanceof CSSStyleRule&&r.selectorText.includes(':hover'))hover.push([host,r]);}};walk(sheet.cssRules,sheet);
 for(const [host,r] of hover)host.insertRule(r.cssText.replaceAll(':hover','.qa-hover'),host.cssRules.length);
 sheet.insertRule('*,*::before,*::after{transition:none!important;animation:none!important}',sheet.cssRules.length);
 window.__qa={media,original:media.map(r=>r.media.mediaText)};}
-const dark=arguments[0];window.__qa.media.forEach((r,i)=>{r.media.mediaText=dark?'all':window.__qa.original[i];});
-document.documentElement.style.colorScheme=dark?'dark':'light';return window.__qa.media.length;"""
+const dark=arguments[0];window.__qa.media.forEach((r,i)=>{r.media.mediaText=dark===null?window.__qa.original[i]:dark?'all':'not all';});
+document.documentElement.style.colorScheme=dark===null?'':dark?'dark':'light';return window.__qa.media.length;"""
 
 # Closes a tip that may already show, then turns tips off for this storage.
 NO_TIPS = """const l=document.getElementById('tipLayer');if(l&&l.open)document.getElementById('tipClose').click();
@@ -298,5 +299,5 @@ if(arguments[1])i.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles
                     "if(arguments[0])document.getElementById(arguments[0]).classList.add('qa-hover');return true;", hover)
             time.sleep(.25)
             self.shot(f'{name}-{scheme}')
-        self.js(THEME, False)
+        self.js(THEME, None)
         self.js("document.querySelectorAll('.qa-hover').forEach(e=>e.classList.remove('qa-hover'));return true;")

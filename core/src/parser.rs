@@ -582,6 +582,21 @@ pub fn parse_line(raw: &str, line: u64, recognize: bool) -> Record<'_> {
 }
 /// A row read in its dataset's format. Text rows are Android or iOS rows
 /// (`parse_line`); a DLT row is never read as one.
+/// Whether text starting with `head` is an iOS log: its rows that parse,
+/// numbered or not, are iOS rows at least as often as others. Such logs get
+/// Mac OS Roman mojibake repaired (`encoding::repair`).
+pub fn ios_log(head: &[u8]) -> bool {
+    let (mut ios, mut other) = (0usize, 0usize);
+    for (_, bytes) in crate::source::ByteLines::new(head) {
+        let raw = crate::encoding::decode(bytes);
+        match parse_line(&raw, 0, true).parsed {
+            Some(p) if p.ios => ios += 1,
+            Some(_) => other += 1,
+            None => {}
+        }
+    }
+    ios > 0 && ios >= other
+}
 pub fn parse_in(format: Format, raw: &str, line: u64, recognize: bool) -> Record<'_> {
     match format {
         Format::Text => parse_line(raw, line, recognize),
@@ -767,6 +782,21 @@ mod tests {
                 .parsed
                 .is_none()
         );
+    }
+    #[test]
+    fn ios_logs_are_told_by_their_parsed_rows() {
+        let ios = "2026-09-30 21:55:53.776 Runner[1:2] [INFO] [Tag] m\n";
+        let android = "09-30 21:55:53.776  1  2 I Tag: m\n";
+        assert!(ios_log(ios.as_bytes()));
+        assert!(ios_log(
+            format!("--- header\n{ios}  continued\r\n{ios}").as_bytes()
+        ));
+        assert!(ios_log(format!("{ios}{android}").as_bytes()), "a tie");
+        assert!(ios_log(format!("0001 {ios}").as_bytes()), "numbered rows");
+        assert!(!ios_log(format!("{ios}{android}{android}").as_bytes()));
+        assert!(!ios_log(android.as_bytes()));
+        assert!(!ios_log(b"plain text\nwithout rows\n"));
+        assert!(!ios_log(b""));
     }
     #[test]
     fn process_unknown() {

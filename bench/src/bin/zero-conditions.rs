@@ -227,7 +227,7 @@ impl Log {
             .unwrap();
         let bits = match &self.dlt {
             Some(dec) => f.dlt_mask(dec, &raw, b.rows, stop).unwrap().bits,
-            None => f.mask_from(&raw, b.rows, stop, false).unwrap().bits,
+            None => f.mask_from(&raw, b.rows, stop, false, false).unwrap().bits,
         };
         // A stopped mask may be partial.
         !stop.load(Acquire) && (0..b.rows).any(|r| bits[r / 8] & (1 << (r % 8)) != 0)
@@ -700,7 +700,7 @@ fn rows(log: &Log) {
                 .source
                 .read(b.start, (b.end - b.start) as usize)
                 .unwrap();
-            let _ = f.mask_from(&raw, b.rows, &stop, true).unwrap();
+            let _ = f.mask_from(&raw, b.rows, &stop, true, false).unwrap();
         }
         best = best.min(t.elapsed().as_secs_f64());
     }

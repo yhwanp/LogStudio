@@ -6,14 +6,14 @@
 
 | 경로 | 역할 |
 | --- | --- |
-| `core/src/source.rs` | 승인된 파일·붙여넣기 원문 읽기, 여러 파일을 순서대로 이은 단일 바이트 공간(`Part`), 파일 첫 4바이트 기반 형식 판별(`Format`: 텍스트·DLT, 혼합 열기 거부), 외부 파일 변경 감지 및 단일 텍스트 파일의 끝부분 추가 확인(`grow`), 공개 오류 메시지 |
+| `core/src/source.rs` | 승인된 파일·붙여넣기 원문 읽기, 여러 파일을 순서대로 이은 단일 바이트 공간(`Part`), 파일 첫 4바이트 기반 형식 판별(`Format`: 텍스트·DLT, 혼합 열기 거부), 앞 64 KiB 기반 iOS 로그 판별(`Part::ios`, `parser::ios_log`), 외부 파일 변경 감지 및 단일 텍스트 파일의 끝부분 추가 확인(`grow`), 공개 오류 메시지 |
 | `core/src/order.rs` | 다중 선택·드롭한 파일의 정렬: 파일 끝 64 KiB의 마지막 로그 시각(없으면 앞 64 KiB의 첫 로그 시각, DLT는 첫 메시지 시각) 기준, 시각이 없거나 모호하면 회전 번호를 고려한 자연 이름순 정렬(`order`, `arrange`) |
 | `core/src/dataset.rs` | 희소 물리 행 인덱스(약 128 KiB 블록 단위, 파일 경계를 넘지 않음), DLT 단위 인덱스(`index_dlt_file`) 및 블록을 행 텍스트로 변환하는 `read_rows`, pane별 쿼리 실행, 레벨 집계, `page`·`locate`·`range`·`record`·`lines`, 내보내기(`export_as`), 실시간 따라가기 |
 | `core/src/fields_index.rs` | 분석 단계에서 생성하는 블록별 PID·TID·태그 메타데이터 표, 필드 필터 적용 시 블록 건너뛰기 및 블록을 읽지 않는 카운트 계산 |
 | `core/src/parser.rs` | Android(`threadtime`·`-v time`·`brief`, `-v uid`·`-v year`·`-v nsec`, Android Studio Logcat 복사본) 및 iOS 필드 파싱, 앞쪽 줄 번호 인식, 데이터셋 형식별 파서 선택(`parse_in`·`starts_entry_in`), DLT 행 필드 분리 |
 | `core/src/dlt.rs` | DLT(프로토콜 버전 1) 단위 분할(`units`), 헤더 파싱, `dlt-viewer` 호환 페이로드 포매팅 및 행 렌더링(`Decoder::render`), 행 필드 추출(`parse_row`), 로컬 시각 변환(`Clock`), 테스트·벤치마크용 합성 생성기(`synth`) |
 | `core/src/search.rs` | 고정 버전 `grep-regex` / `grep-searcher` 기반 문자열·정규식 검색 및 하이라이트 범위 계산 |
-| `core/src/encoding.rs` | 손상된 UTF-8 바이트의 표시용 대체(``) 및 손상 위치 마스크 생성 |
+| `core/src/encoding.rs` | 표시 텍스트 디코딩: 손상된 UTF-8 바이트의 표시용 대체(``)와 손상 위치 마스크, Mac OS Roman으로 잘못 읽혀 깨진 UTF-8 문자 복원(`repair`), UTF-16·압축 파일 판별 |
 | `core/src/launch.rs` | CLI 경로 인자(복수 지정 시 병합 열기) 및 `--large-log`(반복 가능) 옵션 해석 |
 | `core/src/lib.rs` | `Engine`: 파일 열기·검증·롤백 복원, IPC 요청 처리, 진행 상태 이벤트 발행 |
 | `src-tauri/src/main.rs` | Tauri 커맨드 핸들러, 동시 요청 수 제한, 파일 선택·드롭 처리(다중 파일은 `order::arrange` 정렬), 시작 인자 오류 보관(`take_startup_error`) |
@@ -53,6 +53,11 @@
 ### 인덱싱과 스캔
 
 - **블록 인덱싱:** 원문을 약 128 KiB 크기의 줄 경계 블록으로 나눕니다. 블록마다 UTF-8 유효성, NUL 바이트 여부, 최대 행 길이(1 MiB)를 검사한 뒤 게시하며, 열기를 확정하기 직전에 외부 파일 변경 여부를 한 번 더 확인합니다.
+- **표시 텍스트 디코딩:** `encoding::decoded`가 블록과 행의 바이트를 표시용 문자열로 바꿉니다. 손상된 UTF-8 바이트는 U+FFFD로 대체하고, iOS 로그 파일의 행이면 Mac OS Roman으로 잘못 읽혀 깨진 문자도 복원합니다.
+  - **iOS 파일 판별:** 파일을 열 때 앞 64 KiB에서 인식된 행 중 iOS 행이 다른 형식 행 이상이면 `Part::ios`를 켭니다(`parser::ios_log`). Android 파일과 DLT는 복원하지 않습니다.
+  - **복원 조건:** Mac OS Roman 상위 문자가 이어진 구간에서 올바른 UTF-8을 이루는 가장 긴 앞부분을 복원하되, `plausible` 검사를 통과할 때만 적용합니다. 결과가 두 바이트 문자 하나면 U+00A0–024F여야 하고, 결합 문자로 시작하거나 C1 제어 문자·U+2028/2029가 들어 있으면 복원하지 않습니다.
+  - **일관성:** 복원 여부는 `Rows::repair`로 블록 스캔(`Filter::mask_from`·`row_hits`), 레벨·필드 분석, 페이지, 원문 상세에 똑같이 전달되므로 표시와 검색·필터 결과가 일치합니다. ASCII와 줄 구분 문자는 바뀌지 않아 물리 행 경계와 엔트리 시작 판정(`opens_entry`)도 그대로입니다.
+  - 바이트 위치(`startByte`·`sourceStartByte`)와 내보내기는 원본 바이트 기준이며, 원문 상세 응답은 복원한 문자가 있으면 `encodingRepaired: true`를 포함합니다.
 - **즉시 표시:** `page` 조회와 쿼리 스캔은 전체 파일 인덱싱이 끝나기를 기다리지 않고 이미 게시된 블록부터 즉시 읽습니다. 전체 레벨 통계 및 필드 메타데이터 분석은 인덱싱 완료 후 워커 스레드에서 이어서 실행됩니다.
 - **병렬 스캔:** 각 pane마다 전용 쿼리 스레드가 하나씩 동작하며, 블록 판정은 최대 4개(DLT는 최대 8개, CPU 코어 수의 절반 이하) 워커가 병렬로 처리합니다. 일치 결과는 전체 행 번호 배열 대신 블록별 일치 건수(`ends`)와 비트마스크로 관리해 메모리 사용량을 낮추고 원문 순서를 유지합니다.
 - **제로카피 필드 판정:** 필터 판정 시에는 원문 슬라이스를 빌린(`borrow`) 필드를 사용하며, JSON 행 객체는 화면에 실제로 보낼 페이지 행에 대해서만 생성합니다.

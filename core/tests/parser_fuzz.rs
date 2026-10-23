@@ -145,8 +145,14 @@ fn random_bytes_decode_and_parse() {
             })
             .collect();
         let text = encoding::decode(&bytes);
-        let _ = encoding::replacement_offsets(&bytes);
+        let _ = encoding::replacement_offsets(&bytes, false);
         let _ = encoding::window(&bytes, 0, 16);
         exercise(&text, i);
+        // iOS rows display repaired; marks follow the repaired text.
+        let fixed = encoding::decoded(&bytes, true).text;
+        let marks = encoding::replacement_offsets(&bytes, true);
+        assert!(marks.iter().all(|&at| fixed[at..].starts_with('\u{fffd}')));
+        let _ = encoding::damage(&bytes, true, 0, fixed.len(), 0);
+        exercise(&fixed, i);
     }
 }

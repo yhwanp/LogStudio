@@ -87,6 +87,15 @@ def startup(root: Path):
         "    at com.example.Foo.bar(Foo.java:1)\n", encoding='utf-8')
 
 
+def mojibake(root: Path):
+    """mojibake.log: iOS rows whose UTF-8 was read as Mac OS Roman, and a plain row."""
+    garble = lambda s: s.encode('utf-8').decode('mac_roman')
+    (root / 'mojibake.log').write_text(
+        f"2026-09-30 21:55:53.776261 Maps[7:9] [{garble('인사')}] "
+        f"Greeting(text : {garble('안녕하세요')}, lang : ko, city : {garble('대전')}) {garble('🙂')}\n"
+        "2026-09-30 21:55:53.776262 Maps[7:9] [Cache] café “quoted” – 5 °C\n", encoding='utf-8')
+
+
 def combined(root: Path):
     """first/second/third.log: first ends without a line ending, second uses CRLF."""
     files = {

@@ -427,8 +427,10 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
   function renderDetailTitle(d=detailOwner?.getState().detail,owner=detailOwner){
     if(!d||!owner)return;
     const source=rowSource(d,logs.getState().files),other=(owner===logs?search:logs).getState().selectedLine;
-    const text=`${other&&other!==d.lineNumber?owner===logs?'로그 · ':'검색 결과 · ':''}${source?`${source.name} · `:''}${recordTitle(d,source?source.line:d.first??d.lineNumber)}${d.encodingDamage?.bytes ? ' · 손상 바이트 표시' : ''}`;
+    const text=`${other&&other!==d.lineNumber?owner===logs?'로그 · ':'검색 결과 · ':''}${source?`${source.name} · `:''}${recordTitle(d,source?source.line:d.first??d.lineNumber)}${d.encodingDamage?.bytes ? ' · 손상 바이트 표시' : ''}${d.encodingRepaired ? ' · 깨진 문자 복원' : ''}`;
     if(ui.largeDetailTitle.textContent!==text)ui.largeDetailTitle.textContent=text;
+    const hint=d.encodingRepaired?'Mac OS Roman으로 잘못 읽혀 깨진 UTF-8 문자(예: ÏïàÎÖï → 안녕)를 복원해 표시했습니다. 원본 파일과 내보내기 결과는 바뀌지 않습니다.':'';
+    if(ui.largeDetailTitle.title!==hint)ui.largeDetailTitle.title=hint;
   }
   // Both panes keep a selected row. The pane whose row the detail does not
   // show draws its selection as secondary unless both select the same row.

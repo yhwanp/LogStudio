@@ -71,7 +71,12 @@ pub struct Part {
     /// The file's format by its first bytes; None for an empty file, which
     /// joins any format.
     pub format: Option<Format>,
+    /// A text file whose first `IOS_HEAD` bytes read as an iOS log
+    /// (`parser::ios_log`): its rows get Mac OS Roman mojibake repaired.
+    pub ios: bool,
 }
+/// Bytes from a text file's start that decide whether it is an iOS log.
+const IOS_HEAD: usize = 64 * 1024;
 pub struct Source {
     files: Mutex<Option<Vec<File>>>,
     parts: Vec<Part>,
@@ -257,6 +262,7 @@ impl Source {
                 name: name.clone(),
                 stamp,
                 format: Some(Format::Text),
+                ios: crate::parser::ios_log(&text.as_bytes()[..text.len().min(IOS_HEAD)]),
             }],
             name,
             files: Mutex::new(Some(vec![file])),
@@ -436,14 +442,14 @@ impl Part {
         if !stamp.is_file() || !opened || stamp.len() > MAX_FILE {
             return Err(error("File changed or exceeds 8 GiB"));
         }
-        let mut head = [0; 4];
-        let n = head.len().min(stamp.len() as usize);
-        read_exact_at(&file, &mut head[..n], 0).map_err(open_error)?;
-        let format = match n {
+        let mut head = vec![0; IOS_HEAD.min(stamp.len() as usize)];
+        read_exact_at(&file, &mut head, 0).map_err(open_error)?;
+        let format = match head.len() {
             0 => None,
-            _ if crate::dlt::is_dlt(&head[..n]) => Some(Format::Dlt),
+            _ if crate::dlt::is_dlt(&head) => Some(Format::Dlt),
             _ => Some(Format::Text),
         };
+        let ios = format == Some(Format::Text) && crate::parser::ios_log(&head);
         let part = Self {
             size: stamp.len(),
             offset,
@@ -458,6 +464,7 @@ impl Part {
             stamp,
             path: Some(path.to_owned()),
             format,
+            ios,
         };
         Ok((file, part))
     }

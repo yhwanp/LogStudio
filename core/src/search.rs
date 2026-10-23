@@ -821,19 +821,22 @@ impl Filter {
     /// first parsed row are orphans.
     pub fn mask(&self, data: &[u8], rows: usize, stop: &AtomicBool) -> io::Result<Vec<u8>> {
         Ok(self
-            .mask_from(data, rows, stop, self.admits_unparsed())?
+            .mask_from(data, rows, stop, self.admits_unparsed(), false)?
             .bits)
     }
     /// Matches of one block. `entry` is the field decision for the rows
     /// before the block's first parsed row: the decision of the log entry
     /// they continue from an earlier block, or the orphan rule at a file's
     /// start. The search query still matches each physical row on its own.
+    /// `repair` reads the rows of an iOS log as they display, with Mac OS
+    /// Roman mojibake repaired (`encoding::decoded`).
     pub fn mask_from(
         &self,
         data: &[u8],
         rows: usize,
         stop: &AtomicBool,
         entry: bool,
+        repair: bool,
     ) -> io::Result<Mask> {
         let mut mask = vec![0; rows.div_ceil(8)];
         let (mut lead, mut tail) = (0, None);
@@ -848,7 +851,8 @@ impl Filter {
         // Decode the block once. Invalid sequences become U+FFFD, which never
         // contains CR/LF, so physical rows keep their indexes and boundaries
         // and the field pass can slice rows out of the same decoded text.
-        let display = (self.matcher.is_some() || fields).then(|| encoding::decode(data));
+        let display =
+            (self.matcher.is_some() || fields).then(|| encoding::decoded(data, repair).text);
         if let (Some(matcher), Some(display)) = (&self.matcher, &display) {
             let data = display.as_bytes();
             let normalized: Cow<[u8]> = if memchr::memchr(b'\r', data).is_some() {
@@ -1081,9 +1085,9 @@ impl Filter {
     /// fields can match a condition, and a row continuing another entry
     /// has none, so each row is decided alone. Stops once each is found,
     /// and between rows once `stop` is set; bits found until then stay true.
-    pub fn row_hits(&self, data: &[u8], wanted: u64, stop: &AtomicBool) -> u64 {
+    pub fn row_hits(&self, data: &[u8], wanted: u64, stop: &AtomicBool, repair: bool) -> u64 {
         let conds: Vec<&Cond> = self.conditions().collect();
-        let text = encoding::decode(data);
+        let text = encoding::decoded(data, repair).text;
         let recognize = self.fields.recognizes_line_numbers();
         let mut found = 0;
         for (i, (offset, bytes)) in ByteLines::new(text.as_bytes()).enumerate() {

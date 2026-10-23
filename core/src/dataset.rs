@@ -69,6 +69,9 @@ pub struct Rows {
     /// Start of each row's source bytes from the block's start when rows
     /// are decoded; None when `text` is the block's own bytes.
     pub units: Option<Vec<u32>>,
+    /// The rows are an iOS log's, which display with Mac OS Roman mojibake
+    /// repaired (`encoding::decoded`).
+    pub repair: bool,
 }
 #[derive(Default)]
 pub struct Index {
@@ -144,6 +147,8 @@ pub const LINES_PER_REQUEST: usize = 200;
 struct Owners {
     block: usize,
     first: u64,
+    /// The block's file is an iOS log, whose rows display repaired.
+    repair: bool,
     /// Rows `..checked` are resolved; `found` is the last entry row there and
     /// whether it is parsed.
     checked: usize,
@@ -153,10 +158,11 @@ struct Owners {
     entry: Option<Option<Value>>,
 }
 impl Owners {
-    fn new(block: usize, b: &Block) -> Self {
+    fn new(block: usize, b: &Block, repair: bool) -> Self {
         Self {
             block,
             first: b.first,
+            repair,
             checked: 0,
             found: None,
             cache: None,
@@ -186,7 +192,13 @@ impl Owners {
             if self.entry.is_none() {
                 let owner = d.entry_owner(self.block, recognize)?;
                 self.entry = Some(match owner {
-                    Some(line) => Some(owner_json(d.format, &d.row_bytes(line)?, line, recognize)),
+                    Some(line) => Some(owner_json(
+                        d.format,
+                        &d.row_bytes(line)?,
+                        line,
+                        recognize,
+                        self.repair,
+                    )),
                     None => None,
                 });
             }
@@ -198,7 +210,13 @@ impl Owners {
         if self.cache.as_ref().is_none_or(|(k, _)| *k != j) {
             self.cache = Some((
                 j,
-                owner_json(d.format, lines[j].1, self.first + j as u64, recognize),
+                owner_json(
+                    d.format,
+                    lines[j].1,
+                    self.first + j as u64,
+                    recognize,
+                    self.repair,
+                ),
             ));
         }
         Ok(self.cache.as_ref().map(|(_, value)| value.clone()))
@@ -206,7 +224,8 @@ impl Owners {
 }
 /// Some(parsed) when a row opens a log entry: a parsed row, or a malformed
 /// row that `parser::starts_entry_in`. None when it continues the entry
-/// before.
+/// before. Repairs never change this (`encoding::repair` keeps brackets and
+/// line separators), so rows are read unrepaired.
 fn opens_entry(format: Format, bytes: &[u8], recognize: bool) -> Option<bool> {
     let raw = encoding::decode(bytes);
     if parser::parse_in(format, &raw, 0, recognize)
@@ -218,8 +237,8 @@ fn opens_entry(format: Format, bytes: &[u8], recognize: bool) -> Option<bool> {
         parser::starts_entry_in(format, &raw, recognize).then_some(false)
     }
 }
-fn owner_json(format: Format, bytes: &[u8], line: u64, recognize: bool) -> Value {
-    let raw = encoding::decode(bytes);
+fn owner_json(format: Format, bytes: &[u8], line: u64, recognize: bool, repair: bool) -> Value {
+    let raw = encoding::decoded(bytes, repair).text;
     let record = parser::parse_in(format, &raw, line, recognize);
     let Some(p) = &record.parsed else {
         return json!({"lineNumber":line});
@@ -813,7 +832,7 @@ impl Dataset {
                 let (mut stats, mut prefix) = (Summary::default(), Summary::default());
                 let mut entries = [Entries::default(), Entries::default()];
                 // Decoded once, as in `Filter::mask_from`; field values borrow it.
-                let text = encoding::decode(&rows.text);
+                let text = encoding::decoded(&rows.text, rows.repair).text;
                 let mut values = collect.then(fields_index::Collector::default);
                 for (i, (offset, bytes)) in ByteLines::new(text.as_bytes()).enumerate() {
                     let raw = &text[offset..offset + bytes.len()];
@@ -1141,7 +1160,9 @@ impl Dataset {
                     };
                     let hits = match &self.dlt {
                         Some(decoder) => q.filter.dlt_row_hits(decoder, &raw, wanted, &q.stop),
-                        None => q.filter.row_hits(&raw, wanted, &q.stop),
+                        None => q
+                            .filter
+                            .row_hits(&raw, wanted, &q.stop, self.repairs(b.file)),
                     };
                     let new = hits & !found.fetch_or(hits, Ordering::AcqRel);
                     if new != 0 {
@@ -1308,7 +1329,8 @@ impl Dataset {
                 }
                 let rows = self.read_rows(&b)?;
                 let Mask { bits, lead, tail } =
-                    q.filter.mask_from(&rows.text, b.rows, &q.stop, true)?;
+                    q.filter
+                        .mask_from(&rows.text, b.rows, &q.stop, true, rows.repair)?;
                 let count = (0..b.rows)
                     .filter(|i| bits[i / 8] & (1 << (i % 8)) != 0)
                     .count()
@@ -1417,7 +1439,7 @@ impl Dataset {
         let rows = self.read_rows(&block)?;
         let mask = q
             .filter
-            .mask_from(&rows.text, block.rows, &self.stop, entry)?
+            .mask_from(&rows.text, block.rows, &self.stop, entry, rows.repair)?
             .bits;
         // `mask` returns an empty mask when stopped; that is not "not found".
         if self.stop.load(Ordering::Acquire) {
@@ -1499,9 +1521,13 @@ impl Dataset {
                 let block_rows = self.read_rows(b)?;
                 let data = &block_rows.text;
                 reads += data.len();
-                let mask = q.filter.mask_from(data, b.rows, &stop, entries[k])?.bits;
+                let repair = block_rows.repair;
+                let mask = q
+                    .filter
+                    .mask_from(data, b.rows, &stop, entries[k], repair)?
+                    .bits;
                 let lines: Vec<(usize, &[u8])> = ByteLines::new(data).collect();
-                let mut owners = Owners::new(bi + k, b);
+                let mut owners = Owners::new(bi + k, b, repair);
                 for (j, &(offset, bytes)) in lines.iter().enumerate() {
                     let line = b.first + j as u64;
                     if mask[j / 8] & (1 << (j % 8)) == 0 {
@@ -1512,7 +1538,8 @@ impl Dataset {
                         continue;
                     }
                     // Only rows that reach the page are decoded.
-                    let raw = encoding::decode(bytes);
+                    let decoded = encoding::decoded(bytes, repair);
+                    let raw = decoded.text;
                     let record = parser::parse_in(self.format, &raw, line, recognize);
                     let mut value = record.json(4096);
                     if record.parsed.is_none() {
@@ -1532,11 +1559,12 @@ impl Dataset {
                     value["rawBytes"] = json!(bytes.len());
                     value["sourceStartByte"] = json!(Self::row_source(b, &block_rows, j, offset));
                     self.mark_file(&mut value, b.file, line);
-                    let damaged = matches!(raw, std::borrow::Cow::Owned(_));
+                    let damaged = decoded.damaged;
                     if damaged {
                         value["encodingDamaged"] = json!(true);
                         value["encodingDamage"] = encoding::damage(
                             bytes,
+                            repair,
                             0,
                             value["raw"].as_str().unwrap().len(),
                             b.start + offset as u64,
@@ -1547,7 +1575,7 @@ impl Dataset {
                         // the previous field instead of recounting the whole prefix.
                         let (mut from, mut units) = (0usize, 0usize);
                         let replaced = if damaged {
-                            encoding::replacement_offsets(bytes)
+                            encoding::replacement_offsets(bytes, repair)
                         } else {
                             vec![]
                         };
@@ -1570,8 +1598,13 @@ impl Dataset {
                                 // that contain a replacement repeat the row metadata.
                                 let i = replaced.partition_point(|&d| d < at);
                                 if replaced.get(i).is_some_and(|&d| d < end) {
-                                    value["fieldDamage"][key] =
-                                        encoding::damage(bytes, at, end, b.start + offset as u64);
+                                    value["fieldDamage"][key] = encoding::damage(
+                                        bytes,
+                                        repair,
+                                        at,
+                                        end,
+                                        b.start + offset as u64,
+                                    );
                                 }
                             }
                         }
@@ -1650,7 +1683,10 @@ impl Dataset {
                 Some(r) => (&r.text, r.units.as_deref()),
                 None => (&raw, None),
             };
-            let mask = q.filter.mask_from(data, b.rows, &stop, entries[i])?.bits;
+            let mask = q
+                .filter
+                .mask_from(data, b.rows, &stop, entries[i], self.repairs(b.file))?
+                .bits;
             for (j, (offset, line)) in ByteLines::new(data).enumerate() {
                 if mask[j / 8] & (1 << (j % 8)) == 0 {
                     continue;
@@ -1789,12 +1825,17 @@ impl Dataset {
             Some(_) => Self::row_source(&block, &rows, local, offset),
             None => block.start + (offset + from) as u64,
         };
-        let text = encoding::decode(&bytes[from..end]);
+        let decoded = encoding::decoded(&bytes[from..end], rows.repair);
+        let text = decoded.text;
         let mut value = json!({"datasetId":self.id,"queryId":q.id,"lineNumber":line,"startByte":from,"nextByte":end,"totalBytes":bytes.len(),"sourceStartByte":source,"complete":end==bytes.len(),"text":text,"highlights":q.filter.highlights(&text)});
         self.mark_file(&mut value, block.file, line);
-        if matches!(text, std::borrow::Cow::Owned(_)) {
+        if decoded.repaired {
+            value["encodingRepaired"] = json!(true);
+        }
+        if decoded.damaged {
             value["encodingDamage"] = encoding::damage(
                 &bytes[from..end],
+                rows.repair,
                 0,
                 text.len(),
                 block.start + offset as u64 + from as u64,
@@ -1829,12 +1870,12 @@ impl Dataset {
             }
             let block_rows = self.read_rows(&b)?;
             let lines: Vec<(usize, &[u8])> = ByteLines::new(&block_rows.text).collect();
-            let mut owners = Owners::new(bi, &b);
+            let mut owners = Owners::new(bi, &b, block_rows.repair);
             while let Some(&line) = wanted.get(at).filter(|&&l| l < b.first + b.rows as u64) {
                 let j = (line - b.first) as usize;
                 let (offset, bytes) = lines[j];
-                let raw = encoding::decode(bytes);
-                let record = parser::parse_in(self.format, &raw, line, recognize);
+                let decoded = encoding::decoded(bytes, block_rows.repair);
+                let record = parser::parse_in(self.format, &decoded.text, line, recognize);
                 let mut value = record.json(4096);
                 if record.parsed.is_none() {
                     if let Some(owner) = owners.owner(self, &lines, j, recognize)? {
@@ -1843,7 +1884,7 @@ impl Dataset {
                 }
                 value["rawBytes"] = json!(bytes.len());
                 value["sourceStartByte"] = json!(Self::row_source(&b, &block_rows, j, offset));
-                if matches!(raw, std::borrow::Cow::Owned(_)) {
+                if decoded.damaged {
                     value["encodingDamaged"] = json!(true);
                 }
                 self.mark_file(&mut value, b.file, line);
@@ -1967,7 +2008,9 @@ impl Dataset {
             }
         };
         let (from, end) = encoding::window(&joined, start, 65536);
-        let text = encoding::decode(&joined[from..end]);
+        let repair = self.repairs(block.file);
+        let decoded = encoding::decoded(&joined[from..end], repair);
+        let text = decoded.text;
         // Each physical row is matched on its own, as in pages.
         let (mut highlights, mut units) = (Vec::<[usize; 2]>::new(), 0);
         for part in text.split('\n') {
@@ -1979,8 +2022,11 @@ impl Dataset {
         highlights.truncate(32);
         let mut value = json!({"datasetId":self.id,"queryId":q.id,"lineNumber":line,"first":first_line,"last":first_line+rows.len() as u64-1,"recordComplete":complete,"startByte":from,"nextByte":end,"totalBytes":joined.len(),"sourceStartByte":source_at(from),"complete":end==joined.len(),"text":text,"highlights":highlights});
         self.mark_file(&mut value, block.file, first_line);
-        if matches!(text, std::borrow::Cow::Owned(_)) {
-            let mut damage = encoding::damage(&joined[from..end], 0, text.len(), 0);
+        if decoded.repaired {
+            value["encodingRepaired"] = json!(true);
+        }
+        if decoded.damaged {
+            let mut damage = encoding::damage(&joined[from..end], repair, 0, text.len(), 0);
             for sample in damage["samples"].as_array_mut().unwrap() {
                 let at = from + sample["startByte"].as_u64().unwrap() as usize;
                 sample["sourceStartByte"] = json!(source_at(at));
@@ -1993,6 +2039,11 @@ impl Dataset {
     /// indexing and a followed file's edges read source bytes directly. A
     /// DLT block's units render as rows; issue rows name their offset in
     /// their own file.
+    /// Whether rows of source file `file` display repaired: only an iOS
+    /// text log's (`Part::ios`).
+    fn repairs(&self, file: usize) -> bool {
+        self.dlt.is_none() && self.source.parts().get(file).is_some_and(|p| p.ios)
+    }
     fn read_rows(&self, b: &Block) -> io::Result<Rows> {
         let raw = self.source.read(b.start, (b.end - b.start) as usize)?;
         Ok(match self.dlt {
@@ -2000,6 +2051,7 @@ impl Dataset {
             None => Rows {
                 text: raw,
                 units: None,
+                repair: self.repairs(b.file),
             },
         })
     }
@@ -2012,6 +2064,7 @@ impl Dataset {
         Rows {
             text,
             units: Some(units),
+            repair: false,
         }
     }
     /// Source byte of row `j` of block `b`, whose text starts at `offset`
