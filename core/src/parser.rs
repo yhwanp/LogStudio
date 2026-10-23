@@ -273,8 +273,8 @@ fn ios(s: &str) -> Option<Parsed<'_>> {
         context = true;
     }
     let first = BRACKET.captures(body);
-    let supplied = first.as_ref().and_then(|p| ios_level(p.get(1)?.as_str()));
-    let level_text = supplied.map(|_| first.as_ref().unwrap().get(1).unwrap().as_str());
+    let mut supplied = first.as_ref().and_then(|p| ios_level(p.get(1)?.as_str()));
+    let mut level_text = supplied.map(|_| first.as_ref().unwrap().get(1).unwrap().as_str());
     let primary = if supplied.is_some() {
         body = &body[first.as_ref().unwrap().get(0)?.end()..];
         BRACKET.captures(body)
@@ -306,6 +306,17 @@ fn ios(s: &str) -> Option<Parsed<'_>> {
     let mut rest = message;
     while let Some(p) = BRACKET.captures(rest) {
         let text = trim(p.get(1)?.as_str());
+        // Some loggers put the level after their own tags, as in
+        // `[plugin][Render][INFO]`. Only a full level name counts
+        // there: one-letter fields such as `[A]` are usually components.
+        if supplied.is_none() && text.chars().nth(1).is_some() {
+            if let Some(level) = ios_level(text) {
+                supplied = Some(level);
+                level_text = Some(p.get(1)?.as_str());
+                rest = &rest[p.get(0)?.end()..];
+                continue;
+            }
+        }
         let new = !text.is_empty()
             && match &mut seen {
                 Some(seen) => seen.insert(text),
@@ -709,6 +720,53 @@ mod tests {
         assert_eq!(p.tags, vec!["SDK_UI", "GalleryManager"]);
         assert_eq!(p.level, "I");
         assert_eq!(p.message, "[GalleryManager] body");
+    }
+    #[test]
+    fn ios_level_after_leading_tags() {
+        let raw = "2026-09-30 21:55:53.776 Runner[7:9] [demo_plugin][Render][INFO] [ViewRegistry] view attached: MainView";
+        let p = parse_line(raw, 1, false).parsed.unwrap();
+        assert_eq!(p.level, "I");
+        assert_eq!(p.level_text, Some("INFO"));
+        assert_eq!(p.tag, "demo_plugin");
+        assert_eq!(p.tags, vec!["demo_plugin", "Render", "ViewRegistry"]);
+        assert_eq!(
+            p.message,
+            "[Render][INFO] [ViewRegistry] view attached: MainView"
+        );
+        for (raw, level, tags) in [
+            // A leading level still wins; a later name stays a tag.
+            (
+                "2026-09-30 21:55:53.776 R[1:2] [ERROR] [Tag] [INFO] m",
+                "E",
+                vec!["Tag", "INFO"],
+            ),
+            // The first later level counts; later ones are tags.
+            (
+                "2026-09-30 21:55:53.776 R[1:2] [Tag] [ warning ][Error] m",
+                "W",
+                vec!["Tag", "Error"],
+            ),
+            // One letter is a component, and text ends the tag fields.
+            (
+                "2026-09-30 21:55:53.776 R[1:2] [Root][A][I] m",
+                "U",
+                vec!["Root", "A", "I"],
+            ),
+            (
+                "2026-09-30 21:55:53.776 R[1:2] [Root] m [INFO]",
+                "U",
+                vec!["Root"],
+            ),
+        ] {
+            let p = parse_line(raw, 1, false).parsed.unwrap();
+            assert_eq!((p.level, p.tags), (level, tags), "{raw}");
+        }
+        // Without a process header the level must come first, as before.
+        assert!(
+            parse_line("2026-09-30 21:55:53.776 [Tag] [INFO] m", 1, false)
+                .parsed
+                .is_none()
+        );
     }
     #[test]
     fn process_unknown() {
