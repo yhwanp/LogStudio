@@ -1386,6 +1386,9 @@ impl Dataset {
         // While followed, the summary covers the rows so far, not the file.
         let summarized = i.summary.is_some() && !i.live && i.analyzed >= i.blocks.len();
         let mut status = json!({"datasetId":self.id,"revision":revision,"name":self.source.name,"files":files,"size":self.source.current_size(),"status":if self.stop.load(Ordering::Acquire){"closed"}else if !i.error.is_empty(){"error"}else if i.done{"ready"}else{"indexing"},"indexedBytes":i.bytes,"total":i.total,"textComplete":i.done,"summaryComplete":summarized,"complete":i.done&&summarized,"summary":summary,"analysis":{"status":if summarized{"complete"}else{"running"}},"followable":self.source.followable(),"following":i.live,"grown":grown&&!i.live,"followError":i.follow_error,"tailRevision":i.replaced,"error":i.error,"query":q,"format":self.format.as_str()});
+        // Every file is an iOS log: iOS level names apply.
+        let parts = self.source.parts();
+        status["ios"] = json!(!parts.is_empty() && parts.iter().all(|p| p.ios));
         if self.format == Format::Dlt {
             let d = i.dlt_issues;
             status["dltIssues"] = json!({"garbage":d.garbage,"garbageBytes":d.garbage_bytes,"truncated":d.truncated,"unsupported":d.unsupported});

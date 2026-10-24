@@ -347,6 +347,8 @@ h2{font-size:16px;margin:0;font-weight:650}
 .level-W{background:var(--lv-w-bg)!important;color:var(--lv-w)!important}
 .level-E,.level-F,.level-A{background:var(--lv-e-bg)!important;color:var(--lv-e)!important}
 .tag{font-weight:500;color:var(--accent-text)}
+/* An iOS tag, subsystem:category, is cut from its start: the category stays. */
+.tag.from-end{direction:rtl;text-align:left}
 .message{color:var(--text)}
 .raw-row .raw-content{grid-column:2/-1;color:var(--raw-text)}
 /* Rows of one multi-line log entry read as one log: continuation rows take
@@ -436,8 +438,18 @@ mark{background:var(--mark);color:var(--mark-text);padding:0;border-radius:2px}
 .row-menu>button[aria-checked=true]{font-weight:600}
 .row-menu>button[aria-checked=true]::before{content:'';position:absolute;left:12px;top:50%;width:4px;height:8px;margin-top:-6px;border:solid currentColor;border-width:0 2px 2px 0;transform:rotate(45deg)}
 .row-menu>.menu-note{margin:0;padding:5px 10px;font-size:12px;line-height:1.5;color:var(--muted);white-space:normal;word-break:keep-all;overflow-wrap:anywhere}
+.row-menu>.menu-group{padding:7px 10px 1px;font-size:11px;font-weight:600;line-height:1.4}
+/* A device: its name may be cut, what follows it stays; a second line says what it needs. */
+.row-menu>button.menu-rich{display:flex;flex-direction:column;align-items:stretch;gap:2px;white-space:nowrap}
+.menu-line{display:flex;align-items:baseline;gap:6px;min-width:0}
+.menu-label{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.menu-detail{flex-shrink:0;color:var(--muted)}
+.row-menu>button:hover .menu-detail,.row-menu>button:focus-visible .menu-detail{color:inherit}
+.menu-sub{font-size:12px;line-height:1.45;color:var(--muted);white-space:normal;word-break:keep-all;overflow-wrap:anywhere}
 /* An item that cannot be chosen still takes focus, so its reason is read. */
 .row-menu>button[aria-disabled=true]{color:var(--muted);cursor:default;white-space:normal;word-break:keep-all;overflow-wrap:anywhere}
+/* A device that cannot be chosen yet still reads as a device, not a note. */
+.row-menu>button.menu-rich[aria-disabled=true] .menu-label{color:var(--text-2)}
 .row-menu>button[aria-disabled=true]:hover{background:none;color:var(--muted)}
 .row-menu>button[aria-disabled=true]:focus-visible{background:var(--surface-3);color:var(--text-2)}
 /* Naming a saved filter: a small modal form. */

@@ -241,7 +241,7 @@ fn a_capture_through_the_adb_command_line_records_until_stopped() {
     let _unset = Unset("ANDROID_LOG_TAGS");
     let (dir, adb) = fake_adb();
     let slot = Store::new(dir.path().join("captures"))
-        .create("Pixel 8")
+        .create(logstudio_core::capture::link::Platform::Android, "Pixel 8")
         .unwrap();
     let c = Capture::start(Arc::new(adb), "SER1", slot, Options::default()).unwrap();
     let deadline = Instant::now() + Duration::from_secs(20);

@@ -11,27 +11,59 @@ test('capture states from the engine are checked; other logs have none', () => {
   assert.equal(captureState(undefined), null);
   assert.equal(captureState({state:'unknown'}), null);
   const c = captureState({state:'waiting', device:'Pixel 8', serial:'emulator-5554', bytes:2048, error:7, lost:at(14, 2, 11), unsaved:true, recovered:'yes', breaks:[{row:3, lost:1, resumed:2, reboot:true}, {row:0}, {row:'x'}, null]});
-  assert.deepEqual(c, {state:'waiting', device:'Pixel 8', serial:'emulator-5554', bytes:2048, error:'', breaks:[{row:3, lost:1, resumed:2, reboot:true}], lost:at(14, 2, 11), reason:'', unsaved:true, recovered:false});
+  assert.deepEqual(c, {state:'waiting', device:'Pixel 8', serial:'emulator-5554', bytes:2048, error:'', breaks:[{row:3, lost:1, resumed:2, reboot:true, gap:false}], lost:at(14, 2, 11), reason:'', unsaved:true, recovered:false, platform:'android'});
+  assert.equal(captureState({state:'recording', platform:'ios'}).platform, 'ios');
 });
 
-test('the device menu lists what adb sees, or why it sees nothing', () => {
-  const calls = [], actions = {refresh:() => calls.push('refresh'), pick:() => calls.push('pick'), help:() => calls.push('help'), start:serial => calls.push(serial)};
-  const labels = items => items.map(item => item && item[0]);
+test('the device menu lists what adb and Apple\'s device service see, or why they see nothing', () => {
+  const calls = [], actions = {refresh:() => calls.push('refresh'), pick:() => calls.push('pick'), help:() => calls.push('help'), appleHelp:() => calls.push('apple'), start:serial => calls.push(serial)};
+  // An item as it reads: its label, what follows it, and its second line.
+  const read = item => item && [item[0], item[3]?.detail].filter(Boolean).join(' · ') + (item[3]?.note ? ` / ${item[3].note}` : '');
+  const labels = items => items.map(read);
   assert.deepEqual(labels(deviceMenuItems({loading:true}, actions)), ['기기를 찾는 중…']);
-  const missing = deviceMenuItems({adb:{found:false}}, actions);
-  assert.deepEqual(labels(missing), ['adb를 찾지 못했습니다', 'Android SDK Platform-Tools를 설치하면 기기 로그를 볼 수 있습니다', null, '설치 방법 보기…', '다시 찾기', 'adb 위치 지정…']);
-  missing[3][1](); assert.deepEqual(calls, ['help']);
+  // Without adb, iPhones are still listed, and one item leads to getting adb.
+  const iphone = {serial:'QA0UDID0000000000000001', state:'device', model:'QA iPhone', product:'iPhone0,0', platform:'ios', version:'27.0'};
+  const missing = deviceMenuItems({adb:{found:false}, list:[iphone], androidError:'adb was not found; install Android SDK Platform-Tools'}, actions);
+  assert.deepEqual(labels(missing), ['기록할 기기를 선택해 주세요 · 지금부터 들어오는 로그를 기록합니다', 'QA iPhone · iOS 27.0', null, 'Android 기기 로그를 기록하려면 adb를 설치해 주세요…', null, '새로 고침']);
+  assert.equal(missing[1][2], 'QA iPhone의 로그를 지금부터 기록합니다', 'an iPhone is not named by its UDID');
+  assert.equal(missing[1][3].key, iphone.serial, 'focus follows it when the menu is listed again');
+  missing[1][1](); missing[3][1](); assert.deepEqual(calls, [iphone.serial, 'help']);
+  assert.deepEqual(labels(deviceMenuItems({adb:{found:false}, list:[]}, actions)).slice(0, 2), ['연결된 기기가 없습니다', 'iPhone·iPad를 케이블로 연결해 주세요']);
   const adb = {found:true, origin:'studio', version:'37.0.1'};
   assert.equal(describeAdb(adb), 'adb 37.0.1 · Android Studio');
   const none = deviceMenuItems({adb, list:[]}, actions);
-  assert.deepEqual(labels(none), ['연결된 기기가 없습니다', 'USB 디버깅을 켠 기기를 연결하거나 에뮬레이터를 실행해 주세요', null, '새로 고침', 'adb 위치 지정…']);
+  assert.deepEqual(labels(none), ['연결된 기기가 없습니다', 'Android 기기는 USB 디버깅을 켜고, iPhone·iPad는 케이블로 연결해 주세요', null, '새로 고침', 'adb 위치 지정…']);
   assert.equal(none[4][2], '지금 쓰는 adb: adb 37.0.1 · Android Studio');
+  // Without Apple's device service (Windows without Apple Devices or
+  // iTunes), one item leads to getting it; other failures are said as they are.
+  const noService = deviceMenuItems({adb, list:[], iosError:'Apple device service not found; install Apple Devices or iTunes'}, actions);
+  assert.deepEqual(labels(noService), ['연결된 기기가 없습니다', 'USB 디버깅을 켠 기기를 연결하거나 에뮬레이터를 실행해 주세요', null, 'iPhone·iPad 로그를 기록하려면 Apple Devices 앱을 설치해 주세요…', null, '새로 고침', 'adb 위치 지정…']);
+  noService[3][1](); assert.deepEqual(calls.slice(-1), ['apple']);
+  assert.deepEqual(labels(deviceMenuItems({adb, list:[], iosError:'Could not list iPhones or iPads; check the connection and retry'}, actions)).slice(3, 4), ['iPhone·iPad 목록을 가져오지 못했습니다. 연결을 확인하고 다시 시도해 주세요.']);
+  // An iPad that has not trusted the computer says on a second line how it comes to.
+  const ipad = {serial:'QA0UDID0000000000000002', state:'untrusted', model:'QA iPad', product:'iPad0,0', platform:'ios', version:'27.0'};
+  const untrusted = deviceMenuItems({adb, list:[ipad]}, actions);
+  assert.equal(read(untrusted[1]), 'QA iPad · iPadOS 27.0 / 기기 화면의 "이 컴퓨터를 신뢰하겠습니까?"에서 신뢰를 누르고 암호를 입력해 주세요');
+  assert.equal(untrusted[1][1], null);
+  assert.equal(untrusted[1][3].disabled, true);
+  assert.match(untrusted[1][2], /케이블을 다시 연결해 주세요/);
+  assert.equal(read(deviceMenuItems({adb, list:[{...ipad, state:'device'}]}, actions)[1]), 'QA iPad · iPadOS 27.0');
+  assert.equal(read(deviceMenuItems({adb, list:[{...ipad, state:'locked'}]}, actions)[1]), 'QA iPad · iPadOS 27.0 / 기기 잠금을 풀어 주세요');
+  // iPhones named alike (new ones are all "iPhone") show the end of their UDIDs.
+  const twins = deviceMenuItems({adb, list:[{...iphone, model:'iPhone'}, {...iphone, model:'iPhone', serial:'QA0UDID00000000000000B2'}, {...ipad, state:'device'}]}, actions);
+  assert.deepEqual(labels(twins).slice(1, 4), ['iPhone · iOS 27.0 · …0001', 'iPhone · iOS 27.0 · …00B2', 'QA iPad · iPadOS 27.0']);
+  assert.equal(deviceProblem({state:'locked'}), '기기 잠금을 풀어 주세요');
+  assert.equal(deviceName({serial:'S', model:'My_Phone', platform:'ios'}), 'My_Phone', 'an owner\'s name stays as it is');
+  // Both kinds of device are listed under their kind.
   const list = [{serial:'emulator-5554', state:'device', model:'Pixel_8'}, {serial:'QA0SERIAL02', state:'unauthorized', model:''}, {serial:'X', state:'offline', model:'Tablet_X1'}];
-  const items = deviceMenuItems({adb:{...adb, chosenFailed:true}, list}, actions);
-  assert.deepEqual(labels(items).slice(0, 5), ['지정한 adb를 실행할 수 없어 자동으로 찾은 adb를 씁니다', '기록할 기기를 선택해 주세요 · 지금부터 들어오는 로그를 기록합니다', 'Pixel 8 · emulator-5554', 'QA0SERIAL02 · 기기 화면에서 USB 디버깅을 허용해 주세요', 'Tablet X1 · 오프라인 · 기기를 다시 연결해 주세요']);
-  assert.equal(items[3][1], null, 'a device not ready cannot be chosen');
-  assert.deepEqual(items[3][3], {disabled:true}, 'but its reason is reachable');
-  items[2][1](); assert.deepEqual(calls.slice(-1), ['emulator-5554']);
+  const items = deviceMenuItems({adb:{...adb, chosenFailed:true}, list:[...list, iphone]}, actions);
+  assert.deepEqual(labels(items).slice(0, 8), ['지정한 adb를 실행할 수 없어 자동으로 찾은 adb를 씁니다', '기록할 기기를 선택해 주세요 · 지금부터 들어오는 로그를 기록합니다', 'Android', 'Pixel 8 · emulator-5554',
+    'QA0SERIAL02 · QA0SERIAL02 / 기기 화면에서 USB 디버깅을 허용해 주세요', 'Tablet X1 · X / 오프라인 · 기기를 다시 연결해 주세요', 'iPhone·iPad', 'QA iPhone · iOS 27.0']);
+  assert.deepEqual([items[2][3].group, items[6][3].group], [true, true]);
+  assert.equal(items[4][1], null, 'a device not ready cannot be chosen');
+  assert.equal(items[4][3].disabled, true, 'but its reason is reachable');
+  items[3][1](); assert.deepEqual(calls.slice(-1), ['emulator-5554']);
+  assert.ok(!labels(deviceMenuItems({adb, list}, actions)).includes('Android'), 'one kind needs no heading');
   assert.match(labels(deviceMenuItems({adb, error:'Device not found; refresh the device list'}, actions))[0], /기기 목록을 새로 고쳐/);
   assert.equal(deviceProblem({state:'no permissions'}), 'USB 권한이 없습니다');
   assert.equal(deviceProblem({state:'recovery'}), '준비되지 않음 (recovery)');
@@ -46,8 +78,17 @@ test('the capture bar names each state; breaks name where the device left and ca
   const waiting = describeCapture({...base, state:'waiting', lost:at(14, 2, 11)});
   assert.equal(waiting.text, '연결 끊김 · 다시 연결을 기다리는 중 · Pixel 8');
   assert.equal(waiting.tone, 'waiting'); assert.match(waiting.title, /^14:02:11에 연결이 끊겼습니다/);
+  // An iPhone that is away loses what it logs meanwhile, and the bar says
+  // so; plugged in again it may need trust first.
+  const away = describeCapture({...base, device:'QA iPhone', platform:'ios', state:'waiting', lost:at(14, 2, 11)});
+  assert.equal(away.text, '연결 끊김 · 끊긴 동안 로그 기록 안 됨 · QA iPhone');
+  const iphone = describeCapture({...base, device:'QA iPhone', platform:'ios', state:'waiting', lost:at(14, 2, 11), reason:'Trust this computer on the device, then retry'});
+  assert.equal(iphone.text, '다시 연결됨 · 이 컴퓨터를 신뢰해 주세요 · QA iPhone');
+  assert.match(iphone.title, /신뢰를 누르고 암호를 입력해 주세요.*준비되면 이어서 기록합니다\. 끊긴 동안의 로그는 기록되지 않습니다\.$/);
+  // Offline is no return yet.
+  assert.equal(describeCapture({...base, state:'waiting', lost:at(14, 2, 11), reason:'Device is offline; reconnect it and retry'}).text, '연결 끊김 · 기기가 오프라인입니다 · Pixel 8');
   const approve = describeCapture({...base, state:'waiting', lost:at(14, 2, 11), reason:'Allow USB debugging on the device, then retry'});
-  assert.equal(approve.text, '연결 끊김 · USB 디버깅을 허용해 주세요 · Pixel 8');
+  assert.equal(approve.text, '다시 연결됨 · USB 디버깅을 허용해 주세요 · Pixel 8');
   // The app retries on its own: the tooltip says what to do, not to retry.
   assert.equal(approve.title, '14:02:11에 연결이 끊겼습니다. 기기 화면에서 USB 디버깅을 허용해 주세요. 준비되면 이어서 기록합니다.');
   assert.equal(waiting.title, '14:02:11에 연결이 끊겼습니다. 기기가 다시 연결되면 이어서 기록합니다.');
@@ -70,6 +111,9 @@ test('the capture bar names each state; breaks name where the device left and ca
   // shown; breaks between two shown rows read as one.
   assert.equal(breakLabel(breaks, 100, 130), '14:02:11 연결 끊김 → 14:02:35 다시 연결');
   assert.equal(breakLabel(breaks, 0, 500), '14:02:11–15:00:40 연결 끊김 2번 · 기기 재부팅');
+  // An iPhone's rows from while it was away were never recorded.
+  const lossy = captureBreaks({breaks:[{row:9, lost:at(14, 2, 11), resumed:at(14, 2, 35), reboot:false, gap:true}]});
+  assert.equal(breakLabel(lossy, 8, 9), '14:02:11 연결 끊김 → 14:02:35 다시 연결 · 끊긴 동안 로그 기록 안 됨');
   assert.deepEqual(captureBreaks(null), []);
   assert.equal(shortDate(at(9, 54, 32)), '10-24 09:54');
   assert.equal(shortDate(null), '');
@@ -108,12 +152,12 @@ function rig({state = {}, answers = {}} = {}) {
   const document = {activeElement:null, body:null};
   const elements = new Map();
   document.getElementById = id => {
-    if (!elements.has(id)) elements.set(id, ['captureDialog', 'adbDialog'].includes(id) ? new Dialog(document, id) : new Element(document, 'div', id));
+    if (!elements.has(id)) elements.set(id, ['captureDialog', 'adbDialog', 'appleDialog'].includes(id) ? new Dialog(document, id) : new Element(document, 'div', id));
     return elements.get(id);
   };
   document.createElement = tag => new Element(document, tag);
   document.body = new Element(document, 'body');
-  const ui = Object.fromEntries(['deviceButton', 'emptyDevice', 'captureBar', 'captureState', 'captureText', 'captureStop', 'captureSave', 'captureLeftovers', 'leftoverList', 'rowMenu', 'openFile'].map(id => [id, document.getElementById(id)]));
+  const ui = Object.fromEntries(['deviceButton', 'emptyDevice', 'captureBar', 'captureState', 'captureText', 'captureHint', 'captureStop', 'captureSave', 'captureLeftovers', 'leftoverList', 'rowMenu', 'openFile'].map(id => [id, document.getElementById(id)]));
   const calls = [], listeners = {}, menus = [], notes = [], reports = [];
   const native = {
     core:{invoke:async (command, args) => {
@@ -185,20 +229,21 @@ test('dropped files and closing the window wait for the answer', async () => {
 test('the device menu fills in as adb answers, and a failed start keeps the shown capture file', async () => {
   const r = rig({state:{capture:{...unsaved, unsaved:false}}, answers:{
     adb_status:{found:true, origin:'studio', version:'37.0.1'},
-    adb_devices:{devices:[{serial:'emulator-5554', state:'device', model:'Pixel_8'}]},
+    list_devices:{devices:[{serial:'emulator-5554', state:'device', model:'Pixel_8'}], androidError:null, iosError:null},
     start_capture:new Error('Allow USB debugging on the device, then retry'),
   }});
   await r.devices.openMenu(r.ui.deviceButton);
   assert.deepEqual(r.menus.map(m => m.items[0][0]), ['기기를 찾는 중…', '기록할 기기를 선택해 주세요 · 지금부터 들어오는 로그를 기록합니다']);
-  assert.deepEqual([r.menus[1].x, r.menus[1].y, r.menus[1].label], [10, 44, 'Android 기기']);
+  assert.deepEqual([r.menus[1].x, r.menus[1].y, r.menus[1].label], [10, 44, '기기 로그']);
   r.menus[1].items[1][1](); await settle();
   assert.deepEqual(r.calls.filter(c => ['start_capture', 'discard_capture'].includes(c[0])), [['start_capture', {serial:'emulator-5554'}], ['discard_capture', {datasetId:7, discard:false}]]);
   assert.equal(r.reports.at(-1), 'Allow USB debugging on the device, then retry');
-  // Without adb the menu says how to get it.
-  const none = rig({answers:{adb_status:{found:false}}});
+  // Without adb the menu still lists iPhones and leads to getting adb.
+  const none = rig({answers:{adb_status:{found:false}, list_devices:{devices:[], androidError:'adb was not found; install Android SDK Platform-Tools', iosError:null}}});
   await none.devices.openMenu(none.ui.emptyDevice);
-  assert.equal(none.menus.at(-1).items[0][0], 'adb를 찾지 못했습니다');
-  none.menus.at(-1).items[3][1]();
+  const items = none.menus.at(-1).items;
+  assert.equal(items[0][0], '연결된 기기가 없습니다');
+  items.find(item => item?.[0] === 'Android 기기 로그를 기록하려면 adb를 설치해 주세요…')[1]();
   assert.equal(none.$('adbDialog').open, true);
   assert.equal(none.$('adbCommand').textContent, 'brew install --cask android-platform-tools');
 });
@@ -255,4 +300,46 @@ test('files left by an earlier run open, or go after a second press', async () =
   assert.deepEqual(r.calls.find(c => c[0] === 'delete_leftover'), ['delete_leftover', {id:5}]);
   open.fire('click'); await settle();
   assert.deepEqual(r.calls.find(c => c[0] === 'open_leftover'), ['open_leftover', {id:5}]);
+});
+
+test('a device waiting on the person is listed again while the menu is open', async () => {
+  const ipad = {serial:'QA0UDID0000000000000002', state:'untrusted', model:'QA iPad', product:'iPad0,0', platform:'ios', version:'27.0'};
+  let listed = {devices:[ipad], androidError:null, iosError:null};
+  const r = rig({answers:{adb_status:{found:true, origin:'studio', version:'37.0.1'}, list_devices:() => listed}});
+  const opened = r.devices.openMenu(r.ui.deviceButton);
+  await settle();
+  assert.equal(r.menus.at(-1).items[1][3].disabled, true);
+  // Nothing new: the menu is not drawn again.
+  const shown = r.menus.length;
+  r.timers.shift()(); await settle();
+  assert.equal(r.menus.length, shown);
+  // Trusted: drawn again, the iPad can be chosen, and listing stops.
+  listed = {devices:[{...ipad, state:'device'}], androidError:null, iosError:null};
+  r.timers.shift()(); await settle(); await opened;
+  assert.equal(r.menus.length, shown + 1);
+  assert.equal(typeof r.menus.at(-1).items[1][1], 'function');
+  assert.equal(r.timers.length, 0);
+  // A closed menu stops listing.
+  listed = {devices:[ipad], androidError:null, iosError:null};
+  const again = r.devices.openMenu(r.ui.deviceButton);
+  await settle();
+  r.ui.rowMenu.hidden = true;
+  const calls = r.calls.filter(c => c[0] === 'list_devices').length;
+  r.timers.shift()(); await settle(); await again;
+  assert.equal(r.calls.filter(c => c[0] === 'list_devices').length, calls);
+});
+
+test('without Apple\'s device service the menu leads to a dialog that finds it again', async () => {
+  let listed = {devices:[], androidError:null, iosError:'Apple device service not found; install Apple Devices or iTunes'};
+  const r = rig({answers:{adb_status:{found:true, origin:'studio', version:'37.0.1'}, list_devices:() => listed}});
+  await r.devices.openMenu(r.ui.deviceButton);
+  r.menus.at(-1).items.find(item => item?.[0]?.startsWith('iPhone·iPad 로그를 기록하려면'))[1]();
+  assert.equal(r.$('appleDialog').open, true);
+  assert.equal(r.$('appleUrl').textContent, 'https://apps.microsoft.com/detail/9np83lwlpz9k');
+  r.$('appleRetry').fire('click'); await settle();
+  assert.equal(r.$('appleDialogError').hidden, false, 'still missing');
+  listed = {...listed, iosError:null};
+  r.$('appleRetry').fire('click'); await settle();
+  assert.equal(r.$('appleDialog').open, false);
+  assert.match(r.notes.at(-1), /Apple 기기 서비스를 찾았습니다/);
 });

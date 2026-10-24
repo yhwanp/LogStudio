@@ -174,8 +174,10 @@ fn only_ios_logs_are_repaired() {
         wait(|| e.request(json!({"action":"status"})).unwrap()["textComplete"] == true);
         id
     };
+    let ios_log = |e: &Engine| e.request(json!({"action":"status"})).unwrap()["ios"].clone();
     let id = open(std::slice::from_ref(&b));
     assert_eq!(raws(&e, id), vec![json!(android.trim_end())]);
+    assert_eq!(ios_log(&e), false);
     let found = query(
         &e,
         id,
@@ -189,6 +191,7 @@ fn only_ios_logs_are_repaired() {
     assert!(found.is_empty(), "Android rows are searched as they are");
 
     let id = open(&[a.clone(), b.clone()]);
+    assert_eq!(ios_log(&e), false, "iOS level names need every file iOS");
     let repaired = "2026-09-15 10:47:35.134 Maps[3870:481516] [인사] text : 안녕";
     assert_eq!(
         raws(&e, id),
@@ -210,5 +213,6 @@ fn only_ios_logs_are_repaired() {
     e.open_text(id, ios, "pasted").unwrap();
     wait(|| e.request(json!({"action":"status"})).unwrap()["textComplete"] == true);
     assert_eq!(raws(&e, id), vec![json!(repaired)]);
+    assert_eq!(ios_log(&e), true);
     e.close();
 }

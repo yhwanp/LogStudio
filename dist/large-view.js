@@ -17,7 +17,7 @@ import {mountConditions, conditionSummary, rowlessText} from './conditions.js';
 import {createBookmarks, MAX_BOOKMARKS} from './bookmarks.js';
 import {createWorkSaver, readWork, defaultFilters, mergeReloadMarks, mergeSavedMarks, describeReloadMarks, describeRestore, describeMissingMarks, RELOADED, LINES_PER_REQUEST} from './work-state.js';
 import {continuationOwner, continuationClass, joinsNext, ownerCells} from './entries.js';
-import {DLT_IDS, dltCells, dltLevelTitle, levelNames, profileOf} from './columns.js';
+import {DLT_IDS, dltCells, dltLevelTitle, levelNames, profileOf, useAppleLevels} from './columns.js';
 
 const number = value => Number.isSafeInteger(value) && value >= 0;
 
@@ -78,7 +78,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
   const $ = id => document.getElementById(id);
   $('largeLogPanel').hidden=false;
   const ids = ['largeName','largeStatus','largeError','largeCount','largeTotal','largeRows','largeViewport','largeFirst','largeLast','largeJump','largeJumpForm','largeCancel','largeClose','largeColumns','largeRaw','largeHeaders','largeRange','largeDetail','largeDetailTitle','largeDetailText','largeDetailPrevious','largeDetailNext','largeDetailClose','levelFilters','allLevels','errorLevels','resetFilters','searchInput','tagFilter','pidFilter','tidFilter','caseSensitive','includeRaw','recognizeLineNumbers','logsCount','logsRows','logsViewport','logsHeaders','logsFirst','logsLast','logsJump','logsJumpForm','logsRange','largeSearchPane','filterBadge','activeFilters','filterRow','logsSelection','largeSelection','toast','largeDetailCopy','toggleFilters','emptyState','logContent','loadProgress','loadProgressBar','paneSplitter','idFilterError','tagFilterError','searchError','dropHint','filterPanel','largeRegex','rowMenu','largeSize','exportLogs','exportSearch','exportCancel','recentFiles','recentList','clearRecent','recentButton','timeFrom','timeTo','timeFilterError','lowerTabs','searchTab','bookmarkTab','bookmarkPane','bookmarkCount','bookmarkList','copyBookmarks','clearBookmarks','logsPending','reopenFile','errorBar','errorReopen','followFile'];
-  for (const id of ['deviceButton','emptyDevice','captureBar','captureState','captureText','captureStop','captureSave','captureLeftovers','leftoverList','openFile']) ids.push(id);
+  for (const id of ['deviceButton','emptyDevice','captureBar','captureState','captureText','captureHint','captureStop','captureSave','captureLeftovers','leftoverList','openFile']) ids.push(id);
   const ui = Object.fromEntries(ids.map(id => [id,$(id)]));
   // Device captures (devices.js) mount once the menu and toasts exist.
   let devices=null;
@@ -102,7 +102,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
   // tag, ID and time fields, and the cards show the others.
   let conds={include:[emptyCondition()],exclude:[]},active={list:'include',index:0},conditionView=null;
   // The open log's format: its columns, level names and filter fields.
-  let shownFormat = 'text';
+  let shownFormat = 'text', levelKey = 'text';
   const previousRows=new Map(), viewports=new Map(), focusedSelection=new Map(), navigationFocus=new Map(), selections=new Map(), selectedAt=new Map(), paintedSelection=new Map();
   const MOD=/Mac|iPhone|iPad/.test(window.navigator?.platform??'')?'⌘':'Ctrl+';
   // Only macOS reads a copied file from the native pasteboard.
@@ -254,7 +254,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
           for(let k=0;k<entries.length;k++){
             const {row:entry,index}=entries[k];
             const prior=retainedNodes.get(index);
-            let row=prior?.entry===entry&&prior?.rawMode===rawMode?prior.node:null;
+            let row=prior?.entry===entry&&prior?.rawMode===rawMode&&prior?.levels===levelKey?prior.node:null;
             if(!entry){
               row??=textSpan(document,'행을 읽는 중…','virtual-loading-row');row.setAttribute('aria-hidden','true');
             }else{
@@ -287,9 +287,13 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
             else if(rawMode||entry.kind!=='parsed')row.append(highlightedSpan(document,entry.raw||'(빈 줄)','raw-content',entry.highlights,entry.encodingDamage));
             else if(entry.dlt)row.append(...dltCells(entry,(text,className)=>fieldSpan(document,entry,text,className),levelSpan(document,entry)));
             else {
-              const stamp=fieldSpan(document,entry,`${entry.date??''} ${entry.time??''}`,'timestamp');
+              const stamp=fieldSpan(document,entry,`${entry.date??''} ${entry.time??''}`,'timestamp'),tag=fieldSpan(document,entry,entry.tag,'tag');
               if(entry.process){stamp.append(textSpan(document,' · '),fieldSpan(document,entry,entry.process,'process'));stamp.title+=` · ${entry.process}`;}
-              row.append(stamp,fieldSpan(document,entry,entry.pid,'pid'),fieldSpan(document,entry,entry.tid,'tid'),levelSpan(document,entry),fieldSpan(document,entry,entry.tag,'tag'),fieldSpan(document,entry,entry.message,'message'));
+              // Only iOS rows carry `year`. Their process names the source as
+              // a tag does, and their tag ends with the category: both stay
+              // in view.
+              if(entry.year!==undefined){stamp.classList.add('apple-stamp');tag.classList.add('from-end');}
+              row.append(stamp,fieldSpan(document,entry,entry.pid,'pid'),fieldSpan(document,entry,entry.tid,'tid'),levelSpan(document,entry),tag,fieldSpan(document,entry,entry.message,'message'));
             }
             // A press selects; a click no press took (one on the selected
             // row, whose text the browser may select) selects as it would.
@@ -313,7 +317,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
             });
             }
             }
-            nodes.push(row);nextNodes.set(index,{entry,rawMode,node:row});
+            nodes.push(row);nextNodes.set(index,{entry,rawMode,levels:levelKey,node:row});
           }
           // Retain overlapping DOM nodes in place. A detail resize must not
           // destroy a clicked row or the row receiving keyboard input.
@@ -508,7 +512,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     ui.loadProgress.hidden=!loading;
     if(loading){const percent=Math.min(100,Math.floor(state.indexedBytes/state.size*100));ui.loadProgressBar.style.width=`${percent}%`;ui.loadProgress.setAttribute('aria-valuenow',String(percent));}
     ui.largeName.textContent=hasFile?state.name:'열린 파일 없음';
-    const files=hasFile&&state.files?.length>1?state.files:null;layout.setMultiFile(!!files);if(hasFile)applyFormat(state.format);if(hasFile)layout.fitLines(widestLine(state));
+    const files=hasFile&&state.files?.length>1?state.files:null;layout.setMultiFile(!!files);if(hasFile){applyLevelNames(state.ios===true||state.capture?.platform==='ios');applyFormat(state.format);}if(hasFile)layout.fitLines(widestLine(state));
     ui.largeName.title=!hasFile?'':files?`${files.length}개 파일을 이 순서로 합쳤습니다\n${files.map((file,i)=>`${i+1}. ${file.name} · ${formatSize(file.size)}`).join('\n')}\n합계 ${formatSize(state.size)}`:`${state.name}\n${formatSize(state.size)}`;ui.largeSize.textContent=hasFile&&state.size>0?formatSize(state.size):'';
     const p=describeLargeProgress(state,{omitDuplicateFileCount:true});ui.logsCount.textContent=`로그 · ${p.count}`;
     ui.logsRange.textContent=p.range.replaceAll('검색 결과','필터 결과');
@@ -849,6 +853,15 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     const owner=detailOwner,d=owner?.getState().detail;if(!d||d.loading)return;
     copyRecord(owner,d.startByte===0&&d.complete?{text:d.text,first:d.first??d.lineNumber,last:d.last??d.lineNumber,recordComplete:d.recordComplete}:owner.readRecordText(d.lineNumber));
   });
+  // An iOS log names Apple's levels (Fault, Default); badges, chips and
+  // filter summaries follow, and shown rows are drawn again.
+  function applyLevelNames(apple){
+    if(!useAppleLevels(apple))return;
+    levelKey=apple?'apple':'text';const names=levelNames(shownFormat);
+    for(const button of ui.levelFilters.children){const letter=button.querySelector('.letter');if(letter)letter.textContent=names[button.dataset.level];}
+    updateLevels();renderFilterSummary();conditionView?.refresh(conds,active,shownFormat);
+    for(const view of viewports.values())view.refresh(row=>row,{reread:false});
+  }
   // A DLT file filters by ECU, APID and CTID through the tag fields and has
   // no PID, TID, Assert level or numbered rows; text logs keep their fields.
   function applyFormat(format){

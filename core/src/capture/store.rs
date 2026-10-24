@@ -1,5 +1,6 @@
 //! Capture files are temporary until the user saves them. Each holds a
 //! lock while its app runs, so files without one were left by a crash.
+use super::link::Platform;
 use crate::source::error;
 use std::{
     fs::{File, OpenOptions},
@@ -30,7 +31,14 @@ pub struct Leftover {
     pub size: u64,
     pub modified: Option<SystemTime>,
 }
-const PREFIX: &str = "logcat-";
+/// File names start with the kind of log: an Android device's logcat or
+/// an iPhone's log.
+fn prefix(platform: Platform) -> &'static str {
+    match platform {
+        Platform::Android => "logcat-",
+        Platform::Ios => "ios-",
+    }
+}
 const EXTENSION: &str = "log";
 /// The lock sits beside the file: a lock on the file itself would keep
 /// Windows readers from its bytes.
@@ -75,10 +83,10 @@ impl Store {
         Self { dir: dir.into() }
     }
     /// An empty capture file named for the device and the local time.
-    pub fn create(&self, device: &str) -> io::Result<Slot> {
+    pub fn create(&self, platform: Platform, device: &str) -> io::Result<Slot> {
         std::fs::create_dir_all(&self.dir)?;
         let time = chrono::Local::now().format("%Y%m%d-%H%M%S");
-        let stem = format!("{PREFIX}{}-{time}", clean(device));
+        let stem = format!("{}{}-{time}", prefix(platform), clean(device));
         for n in 1..100 {
             let name = match n {
                 1 => format!("{stem}.{EXTENSION}"),
@@ -137,10 +145,11 @@ impl Store {
     /// Whether `path` names a regular capture file of this store.
     pub fn owns(&self, path: &Path) -> bool {
         path.parent() == Some(self.dir.as_path())
-            && path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with(PREFIX))
+            && path.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                [Platform::Android, Platform::Ios]
+                    .iter()
+                    .any(|&p| n.starts_with(prefix(p)))
+            })
             && path.extension().is_some_and(|e| e == EXTENSION)
             && std::fs::symlink_metadata(path).is_ok_and(|m| m.is_file())
     }

@@ -11,7 +11,7 @@ async function settle(){for(let i=0;i<10;i++)await nextTurn();}
 // that keep a joining word with its chip.
 const chipNodes=row=>row.children.flatMap(node=>node.className==='chip-group'?node.children:[node]);
 class Element {
-  constructor(tag='div'){this.tagName=tag.toUpperCase();this.children=[];this.listeners={};this.dataset={};this.attributes={};this.value='';this.checked=false;this.hidden=false;this._text='';this.style={setProperty(key,value){this[key]=value;},removeProperty(key){delete this[key];}};this.clientHeight=280;this.scrollTop=0;this.classList={toggle(){}};}
+  constructor(tag='div'){this.tagName=tag.toUpperCase();this.children=[];this.listeners={};this.dataset={};this.attributes={};this.value='';this.checked=false;this.hidden=false;this._text='';this.style={setProperty(key,value){this[key]=value;},removeProperty(key){delete this[key];}};this.clientHeight=280;this.scrollTop=0;this.classList={toggle(){},add:(...names)=>{this.className=[...new Set([...String(this.className??'').split(' ').filter(Boolean),...names])].join(' ');}};}
   get textContent(){return this._text+this.children.map(child=>child.textContent).join('');}
   set textContent(value){this._text=String(value);this.children=[];}
   append(...nodes){for(const node of nodes){if(node.fragment){this.append(...node.children);continue;}if(node.parentElement)node.parentElement.children=node.parentElement.children.filter(child=>child!==node);node.parentElement=this;this.children.push(node);}}
@@ -404,8 +404,11 @@ test('native optional-tag iOS rows render process and IDs without inventing a ta
   const {rows}=JSON.parse(await readFile(new URL('./ios-optional-tag-page.json',import.meta.url),'utf8'));
   const r=await rig({rows,detail:b=>{const row=rows.find(row=>row.lineNumber===b.lineNumber);return {text:row.raw,startByte:0,nextByte:row.rawBytes,totalBytes:row.rawBytes,complete:true,highlights:row.highlights,encodingDamage:row.encodingDamage};}});t.after(()=>r.controller.close());
   const cells=line=>r.get('logsRows').children.find(row=>row.dataset.lineNumber===String(line));
-  const cell=(line,cls)=>cells(line).children.find(child=>child.className===cls);
+  const cell=(line,cls)=>cells(line).children.find(child=>String(child.className).split(' ').includes(cls));
   const marks=e=>[...(e.tagName==='MARK'?[e.textContent]:[]),...e.children.flatMap(marks)];
+  // An iOS row's process and the end of its tag stay in view.
+  assert.equal(cell(3,'timestamp').className,'timestamp apple-stamp');
+  assert.equal(cell(3,'tag').className,'tag from-end');
   for(const line of [3,4,5,7]){
     assert.doesNotMatch(cells(line).className,/raw-row/);
     assert.equal(cell(line,'pid').textContent,'3870');

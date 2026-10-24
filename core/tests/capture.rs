@@ -2,7 +2,7 @@ use logstudio_core::{
     capture::{
         fake::FakeLink,
         gate::{Gate, Stamp},
-        link::{self, parse_devices},
+        link::{self, parse_devices, Platform},
         store::Store,
         Break, Capture, Options, Phase,
     },
@@ -53,7 +53,7 @@ fn setup() -> Setup {
 }
 impl Setup {
     fn start(&self, serial: &str) -> Arc<Capture> {
-        let slot = self.store.create("Pixel 8").unwrap();
+        let slot = self.store.create(Platform::Android, "Pixel 8").unwrap();
         Capture::start(self.link.clone(), serial, slot, options()).unwrap()
     }
 }
@@ -246,7 +246,10 @@ fn a_device_that_returns_continues_after_the_rows_the_capture_has() {
     assert_eq!(c.phase(), Phase::Recording);
     let breaks = c.breaks();
     assert_eq!(breaks.len(), 1);
-    assert_eq!((breaks[0].row, breaks[0].reboot), (3, false));
+    assert_eq!(
+        (breaks[0].row, breaks[0].reboot, breaks[0].gap),
+        (3, false, false)
+    );
     assert!(breaks[0].lost <= breaks[0].resumed);
     assert_eq!(s.link.opened()[1].1.as_deref(), Some("10-23 14:00:02.000"));
     s.link.log("SER1", &row(4, 0, "five"));
@@ -341,7 +344,7 @@ fn stopping_keeps_every_row_received() {
 #[test]
 fn stopping_while_waiting_ends_at_once() {
     let s = setup();
-    let slot = s.store.create("Pixel 8").unwrap();
+    let slot = s.store.create(Platform::Android, "Pixel 8").unwrap();
     let c = Capture::start(
         s.link.clone(),
         "SER1",
@@ -365,7 +368,7 @@ fn stopping_while_waiting_ends_at_once() {
 fn a_device_that_cannot_be_used_fails_at_once() {
     let s = setup();
     let fails = |serial: &str| {
-        let slot = s.store.create("x").unwrap();
+        let slot = s.store.create(Platform::Android, "x").unwrap();
         let e = Capture::start(s.link.clone(), serial, slot, options())
             .err()
             .unwrap();
@@ -387,8 +390,8 @@ fn capture_files_held_by_a_running_app_are_no_leftovers() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::new(dir.path().join("captures"));
     assert!(store.leftovers().is_empty());
-    let a = store.create("Pixel 8").unwrap();
-    let b = store.create("Pixel 8").unwrap();
+    let a = store.create(Platform::Android, "Pixel 8").unwrap();
+    let b = store.create(Platform::Android, "Pixel 8").unwrap();
     assert_ne!(a.path, b.path);
     let name = a.path.file_name().unwrap().to_str().unwrap().to_string();
     assert!(
@@ -672,4 +675,97 @@ fn a_waiting_capture_says_why_a_listed_device_cannot_be_used_yet() {
     written(&c, &[row(1, 0, "one"), row(2, 0, "after")].concat());
     assert_eq!(c.json()["reason"], "");
     c.stop();
+}
+
+#[test]
+fn an_iphone_capture_records_only_rows_logged_while_connected() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::new(dir.path().join("captures"));
+    let link = FakeLink::live();
+    link.add_ios("QA0UDID0000000000000001", "Test iPhone", "27.0");
+    let held = "2026-10-24 14:00:00.000001 SampleApp[812:4410] [INFO] [Sync] before\n";
+    link.log("QA0UDID0000000000000001", held);
+    let slot = store.create(Platform::Ios, "Test iPhone").unwrap();
+    let name = slot
+        .path
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    assert!(name.starts_with("ios-Test_iPhone-"), "{name}");
+    let c = Capture::start(link.clone(), "QA0UDID0000000000000001", slot, options()).unwrap();
+    assert_eq!(c.json()["device"], "Test iPhone");
+    let first = "2026-10-24 14:00:01.000001 SampleApp[812:4410] [INFO] [Sync] first\n";
+    link.log("QA0UDID0000000000000001", first);
+    written(&c, first);
+    link.unplug("QA0UDID0000000000000001");
+    wait("waiting", || c.phase() == Phase::Waiting);
+    let away = "2026-10-24 14:00:02.000001 SampleApp[812:4410] [INFO] [Sync] away\n";
+    link.log("QA0UDID0000000000000001", away);
+    link.plug("QA0UDID0000000000000001");
+    wait("recording again", || c.phase() == Phase::Recording);
+    let back = "2026-10-24 14:00:03.000001 SampleApp[812:4410] [INFO] [Sync] back\n";
+    link.log("QA0UDID0000000000000001", back);
+    // The rows logged before the start and while away never come.
+    written(&c, &format!("{first}{back}"));
+    let breaks = c.breaks();
+    assert_eq!(breaks.len(), 1);
+    assert_eq!(
+        (breaks[0].row, breaks[0].reboot, breaks[0].gap),
+        (2, false, true)
+    );
+    assert_eq!(c.json()["breaks"][0]["gap"], true);
+    assert_eq!(link.opened().len(), 2);
+    assert!(link.opened().iter().all(|(_, since)| since.is_none()));
+    c.stop();
+}
+
+#[test]
+fn an_untrusted_iphone_is_waited_for_until_it_trusts_the_computer() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::new(dir.path().join("captures"));
+    let link = FakeLink::live();
+    link.add_ios("QA0UDID0000000000000001", "Test iPhone", "27.0");
+    link.set_state("QA0UDID0000000000000001", "untrusted");
+    let slot = store.create(Platform::Ios, "Test iPhone").unwrap();
+    let path = slot.path.clone();
+    let Err(err) = Capture::start(link.clone(), "QA0UDID0000000000000001", slot, options()) else {
+        panic!("an untrusted iPhone was captured");
+    };
+    assert_eq!(public_message(&err, ""), link::UNTRUSTED);
+    assert!(
+        !path.exists(),
+        "a capture that did not start leaves no file"
+    );
+    link.set_state("QA0UDID0000000000000001", "device");
+    let slot = store.create(Platform::Ios, "Test iPhone").unwrap();
+    let c = Capture::start(link.clone(), "QA0UDID0000000000000001", slot, options()).unwrap();
+    link.unplug("QA0UDID0000000000000001");
+    wait("waiting", || c.phase() == Phase::Waiting);
+    link.set_state("QA0UDID0000000000000001", "locked");
+    link.plug("QA0UDID0000000000000001");
+    wait("asks to unlock", || c.json()["reason"] == link::LOCKED);
+    link.set_state("QA0UDID0000000000000001", "device");
+    wait("recording again", || c.phase() == Phase::Recording);
+    c.stop();
+}
+
+#[test]
+fn synthetic_iphone_rows_parse_as_ios_rows() {
+    use logstudio_core::{capture::fake::synthetic_ios_row, parser::parse_line};
+    let levels: Vec<&str> = (0..6)
+        .map(|n| {
+            let row = synthetic_ios_row(n);
+            let p = parse_line(row.trim_end(), 1, false).parsed.unwrap();
+            assert!(p.ios && p.pid == "812", "{row}");
+            match p.level {
+                "I" => "I",
+                "D" => "D",
+                "E" => "E",
+                "F" => "F",
+                other => panic!("{other} in {row}"),
+            }
+        })
+        .collect();
+    assert_eq!(levels, ["I", "D", "I", "E", "E", "F"]);
 }

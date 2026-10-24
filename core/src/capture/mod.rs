@@ -1,18 +1,21 @@
-//! Records a device's logcat into a capture file that a followed dataset
-//! reads. Rows from before the capture started are left out; a device that
-//! leaves is waited for and continued after the last row recorded, without
-//! repeating it, or from its first row when it booted meanwhile. Rows the
-//! device dropped from its buffer while away cannot come back.
+//! Records a device's log into a capture file that a followed dataset
+//! reads: an Android device's logcat, or an iPhone's or iPad's log. Rows
+//! from before the capture started are left out. A device that leaves is
+//! waited for; an Android device is continued after the last row recorded,
+//! without repeating it, or from its first row when it booted meanwhile,
+//! and rows it dropped from its buffer while away cannot come back. An
+//! iPhone sends only new rows, so rows it logged while away are lost.
 pub mod adb;
 pub mod cli;
 pub mod fake;
 pub mod gate;
+pub mod ios;
 pub mod link;
 pub mod store;
 
 use crate::source::{error, MAX_FILE, MAX_LINE};
 use gate::Gate;
-use link::{Closer, Device, Link, Stream};
+use link::{Closer, Device, Link, Platform, Stream};
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
@@ -58,6 +61,9 @@ pub struct Break {
     pub lost: i64,
     pub resumed: i64,
     pub reboot: bool,
+    /// Rows the device logged while away were not recorded: its stream
+    /// sends only new rows, as an iPhone's does.
+    pub gap: bool,
 }
 #[derive(Clone, Copy, Debug)]
 pub struct Options {
@@ -92,6 +98,7 @@ pub struct Capture {
     slot: Slot,
     /// The device as people know it: its model, else its serial.
     pub model: String,
+    pub platform: Platform,
     identity: String,
     options: Options,
     status: Mutex<Status>,
@@ -217,6 +224,7 @@ impl Capture {
             link,
             slot,
             model: c.device.label(),
+            platform: c.device.platform,
             identity: c.identity,
             options,
             status: Mutex::new(Status {
@@ -254,10 +262,16 @@ impl Capture {
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
+        let platform = if name.starts_with("ios-") {
+            Platform::Ios
+        } else {
+            Platform::Android
+        };
         Ok(Arc::new(Self {
             link: Arc::new(Unlinked),
             slot,
             model: name,
+            platform,
             identity: String::new(),
             options: Options::default(),
             status: Mutex::new(Status {
@@ -348,12 +362,15 @@ impl Capture {
         let breaks: Vec<Value> = s
             .breaks
             .iter()
-            .map(|b| json!({"row":b.row,"lost":b.lost,"resumed":b.resumed,"reboot":b.reboot}))
+            .map(|b| {
+                json!({"row":b.row,"lost":b.lost,"resumed":b.resumed,"reboot":b.reboot,"gap":b.gap})
+            })
             .collect();
         let saved = self.saved.load(Ordering::Acquire);
         json!({
             "state": s.phase.as_str(),
             "device": self.model,
+            "platform": self.platform.as_str(),
             "serial": s.serial,
             "bytes": s.bytes,
             "rows": s.rows,
@@ -418,6 +435,7 @@ impl Capture {
                         lost,
                         resumed: now(),
                         reboot,
+                        gap: !self.link.replays(),
                     });
                     s.phase = Phase::Recording;
                     s.lost = None;
@@ -501,7 +519,7 @@ impl Capture {
     /// still has the same boot, else from the first row of its new boot.
     fn resume(&self, serial: &str, boot: &str, w: &Writer) -> io::Result<Back> {
         let now_boot = self.link.boot_id(serial)?;
-        let gate = if now_boot == boot {
+        let gate = if now_boot == boot && self.link.replays() {
             Gate::after(&w.tail)
         } else {
             Gate::open()
@@ -598,7 +616,11 @@ fn connect(link: &dyn Link, serial: &str, path: &Path, options: &Options) -> io:
     }
     let identity = link.identity(serial)?;
     let boot = link.boot_id(serial)?;
-    let gate = Gate::after(&link.recent(serial, options.recent)?);
+    let gate = if link.replays() {
+        Gate::after(&link.recent(serial, options.recent)?)
+    } else {
+        Gate::open()
+    };
     let file = OpenOptions::new().append(true).open(path)?;
     let stream = link.stream(serial, gate.since())?;
     Ok(Connected {

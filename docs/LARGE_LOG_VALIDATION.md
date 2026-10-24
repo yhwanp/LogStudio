@@ -246,6 +246,26 @@ Apple M4 Mac mini(macOS 27.0.1)에서 Android Studio의 에뮬레이터(AVD `Med
 - 화면 동작(기기 메뉴, 기록 상태, 끊김·재연결 표시, 저장 확인, 남은 기록)은 QA 빌드의 가짜 기기로 실제 macOS WKWebView에서 검증했습니다(`tests/e2e` `devices` 시나리오).
 - 기록이 표시까지 걸리는 시간과 장시간·고속 기록의 처리량은 아직 측정하지 않았습니다. 표시 지연은 따라가기의 폴링 주기(0.5초)에 묶여 있습니다.
 
+## iPhone 기기 기록
+
+Apple M4 Mac mini(macOS 27.0.1)에 USB로 연결해 이미 신뢰한 iPhone 16 Pro(`iPhone17,1`, iOS 27.0.1)로 확인했습니다. 연결은 macOS 기본 Apple 기기 서비스(`/var/run/usbmuxd`)와 `idevice` 0.1.68을 쓰며, 기기 로그는 측정 숫자로만 기록하고 저장소에 남기지 않았습니다.
+
+| 확인 항목 | 관찰 |
+| --- | --- |
+| 서비스 시작 | `com.apple.os_trace_relay`가 TLS를 요구(`EnableServiceSSL`), `StartActivity` 응답 `RequestSuccessful` |
+| 시작 전 로그 | 첫 레코드 시각이 요청 시각과 같은 초. 연결 전 로그는 오지 않음 |
+| 레코드 필드 | 스레드 ID가 PID와 다른 값으로 들어 있음(2,184개 중 같은 값 0개), subsystem이 있는 레코드 약 90%, 여러 줄 메시지 약 3%, UTF-8이 아닌 메시지 0개 |
+| 레벨 분포(1초, 전체 레벨 요청) | Debug 74%, Default 16%, Info 9%, Error 1%. `StreamFlags`에서 비트를 하나라도 빼면 Debug가 오지 않음 |
+| 양 | 기기 사용량에 따라 초당 약 500~3,900개 레코드(2초씩 7회) |
+
+| 시나리오 | 결과 |
+| --- | --- |
+| 기록(`core/tests/ios_device.rs`, 5초) | 19,130줄, 초당 3,641줄·655 KB(이 속도면 8 GiB까지 약 3.5시간). 모든 줄이 iOS 로그로 읽히거나 앞 줄에 이어지는 줄이고, 가장 이른 줄도 시작 뒤 시각 |
+| 기록 중 케이블 분리·재연결(사람이 직접, 1회) | 대기 상태로 바뀐 뒤 다시 꽂자 이어서 기록. 끊긴 시간 7.0초, 구분선 1개(재부팅 아님), 앞뒤 줄 모두 iOS 로그로 읽힘 |
+| 앱(QA 빌드)에서 실제 기기로 30초 | 기기 메뉴에 `기기 이름 · iOS 27.0.1` 표시 → 기록 → 30초 동안 73,601줄을 받는 사이 페이지 응답(WebDriver 왕복) 중앙값 4 ms·최대 11 ms → 기록 중 검색(`error`)이 따라가며 갱신 → 기록 중지로 81,728줄 확정 → 저장 확인에서 `저장 안 함`으로 임시 파일 삭제 |
+
+- 화면 동작(adb 없이도 보이는 iPhone, 신뢰하지 않은 iPad, iOS 열·레벨, 끊긴 동안 로그가 없다는 안내, 다시 연결된 뒤 신뢰 대기, 구분선)은 QA 빌드의 가짜 iPhone으로 실제 macOS WKWebView에서 검증했습니다(`tests/e2e` `devices` 시나리오).
+
 ---
 
 ## 기능별 검증 요약
@@ -295,4 +315,5 @@ cargo run --release --locked -p logstudio-bench --bin read-lock -- 512 /tmp/logs
 - COVESA 공개 샘플 외의 실제 차량·ECU 대용량 DLT 파일(빅엔디언·손상 구간 포함)
 - 코드 서명(Windows Authenticode) 및 Apple 공증(Notarization)이 적용된 배포 패키지
 - 파일 크기·수정 시각과 처음·끝 4 KiB를 유지한 채 파일 중간 바이트만 덮어쓰는 특수한 외부 writer 감지
+- iPhone 기기 기록의 신뢰하지 않은 기기에서 신뢰하기까지의 흐름, 잠긴 기기, iPad, iOS 27 이전 버전, Wi-Fi 연결 기기(목록에서 뺌), Windows의 Apple Devices 앱·iTunes(Apple Mobile Device Service) 환경, 8 GiB에 이르는 장시간 기록
 - Android 기기 기록의 실제 USB 기기(케이블 분리, USB 디버깅 승인, 제조사 드라이버), Windows, 무선 디버깅, 실제로 다른 버전의 adb와 함께 쓸 때의 충돌 감지(가짜 기기로는 확인), macOS에서 실제로 `Cmd+Q`를 눌러 종료할 때의 저장 확인(같은 종료 함수를 QA 명령으로 불러 확인). Dock의 종료와 로그아웃은 묻지 않고 끝나며, 그 기록은 다음 실행 때 남은 기록으로 표시

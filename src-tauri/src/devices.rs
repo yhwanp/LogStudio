@@ -1,11 +1,13 @@
-//! Android device captures for the window: the adb that runs, the devices it
-//! lists and the temporary capture files. The page names a device by a
-//! serial of the last listing and a leftover file by an ID; paths stay here.
+//! Device captures for the window: the adb that runs, the Android devices
+//! it lists and the iPhones Apple's device service lists, and the temporary
+//! capture files. The page names a device by a serial of the last listing,
+//! an iPhone's UDID, and a leftover file by an ID; paths stay here.
 use logstudio_core::{
     capture::{
         adb::{self, Adb, Origin},
         cli::AdbCli,
-        link::{Device, Link},
+        ios::IosLink,
+        link::{Device, Link, Platform},
         store::Store,
         Capture, Options,
     },
@@ -28,8 +30,9 @@ pub struct Devices {
     /// The last listing: captures start only on its devices.
     listed: Mutex<Vec<Device>>,
     leftovers: Mutex<Leftovers>,
-    /// What QA builds use instead of adb.
+    /// What QA builds use instead of adb, and instead of Apple's service.
     replaced: Mutex<Option<Replaced>>,
+    replaced_ios: Mutex<Option<Replaced>>,
 }
 /// Leftover files by the IDs the page has, and the ID the next one gets.
 #[derive(Default)]
@@ -37,8 +40,8 @@ struct Leftovers {
     files: Vec<(u64, PathBuf)>,
     next: u64,
 }
-/// A scripted link, or none as when no adb is installed (QA builds; other
-/// builds never replace adb).
+/// A scripted link, or none as when no adb or no Apple device service is
+/// installed (QA builds; other builds never replace them).
 #[derive(Clone)]
 #[cfg_attr(not(feature = "qa"), allow(dead_code))]
 pub enum Replaced {
@@ -119,6 +122,18 @@ impl Devices {
     pub fn replace(&self, with: Option<Replaced>) {
         *self.replaced.lock().unwrap() = with;
     }
+    /// Uses a scripted link, or none, instead of Apple's device service.
+    #[cfg_attr(not(feature = "qa"), allow(dead_code))]
+    pub fn replace_ios(&self, with: Option<Replaced>) {
+        *self.replaced_ios.lock().unwrap() = with;
+    }
+    fn ios_link(&self) -> Result<Arc<dyn Link>, String> {
+        match self.replaced_ios.lock().unwrap().clone() {
+            Some(Replaced::Missing) => Err(logstudio_core::capture::ios::NO_SERVICE.into()),
+            Some(Replaced::Link(link)) => Ok(link),
+            None => Ok(Arc::new(IosLink::default())),
+        }
+    }
     fn link(&self) -> Result<Arc<dyn Link>, String> {
         match self.replaced.lock().unwrap().clone() {
             Some(Replaced::Missing) => return Err(NO_ADB.into()),
@@ -129,19 +144,45 @@ impl Devices {
         let adb = known.or_else(|| self.locate()).ok_or(NO_ADB)?;
         Ok(Arc::new(AdbCli::new(&adb.path)))
     }
-    /// The devices adb lists now; captures may start on them.
-    pub fn list(&self) -> Result<Value, String> {
-        let devices = match self.link()?.devices() {
-            Ok(devices) => devices,
+    /// The Android devices adb lists now.
+    fn android(&self) -> Result<Vec<Device>, String> {
+        match self.link()?.devices() {
+            Ok(devices) => Ok(devices),
             // A moved or removed adb is looked for again once.
             Err(_) if self.replaced.lock().unwrap().is_none() && self.locate().is_some() => {
-                self.link()?.devices().map_err(message)?
+                self.link()?.devices().map_err(message)
             }
-            Err(e) => return Err(message(e)),
+            Err(e) => Err(message(e)),
+        }
+    }
+    /// The iPhones and iPads Apple's device service lists now.
+    fn ios(&self) -> Result<Vec<Device>, String> {
+        self.ios_link()?.devices().map_err(|e| {
+            public_message(
+                &e,
+                "Could not list iPhones or iPads; check the connection and retry",
+            )
+        })
+    }
+    /// The devices both connections list now; captures may start on them.
+    /// Each connection that cannot list says why.
+    pub fn list(&self) -> Value {
+        let (android, ios) = std::thread::scope(|s| {
+            let ios = s.spawn(|| self.ios());
+            (self.android(), ios.join().unwrap_or_else(|_| Ok(vec![])))
+        });
+        let mut devices = vec![];
+        let mut why = |found: Result<Vec<Device>, String>| match found {
+            Ok(found) => {
+                devices.extend(found);
+                Value::Null
+            }
+            Err(e) => json!(e),
         };
+        let (android_error, ios_error) = (why(android), why(ios));
         let page: Vec<Value> = devices.iter().map(Device::json).collect();
         *self.listed.lock().unwrap() = devices;
-        Ok(json!({"devices":page}))
+        json!({"devices":page,"androidError":android_error,"iosError":ios_error})
     }
     /// Starts capturing a listed device into a new temporary file.
     pub fn start(&self, serial: &str) -> Result<Arc<Capture>, String> {
@@ -153,8 +194,14 @@ impl Devices {
             .find(|d| d.serial == serial)
             .cloned()
             .ok_or(NOT_LISTED)?;
-        let link = self.link()?;
-        let slot = self.store()?.create(device.name()).map_err(message)?;
+        let link = match device.platform {
+            Platform::Android => self.link()?,
+            Platform::Ios => self.ios_link()?,
+        };
+        let slot = self
+            .store()?
+            .create(device.platform, device.name())
+            .map_err(message)?;
         Capture::start(link, serial, slot, Options::default()).map_err(message)
     }
     /// Capture files left by earlier runs, under IDs for the page.
@@ -250,6 +297,51 @@ mod tests {
     }
 
     #[test]
+    fn android_devices_and_iphones_are_listed_together() {
+        use logstudio_core::capture::{fake::FakeLink, ios::NO_SERVICE};
+        let dir = tempfile::tempdir().unwrap();
+        let d = devices(dir.path());
+        let android = FakeLink::new();
+        android.add("emulator-5554", "Pixel_8", "QA-PIXEL-8");
+        let ios = FakeLink::live();
+        ios.add_ios("QA0UDID0000000000000001", "QA iPhone", "27.0");
+        d.replace(Some(Replaced::Link(android)));
+        d.replace_ios(Some(Replaced::Link(ios)));
+        let list = d.list();
+        let platforms: Vec<&str> = list["devices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|d| d["platform"].as_str().unwrap())
+            .collect();
+        assert_eq!(platforms, ["android", "ios"]);
+        assert_eq!(
+            (&list["androidError"], &list["iosError"]),
+            (&Value::Null, &Value::Null)
+        );
+        let capture = d.start("QA0UDID0000000000000001").unwrap();
+        let name = capture
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(name.starts_with("ios-QA_iPhone-"), "{name}");
+        capture.close();
+        // A connection that cannot list leaves the other's devices.
+        d.replace(Some(Replaced::Missing));
+        d.replace_ios(Some(Replaced::Missing));
+        let list = d.list();
+        assert_eq!(list["devices"], json!([]));
+        assert_eq!(list["androidError"], NO_ADB);
+        assert_eq!(list["iosError"], NO_SERVICE);
+        assert_eq!(
+            d.start("QA0UDID0000000000000001").err().as_deref(),
+            Some(NOT_LISTED)
+        );
+    }
+
+    #[test]
     fn captures_start_only_on_listed_devices() {
         let dir = tempfile::tempdir().unwrap();
         let d = devices(dir.path());
@@ -262,7 +354,7 @@ mod tests {
         let d = devices(dir.path());
         assert_eq!(d.leftovers(), json!([]));
         let store = d.store().unwrap();
-        let slot = store.create("Pixel 8").unwrap();
+        let slot = store.create(Platform::Android, "Pixel 8").unwrap();
         std::fs::write(&slot.path, b"row\n").unwrap();
         let path = slot.path.clone();
         drop(slot);

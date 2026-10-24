@@ -7,7 +7,8 @@ export const PROFILES = {
     defaults: [52, 180, 56, 56, 76, 128],
     min: [36, 100, 40, 40, 56, 64],
     max: [200, 640, 256, 256, 200, 1024],
-    fit: [96, 260, 96, 96, 100, 320],
+    // The date and time fit an iOS row's microseconds and process.
+    fit: [96, 340, 96, 96, 100, 320],
     level: 4,
   },
   dlt: {
@@ -26,7 +27,17 @@ export const profileOf = format => format === 'dlt' ? 'dlt' : 'text';
 const NAMES = {V:'Verbose', D:'Debug', I:'Info', W:'Warn', E:'Error', F:'Fatal', A:'Assert', U:'Unknown'};
 // DLT messages other than logs (control, traces) have no level: `U`.
 const DLT_NAMES = {...NAMES, U:'기타'};
-export const levelNames = format => format === 'dlt' ? DLT_NAMES : NAMES;
+// Text logs' names, one object every view reads: an iOS log names Apple's
+// levels, Fault and Default (rows that name no level, as NSLog writes).
+const TEXT_NAMES = {...NAMES};
+const APPLE = {F:'Fault', U:'Default'}, OTHER = {F:NAMES.F, U:NAMES.U};
+export const levelNames = format => format === 'dlt' ? DLT_NAMES : TEXT_NAMES;
+// Names text levels as iOS logs do, or not; true when the names changed.
+export function useAppleLevels(on) {
+  const before = TEXT_NAMES.U;
+  Object.assign(TEXT_NAMES, on ? APPLE : OTHER);
+  return TEXT_NAMES.U !== before;
+}
 
 // A DLT message's own fields; the rows' tags are its ECU, APID and CTID.
 export const DLT_IDS = [['ecu', 'ECU'], ['apid', 'APID'], ['ctid', 'CTID']];

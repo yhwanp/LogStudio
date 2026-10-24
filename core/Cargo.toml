@@ -16,6 +16,11 @@ serde_json.workspace = true
 regex.workspace = true
 tempfile.workspace = true
 chrono.workspace = true
+# iPhones and iPads through Apple's device service; pinned, as its API
+# changes with every release before 0.2.
+idevice = { version = "=0.1.68", default-features = false, features = ["usbmuxd", "rustls", "ring"] }
+plist = "=1.10.1"
+tokio = { version = "=1.53.2", features = ["rt", "net", "time", "macros", "sync"] }
 
 [dev-dependencies]
 # Independent DLT parser, used only as a test oracle for `dlt`.

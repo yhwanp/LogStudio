@@ -189,7 +189,13 @@ export function mountLogLayout({document = globalThis.document, window = globalT
     if (datasetId === null || datasetId === undefined || datasetId === timestampFor || rawMode) return;
     if (custom[1]) { timestampFor = datasetId; return; }
     const rows = [...tables[0].querySelectorAll('.log-row:not(.raw-row):not(.continuation-row)')].filter(row => /\btimestamp\b/.test(row.children[1]?.className ?? ''));
-    const width = measureColumn(1, rows, cell => { const [time, process] = cell.textContent.split(' · '); return process === undefined ? time : `${time} …`; });
+    // An iOS row keeps room for a process of 16 characters, as names of
+    // rows to come may be longer than the first; others show a hint.
+    const width = measureColumn(1, rows, cell => {
+      const [time, process] = cell.textContent.split(' · ');
+      if (process === undefined) return time;
+      return cell.classList?.contains('apple-stamp') ? `${time} · ${'0'.repeat(16)}` : `${time} …`;
+    });
     // Nothing parsed is on screen yet; a later paint tries again.
     if (width === null) return;
     timestampFor = datasetId;

@@ -15,7 +15,7 @@
 | `core/src/search.rs` | 고정 버전 `grep-regex` / `grep-searcher` 기반 문자열·정규식 검색 및 하이라이트 범위 계산 |
 | `core/src/encoding.rs` | 표시 텍스트 디코딩: 손상된 UTF-8 바이트의 표시용 대체(``)와 손상 위치 마스크, Mac OS Roman으로 잘못 읽혀 깨진 UTF-8 문자 복원(`repair`), UTF-16·압축 파일 판별 |
 | `core/src/launch.rs` | CLI 경로 인자(복수 지정 시 병합 열기) 및 `--large-log`(반복 가능) 옵션 해석 |
-| `core/src/capture/` | Android 기기 기록: `mod.rs`(기록기·재연결 상태 흐름·저장·버리기), `gate.rs`(`threadtime` 시각과 시작 경계·중복 제거), `link.rs`(연결 계층 trait·`adb devices -l` 파서·공개 오류 문구), `cli.rs`(adb 명령 실행 연결), `adb.rs`(adb 탐지·`adb version` 검증·시간 제한 실행), `store.rs`(임시 기록 파일과 잠금·남은 기록), `fake.rs`(테스트·QA용 가짜 연결과 합성 로그) |
+| `core/src/capture/` | 기기 기록: `mod.rs`(기록기·재연결 상태 흐름·저장·버리기), `gate.rs`(`threadtime` 시각과 시작 경계·중복 제거), `link.rs`(연결 계층 trait·기기 종류·`adb devices -l` 파서·공개 오류 문구), `cli.rs`(adb 명령 실행 연결), `adb.rs`(adb 탐지·`adb version` 검증·시간 제한 실행), `ios.rs`(Apple 기기 서비스(usbmuxd)로 iPhone·iPad 목록과 `os_trace_relay` 로그를 받아 iOS 로그 줄로 쓰는 연결), `store.rs`(임시 기록 파일과 잠금·남은 기록), `fake.rs`(테스트·QA용 가짜 연결과 합성 로그) |
 | `core/src/lib.rs` | `Engine`: 파일 열기·검증·롤백 복원, 기기 기록 로그 열기(`open_capture`)와 수명 관리, IPC 요청 처리, 진행 상태 이벤트 발행 |
 | `src-tauri/src/main.rs` | Tauri 커맨드 핸들러, 동시 요청 수 제한, 파일 선택·드롭 처리(다중 파일은 `order::arrange` 정렬), 시작 인자 오류 보관(`take_startup_error`) |
 | `src-tauri/src/clipboard.rs` | macOS Finder 파일 및 UTF-8 BOM 붙여넣기용 일회성 권한(grant) 발급·연장·폐기 |
@@ -23,7 +23,7 @@
 | `src-tauri/src/geometry.rs` | 창 크기·위치·최대화 상태 저장(`window-state.json`) 및 현재 연결된 모니터 작업 영역 안으로 보정 복원 |
 | `src-tauri/src/work.rs` | 파일별 작업 상태 저장(`work-states.json`): 정규 경로·크기·수정 시각으로 식별, 최근 50개 보관, 크기 제한 적용 |
 | `src-tauri/src/filters.rs` | 저장된 필터 관리(`saved-filters.json`): 이름 정규화 및 중복 검사, 크기 제한, 원자적 파일 교체 저장 |
-| `src-tauri/src/devices.rs` | 기기 기록의 데스크톱 상태: adb 탐지 결과와 사용자가 지정한 adb(`adb.json`), 마지막 기기 목록(기록은 이 목록의 serial로만 시작), 앱 캐시의 임시 기록 폴더(`captures/`)와 남은 기록 ID, QA 빌드의 가짜 기기 |
+| `src-tauri/src/devices.rs` | 기기 기록의 데스크톱 상태: adb 탐지 결과와 사용자가 지정한 adb(`adb.json`), Android 기기와 iPhone·iPad를 함께 담은 마지막 기기 목록(기록은 이 목록의 serial·UDID로만 시작하며, 기기 종류에 맞는 연결을 고름), 앱 캐시의 임시 기록 폴더(`captures/`)와 남은 기록 ID, QA 빌드의 가짜 기기 |
 | `src-tauri/src/recent.rs` | 최근 파일 목록 관리(`recent-files.json`): 프론트엔드에는 ID와 표시 이름만 전달하고 검증된 파일만 재열기 허용 |
 | `src-tauri/tauri.conf.json`, `src-tauri/capabilities/` | 앱 메타데이터·버전·식별자, 프론트엔드 경로(`frontendDist`), CSP 설정, Tauri 권한 정의 |
 | `src-tauri/icons/` | 앱 아이콘 원본(`icon.svg`, `icon-rounded.svg`) 및 생성된 `icon.icns`·`icon.ico`·`icon.png`([빌드와 배포](#빌드와-배포) 참고) |
@@ -46,7 +46,7 @@
 | 필터 | `filter-model.js`(레벨 목록, 붙여넣기 25 MiB 상한, 조건 모델 및 입력 검증), `conditions.js`(필터 패널의 조건 카드 UI), `saved-filters.js`(저장된 필터 직렬화·비교·메뉴·이름 대화상자) |
 | 행 선택·목록 | `row-selection.js`(상단·검색·북마크 공통 행 선택 상태 머신, DOM 비의존), `row-gestures.js`(마우스 클릭·드래그·자동 스크롤), `bookmarks.js`(북마크 관리), `recent.js`(최근 파일 메뉴) |
 | 공통·유틸 | `dom.js`(DOM 헬퍼), `demo.js`(빈 화면의 `샘플 로그 보기`용 합성 로그) |
-| 기기 기록 | `devices.js`(기기 메뉴, adb 설치 안내, 상단 바 기록 상태, 저장 확인 대화상자, 남은 기록 목록, 드롭·창 닫기 보류 응답) |
+| 기기 기록 | `devices.js`(Android 기기와 iPhone·iPad를 종류별로 보여 주고, USB 디버깅 허용·신뢰·잠금 해제를 기다리는 기기가 있으면 열린 동안 다시 조회하는 기기 메뉴, adb·Apple 기기 서비스 설치 안내, 상단 바 기록 상태와 화면 낭독기용 설명, 저장 확인 대화상자, 남은 기록 목록, 드롭·창 닫기 보류 응답) |
 | 메뉴·대화상자·문구 | `menu.js`(팝업 메뉴), `shortcuts.js`(단축키 안내 대화상자), `clipboard.js`(붙여넣기 대상 판별: 입력란·로그 텍스트·파일 경로), `paste-confirm.js`(열린 로그 교체 확인 대화상자), `tips.js`(첫 사용 팁 및 기능 둘러보기), `describe.js`(진행 상태·오류·필터 요약 문구) |
 
 ## 처리 구조
@@ -92,14 +92,19 @@
 - **Windows 파일 공유:** Windows에서는 읽기·쓰기·삭제 공유 모드로 파일을 열어, 다른 프로그램이 기록 중인 로그를 열거나 열려 있는 동안 파일 이름이 바뀌거나(로그 회전) 삭제되는 것을 막지 않습니다.
 - **실시간 따라가기(`follow`):** 단일 텍스트 파일에서 따라가기를 켜면 전용 폴링 스레드가 500 ms마다 `Source::grow`로 파일 증가분을 확인하고 새 바이트만 이어서 인덱싱합니다. 아직 줄바꿈이 없는 마지막 미완성 줄은 보류하며, 처음 열 때 줄바꿈 없이 끝났던 마지막 행에 새 바이트가 이어져 완성되면 해당 마지막 블록만 되돌린 뒤 다시 게시합니다(`tailRevision` 증가). 쿼리 결과와 레벨·필드 분석 상태는 마지막 블록 이후의 carry 상태를 보관해 처음부터 다시 스캔하지 않고 증분 처리합니다.
 
-### Android 기기 기록
+### 기기 기록
 
-연결한 기기의 logcat을 앱 캐시의 임시 파일에 기록하고, 그 파일을 기존 [실시간 따라가기](#외부-파일-변경-감지와-실시간-따라가기)로 엽니다. 인덱싱·쿼리·집계는 일반 파일과 같은 경로를 쓰고, adb 읽기는 인덱싱·화면과 분리된 스레드에서 이루어집니다.
+연결한 Android 기기의 logcat이나 iPhone·iPad의 로그를 앱 캐시의 임시 파일에 기록하고, 그 파일을 기존 [실시간 따라가기](#외부-파일-변경-감지와-실시간-따라가기)로 엽니다. 인덱싱·쿼리·집계는 일반 파일과 같은 경로를 쓰고, 기기 읽기는 인덱싱·화면과 분리된 스레드에서 이루어집니다.
 
-- **연결 계층(`link::Link`):** 기기 목록, `boot_id`, 기기 고유 번호(`ro.serialno`), 최근 로그(`logcat -d -t N`), 스트림(`logcat -v threadtime [-T 시각]`)만 요청합니다. 제품은 adb 명령 실행(`cli::AdbCli`)을 쓰며, 서버는 출력을 쓰지 않는 `adb start-server`로 먼저 띄워 서버가 앱의 파이프를 물려받지 않게 합니다. 모든 명령은 시간 제한이 있고 Windows에서는 콘솔 창 없이 실행하며, 앱 환경의 `ANDROID_LOG_TAGS`는 지웁니다.
+- **연결 계층(`link::Link`):** 기기 목록, `boot_id`, 기기 고유 번호(`ro.serialno`), 최근 로그(`logcat -d -t N`), 스트림(`logcat -v threadtime [-T 시각]`)만 요청합니다. 연결은 스트림이 열리기 전의 줄을 보내는지(`replays`)를 알리며, 보내지 않는 연결(iPhone·iPad)은 시작 경계 없이 받은 줄을 모두 씁니다. Android는 adb 명령 실행(`cli::AdbCli`)을 쓰며, 서버는 출력을 쓰지 않는 `adb start-server`로 먼저 띄워 서버가 앱의 파이프를 물려받지 않게 합니다. 모든 명령은 시간 제한이 있고 Windows에서는 콘솔 창 없이 실행하며, 앱 환경의 `ANDROID_LOG_TAGS`는 지웁니다.
 - **시작 경계(`gate.rs`):** 기기 버퍼의 최근 줄 가운데 마지막 시각을 경계로 `-T`를 요청하고(`-T`는 그 시각의 줄을 포함), 경계 시각의 줄 중 이미 있던 줄은 원문 횟수만큼 버립니다. 1 MiB를 넘게 버리면 그 뒤로는 모두 통과시켜 줄을 잃지 않습니다.
 - **기록기:** 받은 바이트를 변환하지 않고 LF로 끝난 줄만 파일 끝에 추가합니다. 연결이 줄 중간에서 끊기면 그 조각은 다음 연결이 다시 보내는 온전한 줄로 대체되고, 기록을 멈출 때는 받은 바이트를 모두 씁니다. 8 GiB·디스크 부족·쓰기 실패는 기록을 멈춥니다.
 - **재연결:** 스트림이 끝나면 기기를 1초마다 찾습니다. 같은 `boot_id`면 기록 파일 끝의 마지막 시각을 경계로 이어 붙이고, 다르면(재부팅) 새 부팅의 처음부터 받습니다. adb의 종료 코드와 오류 출력만으로는 끊긴 원인을 구분할 수 없으므로(에뮬레이터에서 adb 서버 종료와 재부팅 모두 종료 코드 255, 오류 출력 없음) 다시 연결해 보면서 판단합니다. 기다리는 동안 같은 serial의 기기가 미승인·오프라인으로 보이면 그 이유를 상태에 담아 화면에 표시합니다. adb 버전 불일치 문구를 보면 재연결을 멈춥니다. 끊긴 지점(다음 첫 행 번호·시각·재부팅 여부)은 상태로만 보관합니다.
+- **iPhone·iPad(`ios::IosLink`):** Apple 기기 서비스(usbmuxd: macOS는 `/var/run/usbmuxd`, Windows는 Apple Devices 앱이나 iTunes가 설치하는 Apple Mobile Device Service의 `127.0.0.1:27015`)에 [`idevice`](https://github.com/jkcoxson/idevice) 크레이트(MIT)로 연결합니다. 0.2 전까지는 릴리스마다 API가 바뀌므로 정확한 버전으로 고정합니다.
+  - **목록과 신뢰 확인:** USB로 연결한 기기만 UDID당 하나씩 담습니다(Wi-Fi 연결 기기는 확인하지 못해 뺌). 세션 전 lockdown 값으로 이름·제품·iOS 버전을 읽고, 페어링 기록(`ReadPairRecord`)과 세션 시작으로 `device`·`untrusted`·`locked`를 판단합니다.
+  - **로그 스트림:** `com.apple.os_trace_relay`에 `StartActivity`(모든 프로세스·모든 레벨)를 요청하고, 받은 이진 레코드를 직접 경계 검사하며 읽어 `날짜 시각.마이크로초 프로세스[PID:TID] [레벨] [subsystem:category] 메시지` 줄로 씁니다. 시각은 이 컴퓨터의 시간대로 바꾸고, 기본 레벨에는 레벨 칸을 쓰지 않으며, 메시지 바이트는 그대로 둡니다. 라이브러리의 레코드 파서는 손실 변환(`from_utf8_lossy`)과 경계 검사 없는 자르기를 하므로 쓰지 않습니다.
+  - **런타임:** 비동기 라이브러리는 요청마다 단일 스레드 tokio 런타임에서 시간 제한을 두고 돌리고, 스트림은 읽기 중에만 런타임을 돌리며 닫기는 `Notify`로 깨웁니다. 라이브러리 패닉은 오류로 바꿉니다.
+  - **재연결과 레벨 이름:** 기기는 연결된 동안의 로그만 보내므로 재연결 뒤에는 그때부터 이어서 기록하고, 끊긴 지점에 `gap`을 표시합니다. 재부팅은 구분하지 않습니다. 데이터셋 상태의 `ios`(모든 파일이 iOS 로그)나 기록의 `platform`이 iOS면 화면은 F·U 레벨을 `Fault`·`Default`로 부릅니다.
 - **엔진 연동:** `Engine::open_capture`가 기록 파일을 데이터셋으로 열고 검증 직후 따라가기를 켭니다. 기록이 끝나면 따라가기를 꺼 마지막 줄까지 읽어 건수를 확정하며, 데이터셋을 닫거나 교체가 확정되면 기록을 닫습니다. 롤백으로 되살아난 기록 로그는 일시중지 직전에 따라가고 있었을 때만 다시 따라갑니다.
 - **임시 파일(`store.rs`):** 기록 파일 옆 잠금 파일(`.lock`)을 실행 중인 앱이 잡고 있으며, 잡히지 않은 파일은 비정상 종료로 남은 기록입니다. 닫을 때 사용자가 버리기로 했거나 저장하지 않은 바이트가 없으면 파일을 지웁니다.
 - **닫기와 종료:** 기록 로그가 열려 있으면 드롭과 창 닫기를 보류하고 화면에 묻습니다(`drop-held`·`close-held`). macOS의 기본 종료 메뉴 항목은 창 닫기를 거치지 않고 앱을 바로 끝냅니다. 그래서 앱 메뉴의 종료(`Cmd+Q`)는 창을 먼저 닫는 메뉴 항목으로 바꿔, 창을 닫을 때와 같은 저장 확인을 거치게 합니다. Dock의 종료와 로그아웃은 여전히 바로 끝나며, 그 기록은 다음 실행의 남은 기록이 됩니다.
@@ -128,7 +133,7 @@
 | `follow` | `follow:true`/`false`로 실시간 따라가기 켜기·끄기(단일 텍스트 파일 전용) |
 | `cancel`, `close` | 진행 중인 쿼리 취소 및 파일 닫기(동시 요청 수 제한과 별도로 즉시 처리) |
 
-기기 기록은 별도 Tauri 명령을 씁니다: `adb_status`·`pick_adb`(adb 탐지·지정), `adb_devices`(목록), `start_capture`·`stop_capture`, `save_capture`·`discard_capture`(저장·버리기 표시), `capture_leftovers`·`open_leftover`·`delete_leftover`(남은 기록, ID로만 지칭), `finish_drop`·`answer_close`(기록 로그가 열려 있을 때 보류한 드롭과 창 닫기에 대한 화면의 답). 엔진은 기록 상태가 바뀌면 `capture-changed` 이벤트를 보내고, 상태 응답과 `query-progress`에는 `capture`가 함께 실립니다.
+기기 기록은 별도 Tauri 명령을 씁니다: `adb_status`·`pick_adb`(adb 탐지·지정), `list_devices`(Android 기기와 iPhone·iPad 목록, 종류별로 목록을 받지 못한 이유), `start_capture`·`stop_capture`, `save_capture`·`discard_capture`(저장·버리기 표시), `capture_leftovers`·`open_leftover`·`delete_leftover`(남은 기록, ID로만 지칭), `finish_drop`·`answer_close`(기록 로그가 열려 있을 때 보류한 드롭과 창 닫기에 대한 화면의 답). 엔진은 기록 상태가 바뀌면 `capture-changed` 이벤트를 보내고, 상태 응답과 `query-progress`에는 `capture`가 함께 실립니다.
 
 동시 데이터 요청은 최대 4개까지 허용하며, 초과 시 `Local engine is busy; retry`를 반환해 프론트엔드가 짧게 재시도합니다. 엔진은 상태 변화 시 `source-changed`(`opened`·`validated`·`rollback`·`error`), `files-ordered`, `query-progress` 이벤트를 발행합니다.
 
@@ -148,7 +153,7 @@
 ## 파일 접근 및 보안 경계
 
 - **승인된 파일만 접근:** Rust 백엔드는 OS 파일 선택 대화상자, 네이티브 드래그 앤 드롭, 명시적 CLI 인자, macOS Finder 파일 붙여넣기 일회성 권한(grant)으로 사용자가 직접 승인한 파일만 읽습니다. 프론트엔드에는 파일 경로를 직접 열어 볼 수 있는 API가 없으며, 최근 파일(`recent-files.json`), 다시 열기(`reopen_source`), 작업 상태(`work-states.json`) 모두 내부 ID(`datasetId` 또는 항목 ID)로만 통신합니다.
-- **기기 기록과 외부 프로그램 실행:** 앱이 실행하는 외부 프로그램은 adb뿐입니다. adb는 백엔드가 정해진 위치에서 찾거나 OS 파일 선택 창으로 지정한 파일만 쓰며, `adb version` 출력으로 adb인지 확인합니다. 화면은 실행 파일 경로나 명령을 보낼 수 없고, adb의 출처와 버전만 받습니다. 기기 serial은 백엔드가 마지막으로 받은 기기 목록에 있는 값만 허용하며, 셸을 거치지 않고 프로세스 인자로 넘깁니다. 기기에서 실행하는 명령은 고정된 조회와 `logcat`뿐이며, 임시 기록 파일과 남은 기록도 화면에는 ID와 이름만 전달합니다.
+- **기기 기록과 외부 프로그램 실행:** 앱이 실행하는 외부 프로그램은 adb뿐입니다. iPhone·iPad는 외부 프로그램 없이 OS의 Apple 기기 서비스와 기기가 이미 맺은 페어링 기록으로만 연결하며, 페어링을 새로 만들거나 바꾸지 않고 로그 서비스 하나만 엽니다. adb는 백엔드가 정해진 위치에서 찾거나 OS 파일 선택 창으로 지정한 파일만 쓰며, `adb version` 출력으로 adb인지 확인합니다. 화면은 실행 파일 경로나 명령을 보낼 수 없고, adb의 출처와 버전만 받습니다. 기기 serial은 백엔드가 마지막으로 받은 기기 목록에 있는 값만 허용하며, 셸을 거치지 않고 프로세스 인자로 넘깁니다. 기기에서 실행하는 명령은 고정된 조회와 `logcat`뿐이며, 임시 기록 파일과 남은 기록도 화면에는 ID와 이름만 전달합니다.
 - **메모리 및 원자적 쓰기:** 로그 원문 전체를 메모리에 복제하지 않고 필요할 때마다 128 KiB 블록 단위로 파일에서 직접 읽으며 반복 읽기는 OS 페이지 캐시를 활용합니다. 결과 내보내기와 설정 파일(`recent-files.json`, `work-states.json`, `saved-filters.json`) 저장은 모두 임시 파일에 먼저 기록한 뒤 원자적으로 교체(atomic rename)합니다.
 
 ## 빌드와 배포
@@ -204,6 +209,12 @@ python3 tests/e2e/run.py target/qa/release/logstudio-desktop
 자세한 시나리오 목록과 실행 옵션은 [tests/e2e/README.md](../tests/e2e/README.md)를 참고하세요.
 
 ### 실제 기기·에뮬레이터 검사
+
+`core/tests/ios_device.rs`는 이 컴퓨터를 신뢰한 iPhone·iPad로 제품의 iOS 기기 연결을 검증하며, 평소 테스트에서는 건너뜁니다. 시작한 뒤의 줄만 기록되는지, 모든 줄이 iOS 로그로 읽히는지(이어지는 줄 제외)와 초당 줄 수를 확인하고, 케이블을 뽑았다 꽂는 재연결 검사는 사람이 직접 해야 합니다. 여러 대가 연결되어 있으면 `LOGSTUDIO_IOS_UDID`로 고릅니다.
+
+```sh
+cargo test -p logstudio-core --test ios_device -- --ignored --test-threads 1 --nocapture
+```
 
 `core/tests/capture_device.rs`는 연결한 기기나 에뮬레이터로 제품의 adb 연결을 검증하며, 평소 테스트에서는 건너뜁니다(`#[ignore]`). 시작 경계, adb 서버 재시작 후 이어 붙이기, 재부팅 후 기록, 설치된 adb 탐지를 확인하며, 기기 쪽 로그는 테스트가 실행 중에 직접 찍은 확인용 줄로만 판정합니다.
 

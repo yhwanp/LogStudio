@@ -14,14 +14,14 @@
     <div class="file-text"><strong id="largeName">열린 파일 없음</strong><span id="largeSize" class="file-size"></span><span id="largeStatus" class="file-status" role="status" aria-live="polite">로그 파일을 선택해 주세요</span></div>
     <div id="loadProgress" class="load-progress" role="progressbar" aria-label="파일 읽기 진행률" aria-valuemin="0" aria-valuemax="100" hidden><span id="loadProgressBar"></span></div>
   </div>
-  <div id="captureBar" class="capture-bar" hidden><span id="captureState" class="capture-state" role="status" aria-live="polite"><span id="captureText" class="capture-text"></span></span><button id="captureStop" class="button small" type="button">기록 중지</button><button id="captureSave" class="button small" type="button">저장…</button></div>
+  <div id="captureBar" class="capture-bar" hidden><span id="captureState" class="capture-state" role="status" aria-live="polite" aria-atomic="true"><span id="captureText" class="capture-text"></span><span id="captureHint" class="visually-hidden"></span></span><button id="captureStop" class="button small" type="button">기록 중지</button><button id="captureSave" class="button small" type="button">저장…</button></div>
   <div class="top-actions">
     <button id="cancelInput" class="button" hidden>읽기 취소</button>
     <button id="exportCancel" class="button" hidden>내보내기 취소</button>
     <button id="reopenFile" class="button subtle" hidden disabled>다시 열기</button>
     <button id="largeClose" class="button subtle">파일 닫기</button>
     <button id="recentButton" class="button subtle" aria-haspopup="menu" hidden>최근 파일</button>
-    <button id="deviceButton" class="button subtle" aria-haspopup="menu" title="연결한 Android 기기의 로그를 실시간으로 기록합니다">Android 기기</button>
+    <button id="deviceButton" class="button subtle" aria-haspopup="menu" title="연결한 Android 기기나 iPhone·iPad의 로그를 실시간으로 기록합니다">기기 로그</button>
     <button class="button primary" id="openFile">로그 파일 열기</button>
     <button id="shortcutHelp" class="button subtle help-button" aria-haspopup="dialog" aria-controls="shortcutDialog" aria-label="단축키" title="단축키 (?)">?</button>
   </div>
@@ -56,7 +56,7 @@
       <div class="empty-icon" aria-hidden="true">≡</div>
       <h2>로그 파일을 열어 주세요</h2>
       <p>Android logcat · iOS 로그 · DLT(.dlt) · UTF-8 텍스트 파일을 파일마다 최대 8 GiB까지 열 수 있습니다. 여러 파일을 함께 선택하면 시간순으로 하나의 로그로 합쳐 엽니다.</p>
-      <div class="empty-actions"><button id="emptyOpen" class="button primary">로그 파일 열기</button><button id="emptyDevice" class="button" aria-haspopup="menu">Android 기기 연결</button><button id="loadDemo" class="button">샘플 로그 보기</button></div>
+      <div class="empty-actions"><button id="emptyOpen" class="button primary">로그 파일 열기</button><button id="emptyDevice" class="button" aria-haspopup="menu">기기 로그 기록</button><button id="loadDemo" class="button">샘플 로그 보기</button></div>
       <section id="captureLeftovers" class="recent-files leftovers" aria-labelledby="leftoverTitle" hidden><div class="recent-heading"><h3 id="leftoverTitle">저장하지 않은 기기 로그</h3></div><p class="small-note leftover-note">앱이 기록 중에 종료되어 남은 로그입니다. 열어서 저장하거나 삭제할 수 있습니다.</p><ul id="leftoverList"></ul></section>
       <section id="recentFiles" class="recent-files" aria-labelledby="recentTitle" hidden><div class="recent-heading"><h3 id="recentTitle">최근 파일</h3><button id="clearRecent" class="text-button">목록 지우기</button></div><ul id="recentList"></ul></section>
       <ul class="empty-hints"><li>파일을 이 창으로 끌어다 놓아도 열립니다 · 여러 파일도 한 번에 놓을 수 있습니다</li><li><kbd class="mod-key">⌘</kbd><kbd>O</kbd> 파일 열기 · <kbd class="mod-key">⌘</kbd><kbd>V</kbd> <span id="pasteHint">로그 텍스트나 파일 붙여넣기</span></li><li><kbd class="mod-key">⌘</kbd><kbd>+</kbd> · <kbd class="mod-key">⌘</kbd><kbd>−</kbd> 또는 <kbd class="mod-key">⌘</kbd>+마우스 휠로 화면 확대·축소 · <kbd class="mod-key">⌘</kbd><kbd>0</kbd> 원래 크기</li></ul>
@@ -119,7 +119,7 @@
 <dialog id="shortcutDialog" class="shortcut-dialog" aria-labelledby="shortcutTitle"><div class="shortcut-content">
   <div class="section-title"><h2 id="shortcutTitle">단축키</h2><div class="shortcut-actions"><button id="startTour" class="mini-button tour-button" title="주요 기능을 화면에서 차례로 짚어 봅니다">기능 둘러보기</button><button id="shortcutClose" class="mini-button" title="닫기 (Esc)">닫기</button></div></div>
   <div class="shortcut-groups">
-    <section><h3>파일</h3><dl><div><dt><kbd class="mod-key">⌘</kbd><kbd>O</kbd></dt><dd>로그 파일 열기</dd></div><div><dt><kbd class="mod-key">⌘</kbd><kbd>V</kbd></dt><dd>로그 텍스트나 파일 붙여넣기</dd></div><div><dt><kbd class="mod-key">⌘</kbd><kbd>R</kbd></dt><dd>열린 파일 다시 열기 (필터·북마크 유지)</dd></div><div><dt><kbd class="mod-key">⌘</kbd><kbd>S</kbd></dt><dd>Android 기기에서 기록한 로그 저장</dd></div></dl></section>
+    <section><h3>파일</h3><dl><div><dt><kbd class="mod-key">⌘</kbd><kbd>O</kbd></dt><dd>로그 파일 열기</dd></div><div><dt><kbd class="mod-key">⌘</kbd><kbd>V</kbd></dt><dd>로그 텍스트나 파일 붙여넣기</dd></div><div><dt><kbd class="mod-key">⌘</kbd><kbd>R</kbd></dt><dd>열린 파일 다시 열기 (필터·북마크 유지)</dd></div><div><dt><kbd class="mod-key">⌘</kbd><kbd>S</kbd></dt><dd>기기에서 기록한 로그 저장</dd></div></dl></section>
     <section><h3>검색</h3><dl><div><dt><kbd class="mod-key">⌘</kbd><kbd>F</kbd> <kbd>/</kbd></dt><dd>검색창으로 이동</dd></div><div><dt><kbd>Enter</kbd> <kbd>Shift</kbd><kbd>Enter</kbd></dt><dd>검색창에서 다음·이전 결과를 위 로그에서 보기</dd></div><div><dt><kbd>Enter</kbd> 더블클릭</dt><dd>검색 결과 행을 위 로그에서 보기</dd></div></dl></section>
     <section><h3>목록</h3><dl><div><dt><kbd>↑</kbd><kbd>↓</kbd></dt><dd>이전·다음 행 선택</dd></div><div><dt><kbd>Shift</kbd><kbd>↑</kbd><kbd>↓</kbd> Shift+클릭 · 드래그</dt><dd>이어진 여러 행 선택</dd></div><div><dt><kbd class="mod-key">⌘</kbd>+클릭</dt><dd>행 하나를 선택에 더하기·빼기</dd></div><div><dt><kbd class="mod-key">⌘</kbd><kbd>A</kbd></dt><dd>검색 결과·북마크 목록의 모든 행 선택</dd></div><div><dt>선택한 행에서 드래그</dt><dd>그 행 안의 텍스트 선택 · 행을 벗어나면 여러 행 선택</dd></div><div><dt><kbd>PageUp</kbd><kbd>PageDown</kbd></dt><dd>한 화면씩 스크롤 (Shift: 선택을 한 화면씩 넓히기)</dd></div><div><dt><kbd>Home</kbd><kbd>End</kbd></dt><dd>목록 처음·끝으로 (Shift: 선택을 처음·끝까지 넓히기)</dd></div><div><dt><kbd>Enter</kbd></dt><dd>선택한 행의 원문 보기</dd></div><div><dt><kbd class="mod-key">⌘</kbd><kbd>C</kbd></dt><dd>선택한 행 원문 복사</dd></div><div><dt><kbd>Shift</kbd><kbd>F10</kbd> 우클릭</dt><dd>행 작업 메뉴</dd></div><div><dt><kbd>Esc</kbd></dt><dd>메뉴·필터 패널·원문 상세를 한 번에 하나씩 닫기 · 그다음 여러 행 선택을 한 행으로 줄이기</dd></div></dl></section>
     <section><h3>북마크</h3><dl><div><dt><kbd class="mod-key">⌘</kbd><kbd>B</kbd></dt><dd>선택한 행 북마크 추가·해제</dd></div><div><dt><kbd>F2</kbd> <kbd>Shift</kbd><kbd>F2</kbd></dt><dd>다음·이전 북마크로 이동</dd></div><div><dt><kbd>Delete</kbd></dt><dd>북마크 목록에서 선택한 북마크 해제</dd></div></dl></section>
@@ -155,6 +155,17 @@
   </ol>
   <p id="adbDialogError" class="field-error" role="alert" hidden></p>
   <div class="dialog-actions"><button id="adbPick" class="button" type="button">adb 위치 지정…</button><span class="dialog-gap"></span><button id="adbClose" class="button" type="button">닫기</button><button id="adbRetry" class="button primary" type="button">다시 찾기</button></div>
+</div></dialog>
+<dialog id="appleDialog" class="name-dialog adb-dialog" aria-labelledby="appleTitle" aria-describedby="appleIntro"><div class="adb-content">
+  <h2 id="appleTitle">Apple 기기 서비스가 필요합니다</h2>
+  <p id="appleIntro" class="small-note">iPhone·iPad 로그는 Apple 기기 서비스로 받습니다. Windows에서는 Apple Devices 앱이나 iTunes를 설치하면 이 서비스가 함께 설치됩니다.</p>
+  <ol class="adb-steps">
+    <li><span>Microsoft Store에서 Apple Devices 앱을 설치합니다. iTunes를 설치해도 됩니다.</span><span class="adb-line"><code id="appleUrl"></code><button id="appleUrlCopy" class="mini-button" type="button">복사</button></span></li>
+    <li><span>iPhone·iPad를 케이블로 연결하고, 기기에 <b>이 컴퓨터를 신뢰하겠습니까?</b>가 뜨면 신뢰를 누릅니다.</span></li>
+    <li><span><b>다시 찾기</b>를 누릅니다.</span></li>
+  </ol>
+  <p id="appleDialogError" class="field-error" role="alert" hidden></p>
+  <div class="dialog-actions"><span class="dialog-gap"></span><button id="appleClose" class="button" type="button">닫기</button><button id="appleRetry" class="button primary" type="button">다시 찾기</button></div>
 </div></dialog>
 <dialog id="tipLayer" class="tip-layer" aria-labelledby="tipTitle" aria-describedby="tipBody">
   <div id="tipSpot" class="tip-spot" aria-hidden="true" hidden></div>
