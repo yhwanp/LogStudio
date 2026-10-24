@@ -2,7 +2,7 @@
 
 수 GiB 크기의 Android·iOS 로그와 COVESA DLT 파일을 바로 열어 필터링하고 검색하는 데스크톱 로그 뷰어입니다.
 
-[Windows x64 다운로드](https://github.com/yhwanp/LogStudio/releases/latest) · [macOS 빌드 방법](#macos) · [사용 설명서](docs/USER_GUIDE.md)
+[Windows·macOS 다운로드](https://github.com/yhwanp/LogStudio/releases/latest) · [사용 설명서](docs/USER_GUIDE.md)
 
 https://github.com/user-attachments/assets/bfe612d8-acb8-45b8-8507-1085cf5f9e58
 
@@ -13,7 +13,7 @@ https://github.com/user-attachments/assets/bfe612d8-acb8-45b8-8507-1085cf5f9e58
 
 위쪽에는 필터를 적용한 로그를, 아래쪽에는 그 범위에서 찾은 검색 결과를 함께 보여 줍니다.
 
-> **English:** LogStudio is a desktop log viewer for multi-GB Android logcat, iOS, and COVESA DLT files. The UI and documentation are in Korean. Prebuilt Windows x64 binaries are available on [Releases](https://github.com/yhwanp/LogStudio/releases/latest); on macOS, build from source.
+> **English:** LogStudio is a desktop log viewer for multi-GB Android logcat, iOS, and COVESA DLT files. The UI and documentation are in Korean. Prebuilt Windows x64 and macOS (Apple Silicon) binaries are available on [Releases](https://github.com/yhwanp/LogStudio/releases/latest).
 
 ## 주요 기능
 
@@ -35,7 +35,7 @@ https://github.com/user-attachments/assets/bfe612d8-acb8-45b8-8507-1085cf5f9e58
 | OS | 설치 방법 | 비고 |
 | --- | --- | --- |
 | Windows 10/11 (x64) | [Releases](https://github.com/yhwanp/LogStudio/releases/latest)에서 ZIP 다운로드 | WebView2 Runtime 필요. CI 자동 테스트·빌드 통과([수동 점검 목록](docs/LARGE_LOG_VALIDATION.md#windows-수동-점검)) |
-| macOS 12 이상 (Apple Silicon) | 소스에서 직접 빌드 | 자동 테스트 및 실제 앱 화면 검증 완료(Intel Mac 및 하위 버전 미검증) |
+| macOS 12 이상 (Apple Silicon) | [Releases](https://github.com/yhwanp/LogStudio/releases/latest)에서 ZIP 다운로드 또는 소스에서 직접 빌드 | CI 자동 테스트·빌드 통과, 실제 앱 화면은 macOS 27에서 확인(Intel Mac 미검증) |
 | Linux | 배포하지 않음 | 빌드·동작 미검증 |
 
 ## 설치 및 실행
@@ -50,7 +50,15 @@ https://github.com/user-attachments/assets/bfe612d8-acb8-45b8-8507-1085cf5f9e58
 
 ### macOS
 
-GitHub Actions에서는 Windows 빌드만 생성하므로 macOS에서는 소스를 직접 빌드합니다. [rustup](https://rustup.rs)으로 설치한 Rust, Xcode Command Line Tools, Python 3.9 이상이 필요합니다.
+1. [Releases](https://github.com/yhwanp/LogStudio/releases/latest)에서 `LogStudio-<버전>-macos-arm64.zip`을 다운로드합니다(함께 첨부된 `.zip.sha256`으로 체크섬 확인 가능).
+2. 압축을 풀고 `LogStudio.app`을 응용 프로그램 폴더로 옮겨 실행합니다.
+
+- Apple Silicon Mac용입니다. Intel Mac용 다운로드는 없습니다.
+- Developer ID 서명과 Apple 공증이 적용되어 있지 않아 처음 실행할 때 macOS가 앱을 막습니다. 시스템 설정 → 개인정보 보호 및 보안에서 `그래도 열기`를 한 번 누르면 그다음부터는 바로 열립니다([Apple 지원 안내](https://support.apple.com/102445)).
+
+#### 소스에서 빌드
+
+[rustup](https://rustup.rs)으로 설치한 Rust, Xcode Command Line Tools, Python 3.9 이상이 필요합니다.
 
 ```sh
 git clone https://github.com/yhwanp/LogStudio.git
@@ -59,7 +67,7 @@ rustup toolchain install
 sh build-run-macos.command
 ```
 
-`rustup toolchain install`은 `rust-toolchain.toml`에 지정된 Rust 1.99.0과 `rustfmt`·`clippy`를 설치합니다. 빌드가 끝나면 `artifacts/desktop/LogStudio-local.app`이 생성되고 바로 실행됩니다. 스크립트의 상세 동작은 [DEVELOPMENT.md](docs/DEVELOPMENT.md#macos에서-한-번에-빌드하고-실행)를, 다른 Mac에서 옮겨 온 앱이 Gatekeeper에 차단될 때는 [Apple 지원 안내](https://support.apple.com/102445)를 참고하세요.
+`rustup toolchain install`은 `rust-toolchain.toml`에 지정된 Rust 1.99.0과 `rustfmt`·`clippy`를 설치합니다. 빌드가 끝나면 `artifacts/desktop/LogStudio-local.app`이 생성되고 바로 실행됩니다. 스크립트의 상세 동작은 [DEVELOPMENT.md](docs/DEVELOPMENT.md#macos에서-한-번에-빌드하고-실행)를 참고하세요.
 
 ### 명령줄로 열기
 
@@ -70,7 +78,7 @@ LogStudio.exe C:\logs\main.log.1 C:\logs\main.log
 ```
 
 ```sh
-artifacts/desktop/LogStudio-local.app/Contents/MacOS/logstudio-desktop /absolute/path/main.log
+/Applications/LogStudio.app/Contents/MacOS/logstudio-desktop /absolute/path/main.log
 ```
 
 - `--large-log <경로>` 옵션도 동일하게 동작하며 여러 번 지정할 수 있습니다.

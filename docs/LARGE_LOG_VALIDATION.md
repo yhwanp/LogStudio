@@ -314,6 +314,7 @@ cargo run --release --locked -p logstudio-bench --bin read-lock -- 512 /tmp/logs
 - 부팅 직후의 완전한 cold 디스크 상태 및 4–8코어 저사양 PC 환경에서의 처리 시간
 - COVESA 공개 샘플 외의 실제 차량·ECU 대용량 DLT 파일(빅엔디언·손상 구간 포함)
 - 코드 서명(Windows Authenticode) 및 Apple 공증(Notarization)이 적용된 배포 패키지
+- 내려받은 ZIP에서 꺼낸 macOS 앱을 처음 열 때 `그래도 열기`로 허용하는 흐름(압축을 푼 앱의 ad-hoc 서명이 유효하고, 다운로드 표시를 붙이면 Gatekeeper 검사에서 거부되는 것까지만 확인)과 macOS 27 이전 버전에서의 실행
 - 파일 크기·수정 시각과 처음·끝 4 KiB를 유지한 채 파일 중간 바이트만 덮어쓰는 특수한 외부 writer 감지
 - iPhone 기기 기록의 신뢰하지 않은 기기에서 신뢰하기까지의 흐름, 잠긴 기기, iPad, iOS 27 이전 버전, Wi-Fi 연결 기기(목록에서 뺌), Windows의 Apple Devices 앱·iTunes(Apple Mobile Device Service) 환경, 8 GiB에 이르는 장시간 기록
 - Android 기기 기록의 실제 USB 기기(케이블 분리, USB 디버깅 승인, 제조사 드라이버), Windows, 무선 디버깅, 실제로 다른 버전의 adb와 함께 쓸 때의 충돌 감지(가짜 기기로는 확인), macOS에서 실제로 `Cmd+Q`를 눌러 종료할 때의 저장 확인(같은 종료 함수를 QA 명령으로 불러 확인). Dock의 종료와 로그아웃은 묻지 않고 끝나며, 그 기록은 다음 실행 때 남은 기록으로 표시

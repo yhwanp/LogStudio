@@ -158,7 +158,7 @@
 
 ## 빌드와 배포
 
-CI는 Windows x64 네이티브 러너(`windows-2022`)에서 테스트와 릴리스 빌드를 수행합니다(MSVC 런타임 정적 링크). macOS 앱은 로컬 Mac에서 테스트하고 패키징합니다.
+CI는 Windows x64(`windows-2022`, MSVC 런타임 정적 링크)와 macOS Apple Silicon(`macos-15`) 네이티브 러너에서 테스트와 릴리스 빌드를 수행합니다. macOS 앱은 ad-hoc 서명만 하며 Developer ID 서명과 Apple 공증은 하지 않습니다.
 
 - **아이콘 생성:** 원본은 `src-tauri/icons/icon.svg`(macOS용 정사각형)와 `icon-rounded.svg`(Windows `icon.ico` 및 `icon.png`용)입니다. 아이콘 원본을 수정한 경우 macOS에서 `python3 desktop/make_icons.py`를 실행해 아이콘 자산을 재생성합니다.
 - **서드파티 라이선스 고지:** 배포 ZIP과 macOS 앱 번들에는 `desktop/THIRD_PARTY_NOTICES.md`가 포함됩니다. `Cargo.lock` 의존성을 변경한 경우 아래 명령으로 macOS arm64와 Windows x64 프로덕션 의존성 트리를 확인해 문서를 갱신합니다.
@@ -171,8 +171,8 @@ done | sort -u
 
 ### 자동 빌드와 릴리스
 
-- `main` 브랜치 push 및 PR 시 Windows 빌드·테스트·패키징 워크플로([desktop.yml](../.github/workflows/desktop.yml))가 실행됩니다.
-- 앱 버전(`src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, `package.json` 세 곳의 버전이 일치해야 함)과 동일한 `v1.0.0` 형식의 태그를 push하면 빌드 및 체크섬 검증 후 GitHub Releases에 Windows ZIP과 `.zip.sha256` 파일이 자동 게시됩니다.
+- `main` 브랜치 push 및 PR 시 Windows·macOS 빌드·테스트·패키징 워크플로([desktop.yml](../.github/workflows/desktop.yml))가 실행됩니다.
+- 앱 버전(`src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, `package.json` 세 곳의 버전이 일치해야 함)과 동일한 `v1.0.0` 형식의 태그를 push하면 빌드 및 체크섬 검증 후 GitHub Releases에 Windows·macOS ZIP과 각각의 `.zip.sha256` 파일이 자동 게시됩니다.
 
 ### macOS에서 한 번에 빌드하고 실행
 
