@@ -89,9 +89,9 @@ export function deviceMenuItems({adb, list, error, androidError, iosError, loadi
     items.push(['기록할 기기를 선택해 주세요 · 지금부터 들어오는 로그를 기록합니다']);
   } else {
     items.push(['연결된 기기가 없습니다']);
-    if (!noAdb && !iosError) items.push(['Android 기기는 USB 디버깅을 켜고, iPhone·iPad는 케이블로 연결해 주세요']);
+    if (!noAdb && !iosError) items.push(['Android 기기는 USB 디버깅을 켜고, iPhone·iPad는 케이블이나 Wi-Fi로 연결해 주세요']);
     else if (!noAdb) items.push(['USB 디버깅을 켠 기기를 연결하거나 에뮬레이터를 실행해 주세요']);
-    else if (!iosError) items.push(['iPhone·iPad를 케이블로 연결해 주세요']);
+    else if (!iosError) items.push(['iPhone·iPad를 케이블이나 Wi-Fi로 연결해 주세요']);
   }
   const ios = devices.filter(d => d?.platform === 'ios'), android = devices.filter(d => d?.platform !== 'ios');
   const names = ios.map(deviceName);
