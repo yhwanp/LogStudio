@@ -8,6 +8,7 @@ use std::sync::{
 use tauri::{Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
 mod clipboard;
+mod devices;
 mod drag;
 mod filters;
 mod geometry;
@@ -28,9 +29,123 @@ impl Startup {
         );
     }
 }
+/// While a log shows a device capture, dropped files and closing the window
+/// wait for the page to ask about the capture's rows.
+#[derive(Default)]
+struct Held {
+    drop: Mutex<Option<(u64, Vec<std::path::PathBuf>)>>,
+    tokens: AtomicUsize,
+    /// When the page was asked about closing; it may close once it answers.
+    asked: Mutex<Option<std::time::Instant>>,
+    closing: AtomicBool,
+}
+/// A page that has not answered for this long lets the window close: the
+/// capture file then stays for the next run to offer.
+const CLOSE_ANSWER: std::time::Duration = std::time::Duration::from_secs(5);
+impl Held {
+    fn hold(&self, paths: Vec<std::path::PathBuf>) -> u64 {
+        let token = self.tokens.fetch_add(1, Ordering::AcqRel) as u64 + 1;
+        *self.drop.lock().unwrap() = Some((token, paths));
+        token
+    }
+    /// Whether closing waits for the page: once per question, until it
+    /// answers or stops answering.
+    fn delays_close(&self) -> bool {
+        if self.closing.load(Ordering::Acquire) {
+            return false;
+        }
+        let mut asked = self.asked.lock().unwrap();
+        match *asked {
+            Some(at) if at.elapsed() >= CLOSE_ANSWER => false,
+            Some(_) => true,
+            None => {
+                *asked = Some(std::time::Instant::now());
+                true
+            }
+        }
+    }
+}
+/// The app menu's Quit, which closes the window first as its close button
+/// does: a shown capture's unsaved rows are asked about before the app goes.
+/// The Dock's Quit and logging out still end the app at once; their capture
+/// files stay for the next run to offer.
+#[cfg(target_os = "macos")]
+const QUIT: &str = "logstudio-quit";
+#[cfg(target_os = "macos")]
+fn install_quit(app: &tauri::AppHandle) -> tauri::Result<()> {
+    use tauri::menu::MenuItem;
+    let Some(menu) = app.menu() else {
+        return Ok(());
+    };
+    let Some(app_menu) = menu
+        .items()?
+        .into_iter()
+        .find_map(|item| item.as_submenu().cloned())
+    else {
+        return Ok(());
+    };
+    let items = app_menu.items()?;
+    let Some((position, item)) = items.iter().enumerate().rev().find(|(_, item)| {
+        item.as_predefined_menuitem()
+            .is_some_and(|p| p.text().is_ok_and(|t| t.contains("Quit")))
+    }) else {
+        return Ok(());
+    };
+    app_menu.remove(item)?;
+    let name = &app.package_info().name;
+    let quit = MenuItem::with_id(app, QUIT, format!("Quit {name}"), true, Some("CmdOrCtrl+Q"))?;
+    app_menu.insert(&quit, position)
+}
+/// Quits by closing the window; the app ends with its last window.
+#[cfg(any(target_os = "macos", feature = "qa"))]
+fn quit(app: &tauri::AppHandle) {
+    match app.get_webview_window("main") {
+        Some(window) => {
+            let _ = window.close();
+        }
+        None => app.exit(0),
+    }
+}
+/// Opens dropped files as one log, off the event loop.
+fn open_dropped(app: &tauri::AppHandle, engine: &Arc<Engine>, paths: Vec<std::path::PathBuf>) {
+    let app = app.clone();
+    let engine = engine.clone();
+    let id = engine.begin_open();
+    std::thread::spawn(move || {
+        if let Err(error) = open_arranged(&app, &engine, id, paths) {
+            engine.emit_error(error);
+        }
+    });
+}
 /// Cancellation flag of the one export that may run at a time.
 #[derive(Default)]
 struct Exports(Mutex<Option<Arc<AtomicBool>>>);
+impl Exports {
+    /// Takes the one export slot until the returned export ends.
+    fn start(&self) -> Result<Running<'_>, String> {
+        let mut slot = self.0.lock().unwrap();
+        if slot.is_some() {
+            return Err("An export is already running".into());
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        *slot = Some(cancel.clone());
+        Ok(Running {
+            exports: self,
+            cancel,
+        })
+    }
+}
+/// A running export or save; `cancel` stops it, and dropping it frees the
+/// slot even when the request itself is dropped.
+struct Running<'a> {
+    exports: &'a Exports,
+    cancel: Arc<AtomicBool>,
+}
+impl Drop for Running<'_> {
+    fn drop(&mut self) {
+        *self.exports.0.lock().unwrap() = None;
+    }
+}
 static ACTIVE: AtomicUsize = AtomicUsize::new(0);
 struct Permit;
 impl Drop for Permit {
@@ -157,14 +272,8 @@ async fn export_results(
         Some("text") => (ExportKind::Text, Some(("텍스트", "txt"))),
         Some(_) => return Err("Invalid export format".into()),
     };
-    let cancel = Arc::new(AtomicBool::new(false));
-    {
-        let mut slot = exports.0.lock().unwrap();
-        if slot.is_some() {
-            return Err("An export is already running".into());
-        }
-        *slot = Some(cancel.clone());
-    }
+    let running = exports.start()?;
+    let cancel = running.cancel.clone();
     // The name only seeds the save dialog; the user chooses the location.
     let name: String = suggested_name
         .chars()
@@ -179,7 +288,7 @@ async fn export_results(
         .collect();
     let engine = state.0.clone();
     let app = window.app_handle().clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
+    tauri::async_runtime::spawn_blocking(move || {
         let mut dialog = app
             .dialog()
             .file()
@@ -218,10 +327,7 @@ async fn export_results(
             .map_err(message_or("Export failed"))
     })
     .await
-    .map_err(|_| "Export failed".to_string())
-    .and_then(|r| r);
-    *exports.0.lock().unwrap() = None;
-    result
+    .map_err(|_| "Export failed".to_string())?
 }
 #[tauri::command]
 fn cancel_export(window: tauri::WebviewWindow, exports: tauri::State<'_, Exports>) {
@@ -401,7 +507,12 @@ async fn work_state(window: tauri::WebviewWindow, dataset_id: u64) -> Result<Val
     Ok(work_info(window.app_handle(), dataset_id))
 }
 fn work_info(app: &tauri::AppHandle, id: u64) -> Value {
-    match app.state::<AppState>().0.grants(id) {
+    let engine = &app.state::<AppState>().0;
+    // A capture file is temporary and tied to its capture.
+    if engine.capture(id).is_some() {
+        return json!({"reopenable":false,"capture":true});
+    }
+    match engine.grants(id) {
         Some(grants) => app
             .state::<work::WorkStates>()
             .lookup(id, work::stamps(grants)),
@@ -421,6 +532,205 @@ async fn save_work_state(
     })
     .await
     .map_err(|_| "Request failed".to_string())?
+}
+/// The adb captures use: found where installers put it, or picked.
+#[tauri::command]
+async fn adb_status(window: tauri::WebviewWindow) -> Result<Value, String> {
+    main_window(&window)?;
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || app.state::<devices::Devices>().status())
+        .await
+        .map_err(|_| "Request failed".to_string())
+}
+#[tauri::command]
+async fn pick_adb(window: tauri::WebviewWindow) -> Result<Value, String> {
+    main_window(&window)?;
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let chosen = app
+            .dialog()
+            .file()
+            .set_title("adb 위치 지정")
+            .blocking_pick_file();
+        let Some(path) = chosen else {
+            return Ok(json!({"cancelled":true}));
+        };
+        let path = path
+            .into_path()
+            .map_err(|_| "Select a local file".to_string())?;
+        app.state::<devices::Devices>().pick(&path)
+    })
+    .await
+    .map_err(|_| "File dialog failed".to_string())?
+}
+#[tauri::command]
+async fn adb_devices(window: tauri::WebviewWindow) -> Result<Value, String> {
+    main_window(&window)?;
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || app.state::<devices::Devices>().list())
+        .await
+        .map_err(|_| "Request failed".to_string())?
+}
+/// Starts capturing a device of the last listing and shows its rows.
+#[tauri::command]
+async fn start_capture(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+    serial: String,
+) -> Result<Value, String> {
+    main_window(&window)?;
+    let engine = state.0.clone();
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let id = engine.begin_open();
+        let capture = match app.state::<devices::Devices>().start(&serial) {
+            Ok(capture) => capture,
+            Err(e) => {
+                engine.cancel_open(id);
+                return Err(e);
+            }
+        };
+        engine.open_capture(id, capture).map_err(message)
+    })
+    .await
+    .map_err(|_| "Request failed".to_string())?
+}
+#[tauri::command]
+async fn stop_capture(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+    dataset_id: u64,
+) -> Result<Value, String> {
+    main_window(&window)?;
+    let engine = state.0.clone();
+    tauri::async_runtime::spawn_blocking(move || engine.stop_capture(dataset_id).map_err(message))
+        .await
+        .map_err(|_| "Request failed".to_string())?
+}
+/// Saves a copy of the rows a capture recorded so far.
+#[tauri::command]
+async fn save_capture(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+    exports: tauri::State<'_, Exports>,
+    dataset_id: u64,
+) -> Result<Value, String> {
+    main_window(&window)?;
+    let capture = state
+        .0
+        .capture(dataset_id)
+        .ok_or("No device capture is open")?;
+    let running = exports.start()?;
+    let cancel = running.cancel.clone();
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let name = capture
+            .path()
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "logcat.log".into());
+        let chosen = app
+            .dialog()
+            .file()
+            .set_title("기기 로그 저장")
+            .set_file_name(&name)
+            .blocking_save_file();
+        let Some(path) = chosen else {
+            return Ok(json!({"cancelled":true}));
+        };
+        let path = path
+            .into_path()
+            .map_err(|_| "Select a local file".to_string())?;
+        let bytes = capture
+            .save(&path, &cancel)
+            .map_err(message_or("Save failed"))?;
+        Ok(json!({"bytes":bytes,"capture":capture.json()}))
+    })
+    .await
+    .map_err(|_| "Save failed".to_string())?
+}
+/// Whether closing the capture's log deletes its file: the user chose not
+/// to keep the rows.
+#[tauri::command]
+fn discard_capture(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+    dataset_id: u64,
+    discard: bool,
+) -> Result<(), String> {
+    main_window(&window)?;
+    let capture = state
+        .0
+        .capture(dataset_id)
+        .ok_or("No device capture is open")?;
+    capture.discard(discard);
+    Ok(())
+}
+#[tauri::command]
+fn capture_leftovers(window: tauri::WebviewWindow) -> Result<Value, String> {
+    main_window(&window)?;
+    Ok(window.state::<devices::Devices>().leftovers())
+}
+#[tauri::command]
+async fn open_leftover(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+    id: u64,
+) -> Result<Value, String> {
+    main_window(&window)?;
+    let engine = state.0.clone();
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let capture = app.state::<devices::Devices>().adopt(id)?;
+        let dataset = engine.begin_open();
+        engine.open_capture(dataset, capture).map_err(message)
+    })
+    .await
+    .map_err(|_| "Request failed".to_string())?
+}
+#[tauri::command]
+fn delete_leftover(window: tauri::WebviewWindow, id: u64) -> Result<Value, String> {
+    main_window(&window)?;
+    window.state::<devices::Devices>().remove(id)
+}
+/// Opens or drops the files that were dropped onto a capture's log.
+#[tauri::command]
+fn finish_drop(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+    token: u64,
+    open: bool,
+) -> Result<(), String> {
+    main_window(&window)?;
+    let held = window.state::<Held>();
+    let paths = {
+        let mut slot = held.drop.lock().unwrap();
+        match slot.take() {
+            Some((t, paths)) if t == token => paths,
+            other => {
+                *slot = other;
+                return Err("The dropped files are gone; drop them again".into());
+            }
+        }
+    };
+    if open {
+        open_dropped(window.app_handle(), &state.0, paths);
+    }
+    Ok(())
+}
+/// The page answered about closing: `close` closes the window, else it stays.
+#[tauri::command]
+fn answer_close(window: tauri::WebviewWindow, close: bool) -> Result<(), String> {
+    main_window(&window)?;
+    let held = window.state::<Held>();
+    *held.asked.lock().unwrap() = None;
+    if close {
+        held.closing.store(true, Ordering::Release);
+        window
+            .close()
+            .map_err(|_| "Could not close the window".to_string())?;
+    }
+    Ok(())
 }
 /// Saved filters, named by opaque ID; the page validates what it applies.
 #[tauri::command]
@@ -498,6 +808,68 @@ async fn qa_open_fixture(state: tauri::State<'_, AppState>, name: String) -> Res
         .await
         .map_err(|_| "QA grant failed".to_string())?
 }
+/// Chooses the app menu's Quit (QA builds only), as ⌘Q does; returns the
+/// app menu's item IDs so a run can see the Quit it chose is installed.
+#[cfg(feature = "qa")]
+#[tauri::command]
+fn qa_quit(app: tauri::AppHandle) -> Vec<String> {
+    let ids = app
+        .menu()
+        .and_then(|menu| menu.items().ok())
+        .and_then(|items| items.into_iter().find_map(|i| i.as_submenu().cloned()))
+        .and_then(|app_menu| app_menu.items().ok())
+        .map(|items| items.iter().map(|i| i.id().0.clone()).collect())
+        .unwrap_or_default();
+    quit(&app);
+    ids
+}
+/// Scripted devices instead of adb (QA builds only): `fake` lists a ready
+/// device that logs synthetic rows and one awaiting authorization;
+/// `unplug`, `plug`, `reboot`, `unauthorized` and `authorized` act on the
+/// ready one; `conflict` drops it while another adb version holds the
+/// server, which ends a capture; `missing` acts as if no adb were installed;
+/// `real` uses adb again.
+#[cfg(feature = "qa")]
+#[tauri::command]
+fn qa_devices(app: tauri::AppHandle, action: String) -> Result<(), String> {
+    use logstudio_core::capture::fake::FakeLink;
+    static FAKE: Mutex<Option<(Arc<FakeLink>, Arc<AtomicBool>)>> = Mutex::new(None);
+    const READY: &str = "emulator-5554";
+    let devices = app.state::<devices::Devices>();
+    let mut fake = FAKE.lock().unwrap();
+    match action.as_str() {
+        "fake" => {
+            if let Some((_, feeding)) = fake.take() {
+                feeding.store(true, Ordering::Release);
+            }
+            let link = FakeLink::new();
+            link.add(READY, "Pixel_8", "QA-PIXEL-8");
+            link.add("QA0SERIAL01", "Tablet_X1", "QA-TABLET");
+            link.set_state("QA0SERIAL01", "unauthorized");
+            let feeding = link.feed(READY, std::time::Duration::from_millis(150));
+            devices.replace(Some(devices::Replaced::Link(link.clone())));
+            *fake = Some((link, feeding));
+        }
+        "unplug" | "plug" | "reboot" | "conflict" | "unauthorized" | "authorized" => {
+            let (link, _) = fake.as_ref().ok_or("No fake devices")?;
+            match action.as_str() {
+                "unplug" => link.unplug(READY),
+                "plug" => link.plug(READY),
+                "unauthorized" => link.set_state(READY, "unauthorized"),
+                "authorized" => link.set_state(READY, "device"),
+                "conflict" => {
+                    link.conflict(true);
+                    link.unplug(READY);
+                }
+                _ => link.reboot(READY),
+            }
+        }
+        "missing" => devices.replace(Some(devices::Replaced::Missing)),
+        "real" => devices.replace(None),
+        _ => return Err("Unknown QA device action".into()),
+    }
+    Ok(())
+}
 /// A QA run in the background (QA builds only) keeps out of the way of the
 /// person at the desk: the app does not activate when it starts, has no Dock
 /// icon, and its window opens without focus below other windows. Its page is
@@ -570,10 +942,15 @@ fn main() {
         .manage(geometry::Geometry::default())
         .manage(work::WorkStates::default())
         .manage(filters::SavedFilters::default())
+        .manage(devices::Devices::default())
+        .manage(Held::default())
         .manage(Startup(Mutex::new(launch_error)))
         .setup(move |app| {
             #[cfg(target_os = "macos")]
-            clipboard::mac::install_menu(app.handle())?;
+            {
+                clipboard::mac::install_menu(app.handle())?;
+                install_quit(app.handle())?;
+            }
             let window =
                 tauri::WebviewWindowBuilder::from_config(app, &app.config().app.windows[0])?
                     .on_navigation(|url| {
@@ -599,6 +976,9 @@ fn main() {
             geometry.open(app.handle(), window)?;
             let engine = app.state::<AppState>().0.clone();
             let handle = app.handle().clone();
+            if let (Ok(data), Ok(cache)) = (app.path().app_data_dir(), app.path().app_cache_dir()) {
+                app.state::<devices::Devices>().load(&data, &cache);
+            }
             if let Ok(dir) = app.path().app_data_dir() {
                 app.state::<recent::Recent>().load(&dir);
                 app.state::<work::WorkStates>().load(&dir);
@@ -612,10 +992,10 @@ fn main() {
                 {
                     event["work"] = work_info(&handle, id);
                 }
-                let channel = if event["status"] == "query-progress" {
-                    "query-progress"
-                } else {
-                    "source-changed"
+                let channel = match event["status"].as_str() {
+                    Some("query-progress") => "query-progress",
+                    Some("capture") => "capture-changed",
+                    _ => "source-changed",
                 };
                 // Validation decides whether an expected file joins the recent list.
                 if let (Some(status @ ("validated" | "rollback")), Some(id)) =
@@ -649,6 +1029,8 @@ fn main() {
             #[cfg(target_os = "macos")]
             if event.id().as_ref() == clipboard::mac::PASTE {
                 clipboard::mac::menu_paste(app);
+            } else if event.id().as_ref() == QUIT {
+                quit(app);
             }
             #[cfg(not(target_os = "macos"))]
             let _ = (app, event);
@@ -664,15 +1046,14 @@ fn main() {
                     }
                     drag::Drag::Open(paths) => {
                         let _ = window.emit("drag-state", json!({"active":false}));
-                        // Several dropped files open as one log; heads are read
-                        // off the event loop.
-                        let app = window.app_handle().clone();
-                        let id = engine.begin_open();
-                        std::thread::spawn(move || {
-                            if let Err(error) = open_arranged(&app, &engine, id, paths) {
-                                engine.emit_error(error);
-                            }
-                        });
+                        // A capture's rows are asked about first.
+                        if engine.shown_capture().is_some() {
+                            let count = paths.len();
+                            let token = window.state::<Held>().hold(paths);
+                            let _ = window.emit("drop-held", json!({"token":token,"count":count}));
+                        } else {
+                            open_dropped(window.app_handle(), &engine, paths);
+                        }
                     }
                     drag::Drag::Ignore => {}
                 },
@@ -681,7 +1062,12 @@ fn main() {
                         .state::<geometry::Geometry>()
                         .changed(window.app_handle());
                 }
-                tauri::WindowEvent::CloseRequested { .. } => {
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    if engine.shown_capture().is_some() && window.state::<Held>().delays_close() {
+                        api.prevent_close();
+                        let _ = window.emit("close-held", json!({}));
+                        return;
+                    }
                     window
                         .state::<geometry::Geometry>()
                         .flush(window.app_handle());
@@ -718,6 +1104,20 @@ fn main() {
                 delete_filter,
                 reopen_source,
                 take_startup_error,
+                adb_status,
+                pick_adb,
+                adb_devices,
+                start_capture,
+                stop_capture,
+                save_capture,
+                discard_capture,
+                capture_leftovers,
+                open_leftover,
+                delete_leftover,
+                finish_drop,
+                answer_close,
+                qa_devices,
+                qa_quit,
                 qa_open_fixture,
                 qa_open_fixtures
             ]);
@@ -744,7 +1144,19 @@ fn main() {
             rename_filter,
             delete_filter,
             reopen_source,
-            take_startup_error
+            take_startup_error,
+            adb_status,
+            pick_adb,
+            adb_devices,
+            start_capture,
+            stop_capture,
+            save_capture,
+            discard_capture,
+            capture_leftovers,
+            open_leftover,
+            delete_leftover,
+            finish_drop,
+            answer_close
         ]);
     }
     #[allow(unused_mut)]
@@ -759,7 +1171,7 @@ fn main() {
     }
     app.run(|handle, event| {
         if matches!(event, tauri::RunEvent::Exit) {
-            // Quitting from the menu closes no window first.
+            // Quitting from the Dock or logging out closes no window first.
             handle.state::<geometry::Geometry>().flush(handle);
             handle.state::<AppState>().0.close();
         }

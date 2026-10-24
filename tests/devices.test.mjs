@@ -1,0 +1,258 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {setImmediate as nextTurn} from 'node:timers/promises';
+import {describeAdb, deviceProblem, deviceName, deviceMenuItems, describeCapture, captureBreaks, breakLabel, clockTime, shortDate, installCommand, mountDevices} from '../dist/devices.js';
+import {captureState} from '../dist/controller.js';
+
+async function settle() {for (let i = 0; i < 20; i++) await nextTurn();}
+const at = (h, m, s) => new Date(2026, 9, 24, h, m, s).getTime();
+
+test('capture states from the engine are checked; other logs have none', () => {
+  assert.equal(captureState(undefined), null);
+  assert.equal(captureState({state:'unknown'}), null);
+  const c = captureState({state:'waiting', device:'Pixel 8', serial:'emulator-5554', bytes:2048, error:7, lost:at(14, 2, 11), unsaved:true, recovered:'yes', breaks:[{row:3, lost:1, resumed:2, reboot:true}, {row:0}, {row:'x'}, null]});
+  assert.deepEqual(c, {state:'waiting', device:'Pixel 8', serial:'emulator-5554', bytes:2048, error:'', breaks:[{row:3, lost:1, resumed:2, reboot:true}], lost:at(14, 2, 11), reason:'', unsaved:true, recovered:false});
+});
+
+test('the device menu lists what adb sees, or why it sees nothing', () => {
+  const calls = [], actions = {refresh:() => calls.push('refresh'), pick:() => calls.push('pick'), help:() => calls.push('help'), start:serial => calls.push(serial)};
+  const labels = items => items.map(item => item && item[0]);
+  assert.deepEqual(labels(deviceMenuItems({loading:true}, actions)), ['기기를 찾는 중…']);
+  const missing = deviceMenuItems({adb:{found:false}}, actions);
+  assert.deepEqual(labels(missing), ['adb를 찾지 못했습니다', 'Android SDK Platform-Tools를 설치하면 기기 로그를 볼 수 있습니다', null, '설치 방법 보기…', '다시 찾기', 'adb 위치 지정…']);
+  missing[3][1](); assert.deepEqual(calls, ['help']);
+  const adb = {found:true, origin:'studio', version:'37.0.1'};
+  assert.equal(describeAdb(adb), 'adb 37.0.1 · Android Studio');
+  const none = deviceMenuItems({adb, list:[]}, actions);
+  assert.deepEqual(labels(none), ['연결된 기기가 없습니다', 'USB 디버깅을 켠 기기를 연결하거나 에뮬레이터를 실행해 주세요', null, '새로 고침', 'adb 위치 지정…']);
+  assert.equal(none[4][2], '지금 쓰는 adb: adb 37.0.1 · Android Studio');
+  const list = [{serial:'emulator-5554', state:'device', model:'Pixel_8'}, {serial:'QA0SERIAL02', state:'unauthorized', model:''}, {serial:'X', state:'offline', model:'Tablet_X1'}];
+  const items = deviceMenuItems({adb:{...adb, chosenFailed:true}, list}, actions);
+  assert.deepEqual(labels(items).slice(0, 5), ['지정한 adb를 실행할 수 없어 자동으로 찾은 adb를 씁니다', '기록할 기기를 선택해 주세요 · 지금부터 들어오는 로그를 기록합니다', 'Pixel 8 · emulator-5554', 'QA0SERIAL02 · 기기 화면에서 USB 디버깅을 허용해 주세요', 'Tablet X1 · 오프라인 · 기기를 다시 연결해 주세요']);
+  assert.equal(items[3][1], null, 'a device not ready cannot be chosen');
+  assert.deepEqual(items[3][3], {disabled:true}, 'but its reason is reachable');
+  items[2][1](); assert.deepEqual(calls.slice(-1), ['emulator-5554']);
+  assert.match(labels(deviceMenuItems({adb, error:'Device not found; refresh the device list'}, actions))[0], /기기 목록을 새로 고쳐/);
+  assert.equal(deviceProblem({state:'no permissions'}), 'USB 권한이 없습니다');
+  assert.equal(deviceProblem({state:'recovery'}), '준비되지 않음 (recovery)');
+  assert.equal(deviceName({serial:'S', model:''}), 'S');
+});
+
+test('the capture bar names each state; breaks name where the device left and came back', () => {
+  const base = {device:'Pixel 8', bytes:3 * 1048576, unsaved:true, breaks:[]};
+  // Unsaved rows are named; a state leads with what to know or do.
+  assert.equal(describeCapture({...base, state:'recording'}).text, '기록 중 · Pixel 8 · 저장 안 됨');
+  assert.equal(describeCapture({...base, state:'recording', bytes:0}).text, '기록 중 · Pixel 8');
+  const waiting = describeCapture({...base, state:'waiting', lost:at(14, 2, 11)});
+  assert.equal(waiting.text, '연결 끊김 · 다시 연결을 기다리는 중 · Pixel 8');
+  assert.equal(waiting.tone, 'waiting'); assert.match(waiting.title, /^14:02:11에 연결이 끊겼습니다/);
+  const approve = describeCapture({...base, state:'waiting', lost:at(14, 2, 11), reason:'Allow USB debugging on the device, then retry'});
+  assert.equal(approve.text, '연결 끊김 · USB 디버깅을 허용해 주세요 · Pixel 8');
+  // The app retries on its own: the tooltip says what to do, not to retry.
+  assert.equal(approve.title, '14:02:11에 연결이 끊겼습니다. 기기 화면에서 USB 디버깅을 허용해 주세요. 준비되면 이어서 기록합니다.');
+  assert.equal(waiting.title, '14:02:11에 연결이 끊겼습니다. 기기가 다시 연결되면 이어서 기록합니다.');
+  assert.equal(describeCapture({...base, state:'stopped', unsaved:false}).text, '기록 중지됨 · Pixel 8 · 저장함');
+  assert.equal(describeCapture({...base, state:'stopped'}).text, '기록 중지됨 · Pixel 8 · 저장 안 됨');
+  assert.match(describeCapture({...base, state:'stopped'}).title, /지금까지 기록한 로그\(3\.0 MiB\)를 저장할 수 있습니다/);
+  assert.equal(describeCapture({...base, state:'stopped', recovered:true}).text, '남은 기기 로그 · 저장 안 됨');
+  assert.equal(describeCapture({...base, state:'stopped', recovered:true, unsaved:false}).text, '남은 기기 로그 · 저장함');
+  // A failure's reason is a sentence: the bar keeps it to its title.
+  const failed = describeCapture({...base, state:'failed', error:'Recording stopped: not enough disk space'});
+  assert.equal(failed.text, '기록 중단 · Pixel 8 · 저장 안 됨');
+  assert.match(failed.title, /^디스크 공간이 부족해 기록을 멈췄습니다\. 그때까지 기록한 로그는/);
+  assert.equal(describeCapture(null), null);
+  const breaks = captureBreaks({breaks:[{row:400, lost:at(15, 0, 0), resumed:at(15, 0, 40), reboot:true}, {row:120, lost:at(14, 2, 11), resumed:at(14, 2, 35), reboot:false}, {row:'x'}]});
+  assert.deepEqual(breaks.map(b => b.row), [120, 400]);
+  assert.equal(breakLabel(breaks, 119, 120), '14:02:11 연결 끊김 → 14:02:35 다시 연결');
+  assert.equal(breakLabel(breaks, 120, 121), '');
+  assert.equal(breakLabel(breaks, 399, 400), '15:00:00 연결 끊김 → 15:00:40 다시 연결 · 기기 재부팅');
+  // A filter that hides a break's first row moves its mark to the next row
+  // shown; breaks between two shown rows read as one.
+  assert.equal(breakLabel(breaks, 100, 130), '14:02:11 연결 끊김 → 14:02:35 다시 연결');
+  assert.equal(breakLabel(breaks, 0, 500), '14:02:11–15:00:40 연결 끊김 2번 · 기기 재부팅');
+  assert.deepEqual(captureBreaks(null), []);
+  assert.equal(shortDate(at(9, 54, 32)), '10-24 09:54');
+  assert.equal(shortDate(null), '');
+  assert.equal(clockTime('x'), '');
+  assert.equal(installCommand('MacIntel'), 'brew install --cask android-platform-tools');
+  assert.equal(installCommand('Win32'), 'winget install Google.PlatformTools');
+});
+
+class Element {
+  constructor(document, tag = 'div', id = '') {
+    Object.assign(this, {ownerDocument:document, tagName:tag.toUpperCase(), id, listeners:new Map(), isConnected:true, hidden:false, disabled:false, textContent:'', title:'', dataset:{}, children:[], className:'', type:''});
+  }
+  addEventListener(name, fn) {(this.listeners.get(name) ?? this.listeners.set(name, []).get(name)).push(fn);}
+  fire(name, event = {}) {let prevented = false; const full = {target:this, preventDefault() {prevented = true;}, stopPropagation() {}, ...event}; for (const fn of this.listeners.get(name) ?? []) fn(full); return {prevented};}
+  focus() {this.ownerDocument.activeElement = this;}
+  setAttribute(name, value) {(this.attributes ??= {})[name] = String(value);}
+  getAttribute(name) {return this.attributes?.[name] ?? null;}
+  get classList() {
+    const names = () => new Set(this.className.split(' ').filter(Boolean));
+    return {
+      contains:name => names().has(name),
+      toggle:(name, on) => {const set = names(); if (on ?? !set.has(name)) set.add(name); else set.delete(name); this.className = [...set].join(' '); return set.has(name);},
+    };
+  }
+  append(...nodes) {this.children.push(...nodes);}
+  replaceChildren(...nodes) {this.children = nodes;}
+  getBoundingClientRect() {return {left:10, bottom:40};}
+}
+class Dialog extends Element {
+  constructor(document, id) {super(document, 'dialog', id); this.open = false;}
+  showModal() {this.open = true;}
+  close() {if (!this.open) return; this.open = false; this.fire('close');}
+}
+// A page with the device parts, a scripted native side and log state.
+function rig({state = {}, answers = {}} = {}) {
+  const document = {activeElement:null, body:null};
+  const elements = new Map();
+  document.getElementById = id => {
+    if (!elements.has(id)) elements.set(id, ['captureDialog', 'adbDialog'].includes(id) ? new Dialog(document, id) : new Element(document, 'div', id));
+    return elements.get(id);
+  };
+  document.createElement = tag => new Element(document, tag);
+  document.body = new Element(document, 'body');
+  const ui = Object.fromEntries(['deviceButton', 'emptyDevice', 'captureBar', 'captureState', 'captureText', 'captureStop', 'captureSave', 'captureLeftovers', 'leftoverList', 'rowMenu', 'openFile'].map(id => [id, document.getElementById(id)]));
+  const calls = [], listeners = {}, menus = [], notes = [], reports = [];
+  const native = {
+    core:{invoke:async (command, args) => {
+      calls.push([command, args]);
+      const answer = answers[command];
+      // Tauri rejects with the native error text.
+      if (answer instanceof Error) throw answer.message;
+      return typeof answer === 'function' ? answer(args) : answer;
+    }},
+    event:{listen:async (name, fn) => {listeners[name] = fn;}},
+  };
+  const logs = {state:{datasetId:7, closed:false, capture:null, ...state}, getState() {return this.state;}, start:async () => calls.push(['poll'])};
+  const menu = {show:(items, x, y, label) => {ui.rowMenu.hidden = false; menus.push({items, x, y, label});}, close:() => {ui.rowMenu.hidden = true;}};
+  const timers = [];
+  const window = {navigator:{platform:'MacIntel'}, setTimeout:(fn, ms) => {timers.push(fn); return timers.length;}, clearTimeout:() => {}};
+  const devices = mountDevices({ui, document, window, native, menu, logs, isGone:() => false, report:m => reports.push(m), notify:m => notes.push(m)});
+  return {document, ui, calls, listeners, menus, notes, reports, logs, devices, dialog:document.getElementById('captureDialog'), $:document.getElementById, timers};
+}
+const unsaved = {state:'recording', device:'Pixel 8', bytes:4096, unsaved:true, breaks:[]};
+
+test('a capture with unsaved rows asks; others close without a question', async () => {
+  let r = rig();
+  assert.equal(await r.devices.guard(), 'none');
+  r = rig({state:{capture:{...unsaved, unsaved:false}}});
+  assert.equal(await r.devices.guard(), 'none');
+  assert.deepEqual(r.calls.filter(c => c[0] !== 'capture_leftovers'), [], 'a saved capture is no question');
+  // 저장 안 함 marks the file to go with the log.
+  r = rig({state:{capture:unsaved}});
+  let answer = r.devices.guard(); await settle();
+  assert.equal(r.dialog.open, true);
+  assert.match(r.$('captureDialogNote').textContent, /^Pixel 8에서 기록한 로그\(4\.0 KiB\)가 아직 저장되지 않았습니다\. 저장\u00a0안\u00a0함을 누르면 지워집니다\.$/);
+  r.$('captureDiscard').fire('click');
+  assert.equal(await answer, 'asked');
+  assert.deepEqual(r.calls.at(-1), ['discard_capture', {datasetId:7, discard:true}]);
+  // 취소 keeps everything.
+  r = rig({state:{capture:unsaved}});
+  answer = r.devices.guard(); await settle(); r.$('captureCancel').fire('click');
+  assert.equal(await answer, 'cancel');
+  assert.equal(r.calls.some(c => c[0] === 'discard_capture'), false);
+  // 저장… saves first; a cancelled save dialog keeps the log.
+  r = rig({state:{capture:unsaved}, answers:{save_capture:{cancelled:true}}});
+  answer = r.devices.guard(); await settle(); r.$('captureForm').fire('submit');
+  assert.equal(await answer, 'cancel');
+  assert.equal(r.calls.some(c => c[0] === 'discard_capture'), false);
+  r = rig({state:{capture:unsaved}, answers:{save_capture:{bytes:4096}}});
+  answer = r.devices.guard(); await settle(); r.$('captureForm').fire('submit');
+  assert.equal(await answer, 'asked');
+  assert.deepEqual(r.calls.filter(c => c[0].endsWith('_capture')).map(c => c[0]), ['save_capture', 'discard_capture']);
+  assert.match(r.notes.at(-1), /기기 로그\(4\.0 KiB\)를 저장했습니다/);
+});
+
+test('dropped files and closing the window wait for the answer', async () => {
+  const r = rig({state:{capture:unsaved}});
+  await settle();
+  void r.listeners['drop-held']({payload:{token:3, count:2}}); await settle();
+  r.$('captureCancel').fire('click'); await settle();
+  assert.deepEqual(r.calls.at(-1), ['finish_drop', {token:3, open:false}]);
+  void r.listeners['drop-held']({payload:{token:4, count:1}}); await settle();
+  r.$('captureDiscard').fire('click'); await settle();
+  assert.deepEqual(r.calls.at(-1), ['finish_drop', {token:4, open:true}]);
+  void r.listeners['close-held']({payload:{}}); await settle();
+  r.$('captureCancel').fire('click'); await settle();
+  assert.deepEqual(r.calls.at(-1), ['answer_close', {close:false}]);
+  r.logs.state = {...r.logs.state, capture:{...unsaved, unsaved:false}};
+  void r.listeners['close-held']({payload:{}}); await settle();
+  assert.deepEqual(r.calls.at(-1), ['answer_close', {close:true}]);
+});
+
+test('the device menu fills in as adb answers, and a failed start keeps the shown capture file', async () => {
+  const r = rig({state:{capture:{...unsaved, unsaved:false}}, answers:{
+    adb_status:{found:true, origin:'studio', version:'37.0.1'},
+    adb_devices:{devices:[{serial:'emulator-5554', state:'device', model:'Pixel_8'}]},
+    start_capture:new Error('Allow USB debugging on the device, then retry'),
+  }});
+  await r.devices.openMenu(r.ui.deviceButton);
+  assert.deepEqual(r.menus.map(m => m.items[0][0]), ['기기를 찾는 중…', '기록할 기기를 선택해 주세요 · 지금부터 들어오는 로그를 기록합니다']);
+  assert.deepEqual([r.menus[1].x, r.menus[1].y, r.menus[1].label], [10, 44, 'Android 기기']);
+  r.menus[1].items[1][1](); await settle();
+  assert.deepEqual(r.calls.filter(c => ['start_capture', 'discard_capture'].includes(c[0])), [['start_capture', {serial:'emulator-5554'}], ['discard_capture', {datasetId:7, discard:false}]]);
+  assert.equal(r.reports.at(-1), 'Allow USB debugging on the device, then retry');
+  // Without adb the menu says how to get it.
+  const none = rig({answers:{adb_status:{found:false}}});
+  await none.devices.openMenu(none.ui.emptyDevice);
+  assert.equal(none.menus.at(-1).items[0][0], 'adb를 찾지 못했습니다');
+  none.menus.at(-1).items[3][1]();
+  assert.equal(none.$('adbDialog').open, true);
+  assert.equal(none.$('adbCommand').textContent, 'brew install --cask android-platform-tools');
+});
+
+test('the capture bar shows the shown capture and its actions', () => {
+  const r = rig({state:{capture:unsaved}});
+  r.ui.openFile.className = 'button primary';
+  r.devices.render();
+  assert.equal(r.ui.captureBar.hidden, false);
+  assert.equal(r.ui.captureBar.dataset.tone, 'live');
+  assert.equal(r.ui.captureText.textContent, '기록 중 · Pixel 8 · 저장 안 됨');
+  assert.equal(r.ui.captureStop.hidden, false);
+  // Unsaved rows make saving the main action instead of opening a log.
+  assert.equal(r.ui.captureSave.classList.contains('primary'), true);
+  assert.equal(r.ui.openFile.classList.contains('primary'), false);
+  assert.match(r.ui.captureSave.title, /\(⌘S\)$/);
+  r.devices.render({datasetId:7, closed:false, capture:{...unsaved, state:'stopped', unsaved:false}});
+  assert.equal(r.ui.captureStop.hidden, true);
+  assert.equal(r.ui.captureSave.classList.contains('primary'), false);
+  assert.equal(r.ui.openFile.classList.contains('primary'), true);
+  r.devices.render({datasetId:7, closed:true, capture:unsaved});
+  assert.equal(r.ui.captureBar.hidden, true);
+  assert.equal(r.ui.openFile.classList.contains('primary'), true);
+});
+
+test('saving a capture can be stopped while it copies', async () => {
+  let finish;
+  const r = rig({state:{capture:unsaved}, answers:{save_capture:() => new Promise((_, reject) => {finish = reject;}), cancel_export:null}});
+  const saved = r.devices.save();
+  assert.equal(r.ui.captureSave.textContent, '저장 취소');
+  r.ui.captureSave.fire('click'); await settle();
+  assert.deepEqual(r.calls.filter(c => c[0] === 'cancel_export'), [['cancel_export', undefined]]);
+  finish('Save cancelled');
+  assert.equal(await saved, false);
+  assert.deepEqual(r.notes, ['저장을 취소했습니다.'], 'a stopped save is news, not an error');
+  assert.deepEqual(r.reports, []);
+  assert.equal(r.ui.captureSave.textContent, '저장…');
+});
+
+test('files left by an earlier run open, or go after a second press', async () => {
+  const left = [{id:5, name:'logcat-Pixel_8-20261024-101500.log', size:2048, modified:at(10, 15, 0)}];
+  const r = rig({answers:{capture_leftovers:() => left, delete_leftover:() => [], open_leftover:{}}});
+  await settle();
+  assert.equal(r.ui.captureLeftovers.hidden, false);
+  const [row] = r.ui.leftoverList.children, [open, remove] = row.children;
+  assert.equal(open.children[0].textContent, 'logcat-Pixel_8-20261024-101500.log');
+  assert.equal(remove.getAttribute('aria-label'), 'logcat-Pixel_8-20261024-101500.log 삭제');
+  assert.equal(open.children[1].textContent, '2.0 KiB · 10-24 10:15');
+  remove.fire('click'); await settle();
+  assert.equal(remove.textContent, '삭제 확인');
+  assert.match(remove.getAttribute('aria-label'), /삭제 확인 · 한 번 더 누르면 지웁니다$/);
+  assert.equal(r.calls.some(c => c[0] === 'delete_leftover'), false);
+  remove.fire('click'); await settle();
+  assert.deepEqual(r.calls.find(c => c[0] === 'delete_leftover'), ['delete_leftover', {id:5}]);
+  open.fire('click'); await settle();
+  assert.deepEqual(r.calls.find(c => c[0] === 'open_leftover'), ['open_leftover', {id:5}]);
+});

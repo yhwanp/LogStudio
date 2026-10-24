@@ -11,12 +11,14 @@ class Element {
   fire(key, event={}) {for (const fn of this.listeners[key] ?? []) fn({preventDefault() {}, stopPropagation() {}, ...event});}
   focus() {this.document.activeElement = this;}
   contains(node) {return node === this || this.children.includes(node);}
+  getBoundingClientRect() {return {width:120, height:80};}
   click() {this.fire('click');}
   // Only the selectors the menu uses.
   querySelector(selector) {return this.querySelectorAll(selector)[0] ?? null;}
   querySelectorAll(selector) {
     if (selector === '[aria-checked=true]') return this.children.filter(c => c.attributes['aria-checked'] === 'true');
     if (selector === '[role^=menuitem]') return this.children.filter(c => c.attributes.role?.startsWith('menuitem'));
+    if (selector === '[role^=menuitem]:not([aria-disabled=true])') return this.children.filter(c => c.attributes.role?.startsWith('menuitem') && c.attributes['aria-disabled'] !== 'true');
     return [];
   }
 }
@@ -54,4 +56,26 @@ test('a menu of notes only takes focus itself so Escape closes it', () => {
   assert.equal(r.document.activeElement, r.menu); assert.equal(r.menu.tabIndex, -1);
   r.menu.fire('keydown', {key:'Escape'});
   assert.equal(r.menu.hidden, true); assert.equal(r.document.activeElement, r.opener);
+});
+
+test('a menu shown again while open returns focus to its first opener', () => {
+  // The device menu shows "looking…" and then the devices it found.
+  const r = rig();
+  r.popup.show([['Looking…', null]], 0, 0, 'Devices');
+  assert.equal(r.document.activeElement, r.menu);
+  r.popup.show([['Pixel 8', () => {}]], 0, 0, 'Devices');
+  r.menu.fire('keydown', {key:'Escape'});
+  assert.equal(r.document.activeElement, r.opener);
+});
+
+test('an item that cannot be chosen is reached but does nothing', () => {
+  const r = rig(), picked = [];
+  r.popup.show([['Tablet · allow USB debugging', null, undefined, {disabled:true}], ['Pixel 8', () => picked.push('pixel')]], 0, 0, 'Devices');
+  const [tablet, pixel] = r.menu.children;
+  assert.deepEqual([tablet.tagName, tablet.attributes.role, tablet.attributes['aria-disabled']], ['BUTTON', 'menuitem', 'true']);
+  assert.equal(r.document.activeElement, pixel, 'focus starts on an item that can be chosen');
+  r.menu.fire('keydown', {key:'ArrowDown'});
+  assert.equal(r.document.activeElement, tablet, 'arrow keys reach it');
+  tablet.click();
+  assert.deepEqual(picked, []); assert.equal(r.menu.hidden, false);
 });

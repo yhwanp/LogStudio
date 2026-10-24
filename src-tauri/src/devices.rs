@@ -1,0 +1,284 @@
+//! Android device captures for the window: the adb that runs, the devices it
+//! lists and the temporary capture files. The page names a device by a
+//! serial of the last listing and a leftover file by an ID; paths stay here.
+use logstudio_core::{
+    capture::{
+        adb::{self, Adb, Origin},
+        cli::AdbCli,
+        link::{Device, Link},
+        store::Store,
+        Capture, Options,
+    },
+    source::public_message,
+};
+use serde_json::{json, Value};
+use std::{
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+    time::UNIX_EPOCH,
+};
+
+#[derive(Default)]
+pub struct Devices {
+    /// `adb.json`, which names the adb the user picked.
+    settings: Mutex<Option<PathBuf>>,
+    store: Mutex<Option<Arc<Store>>>,
+    /// The adb found last.
+    adb: Mutex<Option<Adb>>,
+    /// The last listing: captures start only on its devices.
+    listed: Mutex<Vec<Device>>,
+    leftovers: Mutex<Leftovers>,
+    /// What QA builds use instead of adb.
+    replaced: Mutex<Option<Replaced>>,
+}
+/// Leftover files by the IDs the page has, and the ID the next one gets.
+#[derive(Default)]
+struct Leftovers {
+    files: Vec<(u64, PathBuf)>,
+    next: u64,
+}
+/// A scripted link, or none as when no adb is installed (QA builds; other
+/// builds never replace adb).
+#[derive(Clone)]
+#[cfg_attr(not(feature = "qa"), allow(dead_code))]
+pub enum Replaced {
+    Missing,
+    Link(Arc<dyn Link>),
+}
+/// Why no device can be listed or captured, for the page.
+pub const NO_ADB: &str = "adb was not found; install Android SDK Platform-Tools";
+const NOT_LISTED: &str = "Device not found; refresh the device list";
+fn message(e: std::io::Error) -> String {
+    public_message(&e, "adb failed; check the device connection and retry")
+}
+impl Devices {
+    pub fn load(&self, data: &Path, cache: &Path) {
+        *self.settings.lock().unwrap() = Some(data.join("adb.json"));
+        *self.store.lock().unwrap() = Some(Arc::new(Store::new(cache.join("captures"))));
+    }
+    fn store(&self) -> Result<Arc<Store>, String> {
+        self.store
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| "Capture files are unavailable".into())
+    }
+    /// The adb the user picked, if any.
+    fn chosen(&self) -> Option<PathBuf> {
+        let file = self.settings.lock().unwrap().clone()?;
+        let stored: Value = serde_json::from_slice(&std::fs::read(file).ok()?).ok()?;
+        Some(PathBuf::from(stored["path"].as_str()?)).filter(|p| p.is_absolute())
+    }
+    /// Remembers the adb the user picked, replacing the file atomically.
+    fn choose(&self, path: &Path) -> Result<(), String> {
+        let file = self.settings.lock().unwrap().clone();
+        let file = file.ok_or("Could not save the adb location")?;
+        write_atomically(&file, &json!({"path":path}))
+            .map_err(|_| "Could not save the adb location".to_string())
+    }
+    /// Looks for adb again: the picked one first, then where installers
+    /// put it.
+    pub fn locate(&self) -> Option<Adb> {
+        let chosen = self.chosen();
+        let list = adb::candidates(chosen.as_deref(), |k| std::env::var_os(k));
+        let found = adb::locate(&list, adb::CHECK_TIMEOUT);
+        *self.adb.lock().unwrap() = found.clone();
+        found
+    }
+    /// The adb in use, for the page; `chosenFailed` when the picked file
+    /// no longer runs and another adb is used.
+    pub fn status(&self) -> Value {
+        match self.replaced.lock().unwrap().clone() {
+            Some(Replaced::Missing) => return json!({"found":false,"chosenFailed":false}),
+            Some(Replaced::Link(_)) => {
+                return json!({"found":true,"origin":"studio","version":"37.0.1","chosenFailed":false})
+            }
+            None => {}
+        }
+        let picked = self.chosen().is_some();
+        match self.locate() {
+            Some(adb) => {
+                let mut v = adb.json();
+                v["found"] = json!(true);
+                v["chosenFailed"] = json!(picked && adb.origin != Origin::Chosen);
+                v
+            }
+            None => json!({"found":false,"chosenFailed":picked}),
+        }
+    }
+    /// Uses `path` as adb when it runs as one.
+    pub fn pick(&self, path: &Path) -> Result<Value, String> {
+        if adb::check(path, adb::CHECK_TIMEOUT).is_none() {
+            return Err("The selected file is not adb".into());
+        }
+        self.choose(path)?;
+        Ok(self.status())
+    }
+    /// Uses a scripted link, or none, instead of adb (QA builds).
+    #[cfg_attr(not(feature = "qa"), allow(dead_code))]
+    pub fn replace(&self, with: Option<Replaced>) {
+        *self.replaced.lock().unwrap() = with;
+    }
+    fn link(&self) -> Result<Arc<dyn Link>, String> {
+        match self.replaced.lock().unwrap().clone() {
+            Some(Replaced::Missing) => return Err(NO_ADB.into()),
+            Some(Replaced::Link(link)) => return Ok(link),
+            None => {}
+        }
+        let known = self.adb.lock().unwrap().clone();
+        let adb = known.or_else(|| self.locate()).ok_or(NO_ADB)?;
+        Ok(Arc::new(AdbCli::new(&adb.path)))
+    }
+    /// The devices adb lists now; captures may start on them.
+    pub fn list(&self) -> Result<Value, String> {
+        let devices = match self.link()?.devices() {
+            Ok(devices) => devices,
+            // A moved or removed adb is looked for again once.
+            Err(_) if self.replaced.lock().unwrap().is_none() && self.locate().is_some() => {
+                self.link()?.devices().map_err(message)?
+            }
+            Err(e) => return Err(message(e)),
+        };
+        let page: Vec<Value> = devices.iter().map(Device::json).collect();
+        *self.listed.lock().unwrap() = devices;
+        Ok(json!({"devices":page}))
+    }
+    /// Starts capturing a listed device into a new temporary file.
+    pub fn start(&self, serial: &str) -> Result<Arc<Capture>, String> {
+        let device = self
+            .listed
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|d| d.serial == serial)
+            .cloned()
+            .ok_or(NOT_LISTED)?;
+        let link = self.link()?;
+        let slot = self.store()?.create(device.name()).map_err(message)?;
+        Capture::start(link, serial, slot, Options::default()).map_err(message)
+    }
+    /// Capture files left by earlier runs, under IDs for the page.
+    pub fn leftovers(&self) -> Value {
+        let Ok(store) = self.store() else {
+            return json!([]);
+        };
+        let found = store.leftovers();
+        let mut known = self.leftovers.lock().unwrap();
+        known.files.clear();
+        let list: Vec<Value> = found
+            .into_iter()
+            .map(|l| {
+                known.next += 1;
+                let id = known.next;
+                known.files.push((id, l.path));
+                let modified = l
+                    .modified
+                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                    .map(|d| d.as_millis() as u64);
+                json!({"id":id,"name":l.name,"size":l.size,"modified":modified})
+            })
+            .collect();
+        json!(list)
+    }
+    fn leftover(&self, id: u64) -> Result<PathBuf, String> {
+        let known = self.leftovers.lock().unwrap();
+        known
+            .files
+            .iter()
+            .find(|(k, _)| *k == id)
+            .map(|(_, p)| p.clone())
+            .ok_or_else(|| "The capture file is gone".into())
+    }
+    /// A leftover held again, to be shown as a stopped capture.
+    pub fn adopt(&self, id: u64) -> Result<Arc<Capture>, String> {
+        let path = self.leftover(id)?;
+        let slot = self.store()?.adopt(&path).map_err(message)?;
+        Capture::adopt(slot).map_err(message)
+    }
+    /// Deletes a leftover; returns the leftovers that remain.
+    pub fn remove(&self, id: u64) -> Result<Value, String> {
+        let path = self.leftover(id)?;
+        self.store()?
+            .remove(&path)
+            .map_err(|_| "Could not delete the capture file".to_string())?;
+        Ok(self.leftovers())
+    }
+}
+/// Writes `value` as JSON to `file` through a partial file beside it, so a
+/// reader never sees half of it.
+fn write_atomically(file: &Path, value: &Value) -> std::io::Result<()> {
+    if let Some(dir) = file.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let partial = file.with_extension("json.partial");
+    std::fs::write(&partial, serde_json::to_vec(value)?)?;
+    std::fs::rename(&partial, file)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn devices(dir: &Path) -> Devices {
+        let d = Devices::default();
+        d.load(&dir.join("data"), &dir.join("cache"));
+        d
+    }
+
+    #[test]
+    fn a_picked_adb_is_kept_only_when_it_runs_as_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = devices(dir.path());
+        assert_eq!(d.chosen(), None);
+        let other = dir.path().join("not-adb");
+        std::fs::write(&other, b"text").unwrap();
+        assert!(d.pick(&other).is_err());
+        assert_eq!(d.chosen(), None);
+        // A temporary folder is an absolute path on every system.
+        let adb = dir.path().join("sdk/platform-tools/adb");
+        d.choose(&adb).unwrap();
+        assert_eq!(d.chosen(), Some(adb));
+        // Another app replaced the file meanwhile, or it is malformed.
+        std::fs::write(
+            dir.path().join("data/adb.json"),
+            b"{\"path\":\"relative/adb\"}",
+        )
+        .unwrap();
+        assert_eq!(d.chosen(), None);
+        std::fs::write(dir.path().join("data/adb.json"), b"[").unwrap();
+        assert_eq!(d.chosen(), None);
+    }
+
+    #[test]
+    fn captures_start_only_on_listed_devices() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = devices(dir.path());
+        assert_eq!(d.start("emulator-5554").err().as_deref(), Some(NOT_LISTED));
+    }
+
+    #[test]
+    fn leftovers_are_named_by_ids_and_deleted_by_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = devices(dir.path());
+        assert_eq!(d.leftovers(), json!([]));
+        let store = d.store().unwrap();
+        let slot = store.create("Pixel 8").unwrap();
+        std::fs::write(&slot.path, b"row\n").unwrap();
+        let path = slot.path.clone();
+        drop(slot);
+        let list = d.leftovers();
+        assert_eq!(list.as_array().unwrap().len(), 1);
+        assert_eq!(list[0]["size"], 4);
+        assert!(list[0].get("path").is_none());
+        let id = list[0]["id"].as_u64().unwrap();
+        // Shown again, it is held and no leftover.
+        let again = d.adopt(id).unwrap();
+        assert_eq!(d.leftovers(), json!([]));
+        assert!(d.remove(id).is_err());
+        drop(again);
+        let id = d.leftovers()[0]["id"].as_u64().unwrap();
+        assert_eq!(d.remove(id).unwrap(), json!([]));
+        assert!(!path.exists());
+        assert!(d.remove(id).is_err());
+    }
+}

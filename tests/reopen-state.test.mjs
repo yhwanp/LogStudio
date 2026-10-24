@@ -19,6 +19,8 @@ class Element {
   removeAttribute(key){delete this.attributes[key];}
   contains(node){return this===node||this.children.some(child=>child.contains(node));}
   focus(){if(this.ownerDocument)this.ownerDocument.activeElement=this;}
+  getBoundingClientRect(){return {left:0,top:0,right:0,bottom:0,width:0,height:0};}
+  querySelectorAll(selector){return selector==='[role^=menuitem]'?this.children.filter(child=>child.attributes.role?.startsWith('menuitem')):[];}
   setAttribute(key,value){this.attributes[key]=String(value);}
   addEventListener(key,handler){(this.listeners[key]??=[]).push(handler);}
   dispatch(key,event={}){return Promise.all((this.listeners[key]??[]).map(fn=>fn(event)));}

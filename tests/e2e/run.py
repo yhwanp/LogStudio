@@ -27,7 +27,7 @@ from harness import App  # noqa: E402
 
 # Run order: quick UI checks first, slow and window-moving ones last.
 SCENARIOS = ['basics', 'time_filter', 'bookmarks', 'field_filters', 'saved_filters', 'conditions', 'formats', 'dlt', 'entries', 'tips', 'launch',
-             'multi_file', 'follow', 'reopen', 'zoom', 'window', 'row_numbers']
+             'multi_file', 'follow', 'devices', 'reopen', 'zoom', 'window', 'row_numbers']
 
 
 class Context:

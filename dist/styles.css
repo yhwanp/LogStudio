@@ -5,6 +5,7 @@
   --text:#182b43;--text-2:#26394e;--muted:#617087;--faint:#8a98a9;
   --border:#dbe2e9;--border-strong:#cdd7e1;--row-border:#edf1f5;
   --navy:#14263b;--navy-text:#e8eef4;--navy-muted:#9fb1c4;--brand:#59e0c5;--topbar-edge:transparent;
+  --navy-warn:#f0c560;--navy-warn-text:#f6d88f;--navy-error:#ff8f9f;--navy-error-text:#ffb3be;
   --accent:#0b7568;--on-accent:#fff;--accent-text:#0a6357;--accent-soft:#e4f3f0;--accent-border:#86bdb4;--focus:#5ab9ac;
   --row-hover:#f0f8f6;--row-selected:#dff4ef;--row-range:#ecf7f4;--row-error:#fff7f8;
   --raw-text:#7c725d;--mark:#f7dc8b;--mark-text:inherit;--search-hit:#d4a514;--search-hit-bg:#fbefc4;
@@ -63,11 +64,28 @@ kbd{font:11px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;border:1px so
 .brand{display:flex;gap:9px;align-items:center;flex-shrink:0}
 .brand-mark{font-family:monospace;font-size:26px;color:var(--brand);line-height:1}
 h1{font-size:16px;font-weight:650;letter-spacing:-.02em;margin:0}
-.file-info{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:3px;border-left:1px solid #ffffff1f;padding-left:16px;height:34px}
+.file-info{flex:1;min-width:0;overflow:hidden;display:flex;flex-direction:column;justify-content:center;gap:3px;border-left:1px solid #ffffff1f;padding-left:16px;height:34px}
 .file-text{display:flex;align-items:baseline;gap:10px;min-width:0}
 .file-text strong{font-size:13px;font-weight:600;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;min-width:0}
 .file-size{font-size:12px;color:var(--navy-muted);white-space:nowrap;font-variant-numeric:tabular-nums}
 .file-status{font-size:12px;color:var(--navy-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:1;min-width:0}
+/* A device capture in the top bar: its state, and stopping or saving it.
+   The bar is navy in both schemes. Its words shrink before its buttons and
+   end in an ellipsis; the file name beside it gives way first. */
+.capture-bar{--tone:var(--navy-muted);display:flex;align-items:center;gap:8px;flex-shrink:1;min-width:0}
+.capture-bar[data-tone=live]{--tone:var(--brand)}
+.capture-bar[data-tone=waiting]{--tone:var(--navy-warn)}
+.capture-bar[data-tone=failed]{--tone:var(--navy-error)}
+.capture-state{position:relative;display:flex;align-items:center;gap:7px;min-width:0;max-width:340px;font-size:12px;font-weight:600;color:var(--navy-text)}
+.capture-bar[data-tone=waiting] .capture-state{color:var(--navy-warn-text)}
+.capture-bar[data-tone=failed] .capture-state{color:var(--navy-error-text)}
+.capture-text{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.capture-state::before,.capture-state::after{content:'';flex-shrink:0;width:8px;height:8px;border-radius:50%;background:var(--tone)}
+/* While recording a ring spreads from the dot. */
+.capture-state::after{position:absolute;left:0;top:50%;margin-top:-4px;opacity:0}
+.capture-bar[data-tone=live] .capture-state::after{animation:capture-ping 1.6s ease-out infinite}
+@keyframes capture-ping{from{transform:scale(1);opacity:.55}to{transform:scale(2.6);opacity:0}}
+@media(prefers-reduced-motion:reduce){.capture-bar[data-tone=live] .capture-state::after{animation:none}}
 .load-progress{height:3px;border-radius:2px;background:#ffffff1f;overflow:hidden;max-width:420px}
 .load-progress>span{display:block;height:100%;width:0;background:var(--brand);transition:width .2s linear}
 .top-actions{display:flex;align-items:center;gap:8px;flex-shrink:0}
@@ -314,6 +332,12 @@ h2{font-size:16px;margin:0;font-weight:650}
 .file-badge{display:inline-block;min-width:16px;margin-right:4px;padding:0 3px;border-radius:4px;background:var(--surface-3);color:var(--muted);font-size:10px;font-weight:700;line-height:15px;text-align:center;vertical-align:1px}
 /* The first row of each later file of a combined log marks the boundary. */
 .log-row.file-start{box-shadow:inset 0 2px var(--accent-border)}
+/* Where a capture's device left and came back: a dashed line, unlike a
+   file's solid one, labeled with when. The label sits in the gap between the
+   two rows' text and is only drawn: the log itself is unchanged. */
+.log-row.capture-break{position:relative}
+.log-row.capture-break::before{content:'';position:absolute;left:0;right:0;top:-1px;height:2px;background:repeating-linear-gradient(90deg,var(--muted) 0 6px,transparent 6px 11px);pointer-events:none}
+.log-row.capture-break::after{content:attr(data-capture-break);position:absolute;left:calc(var(--line-column) + 6px);top:-7px;padding:0 7px;border:1px solid var(--border-strong);border-radius:7px;background:var(--surface);color:var(--muted);font:600 10.5px/12px Inter,"Noto Sans KR",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;white-space:nowrap;pointer-events:none}
 .timestamp{font-size:12px;color:var(--muted)}
 .pid,.tid,.uptime,.ecu,.apid,.ctid{font-size:12px;color:var(--muted)}
 .uptime{text-align:right;font-variant-numeric:tabular-nums}
@@ -376,6 +400,10 @@ mark{background:var(--mark);color:var(--mark-text);padding:0;border-radius:2px}
 .recent-open span{font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .recent-remove{background:none;color:var(--faint);font-size:16px;width:34px;height:34px;border-radius:6px;margin-right:4px}
 .recent-remove:hover{background:var(--surface-3);color:var(--text)}
+.leftover-note{margin:0 0 8px;text-align:left}
+.leftover-remove{background:none;color:var(--muted);font-size:12px;font-weight:600;padding:5px 10px;margin-right:6px;border-radius:6px;white-space:nowrap}
+.leftover-remove:hover{background:var(--error-bg);color:var(--error-text)}
+.leftover-remove[data-armed]{background:var(--error-text);color:var(--surface)}
 .toast{position:absolute;right:16px;bottom:14px;background:var(--navy);color:var(--navy-text);border:1px solid #ffffff1f;font-size:13px;padding:8px 14px;border-radius:8px;box-shadow:0 6px 20px #0003;z-index:5;pointer-events:none;white-space:nowrap}
 .toast.has-action{display:flex;align-items:center;gap:14px;padding:5px 8px 5px 14px;pointer-events:auto}
 .toast-action{background:none;color:var(--brand);font-size:13px;font-weight:600;padding:3px 6px;border-radius:5px}
@@ -407,7 +435,11 @@ mark{background:var(--mark);color:var(--mark-text);padding:0;border-radius:2px}
 .row-menu>button[role=menuitemradio]{position:relative;padding-left:28px}
 .row-menu>button[aria-checked=true]{font-weight:600}
 .row-menu>button[aria-checked=true]::before{content:'';position:absolute;left:12px;top:50%;width:4px;height:8px;margin-top:-6px;border:solid currentColor;border-width:0 2px 2px 0;transform:rotate(45deg)}
-.row-menu>.menu-note{margin:0;padding:5px 10px;font-size:12px;line-height:1.5;color:var(--muted);white-space:normal}
+.row-menu>.menu-note{margin:0;padding:5px 10px;font-size:12px;line-height:1.5;color:var(--muted);white-space:normal;word-break:keep-all;overflow-wrap:anywhere}
+/* An item that cannot be chosen still takes focus, so its reason is read. */
+.row-menu>button[aria-disabled=true]{color:var(--muted);cursor:default;white-space:normal;word-break:keep-all;overflow-wrap:anywhere}
+.row-menu>button[aria-disabled=true]:hover{background:none;color:var(--muted)}
+.row-menu>button[aria-disabled=true]:focus-visible{background:var(--surface-3);color:var(--text-2)}
 /* Naming a saved filter: a small modal form. */
 .name-dialog{padding:18px 20px 16px;border:1px solid var(--border-strong);border-radius:10px;background:var(--surface);color:var(--text);box-shadow:0 18px 50px #0006;width:min(400px,calc(100vw - 32px))}
 .name-dialog::backdrop{background:#0a121999}
@@ -416,6 +448,15 @@ mark{background:var(--mark);color:var(--mark-text);padding:0;border-radius:2px}
 .name-dialog .small-note{margin:0}
 .name-dialog .field-error{margin:0 0 6px}
 .dialog-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
+.dialog-gap{flex:1}
+/* Getting adb: install steps with copyable lines. */
+.adb-dialog{width:min(600px,calc(100vw - 32px))}
+.adb-dialog h2{margin-bottom:8px}
+.adb-steps{margin:14px 0 6px;padding-left:20px;font-size:13px;line-height:1.6;color:var(--text-2)}
+.adb-steps li+li{margin-top:12px}
+.adb-steps li::marker{color:var(--muted);font-weight:600}
+.adb-line{display:flex;align-items:center;gap:8px;min-width:0;margin-top:6px}
+.adb-line code{flex:1;min-width:0;padding:6px 10px;border-radius:6px;background:var(--surface-3);border:1px solid var(--border);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;user-select:all;overflow-wrap:anywhere}
 /* Confirming that a paste replaces the open log. The form fills the box, so
    a press on the dialog itself is a press on the backdrop. */
 .paste-dialog{padding:0}

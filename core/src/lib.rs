@@ -1,3 +1,4 @@
+pub mod capture;
 pub mod dataset;
 pub mod dlt;
 pub mod encoding;
@@ -7,6 +8,7 @@ pub mod order;
 pub mod parser;
 pub mod search;
 pub mod source;
+use capture::Capture;
 use dataset::{Dataset, ExportKind};
 use search::{Filter, Filters};
 use serde_json::{json, Value};
@@ -21,6 +23,10 @@ struct State {
     active: Option<Arc<Dataset>>,
     previous: Option<Arc<Dataset>>,
     sequence: u64,
+    /// Whether `previous` was followed when it was kept.
+    followed_previous: bool,
+    /// Device captures by the dataset that shows their file.
+    captures: Vec<(u64, Arc<Capture>)>,
 }
 /// Receives every engine notification.
 type Observer = Arc<dyn Fn(Value) + Send + Sync>;
@@ -109,9 +115,11 @@ impl Engine {
                 if let Some(old) = old {
                     let index = old.index.lock().unwrap();
                     let valid = index.done && index.error.is_empty();
+                    let live = index.live;
                     drop(index);
                     if valid {
                         s.previous = Some(old);
+                        s.followed_previous = live;
                         None
                     } else {
                         Some(old)
@@ -125,7 +133,7 @@ impl Engine {
             (obsolete, d)
         };
         if let Some(old) = obsolete.take() {
-            old.close();
+            self.retire(old);
         }
         // A query's terminal notification checks the active dataset. Do not
         // hold that lock while suspension joins its worker.
@@ -145,6 +153,10 @@ impl Engine {
                     .as_ref()
                     .is_some_and(|d| d.id == id);
                 if current {
+                    let mut state = state;
+                    if let Some(c) = engine.capture(id) {
+                        state["capture"] = c.json();
+                    }
                     engine.emit(json!({"status":"query-progress","pane":if pane==0{"logs"}else{"search"},"state":state}));
                 }
             }
@@ -156,25 +168,30 @@ impl Engine {
                 e.finish(id, valid);
             }
         });
-        Ok(d.status(0))
+        Ok(self.status_of(&d, 0))
     }
     fn finish(&self, id: u64, valid: bool) {
-        let discarded = {
+        let (discarded, followed) = {
             let mut s = self.state.lock().unwrap();
             if s.active.as_ref().is_none_or(|d| d.id != id) {
                 return;
             }
+            let followed = std::mem::take(&mut s.followed_previous);
             if valid {
-                s.previous.take()
+                (s.previous.take(), false)
             } else {
                 let failed = s.active.take();
                 s.active = s.previous.take();
-                failed
+                (failed, followed)
             }
         };
-        if !valid {
-            if let Some(previous) = self.state.lock().unwrap().active.clone() {
-                previous.resume();
+        let active = self.state.lock().unwrap().active.clone();
+        if let Some(d) = active {
+            if !valid {
+                self.revive(&d, followed);
+            } else if d.id == id {
+                // A capture's rows arrive after its file opened.
+                self.follow_capture(&d);
             }
         }
         let (message, file) = discarded
@@ -186,7 +203,7 @@ impl Engine {
             })
             .unwrap_or_default();
         if let Some(d) = discarded {
-            d.close();
+            self.retire(d);
         }
         let mut event =
             json!({"status":if valid{"validated"}else{"rollback"},"error":message,"datasetId":id});
@@ -198,7 +215,7 @@ impl Engine {
     }
     pub fn cancel_open(&self, id: u64) {
         let _gate = self.open_gate.lock().unwrap();
-        let discarded = {
+        let (discarded, followed) = {
             let mut s = self.state.lock().unwrap();
             if s.sequence != id {
                 return;
@@ -209,16 +226,17 @@ impl Engine {
             {
                 let failed = s.active.take();
                 s.active = s.previous.take();
-                failed
+                (failed, std::mem::take(&mut s.followed_previous))
             } else {
-                None
+                (None, false)
             }
         };
-        if let Some(previous) = self.state.lock().unwrap().active.clone() {
-            previous.resume();
+        let previous = self.state.lock().unwrap().active.clone();
+        if let Some(previous) = previous {
+            self.revive(&previous, followed);
         }
         if let Some(d) = discarded {
-            d.close();
+            self.retire(d);
             self.emit(json!({"status":"rollback","error":"Opening cancelled","datasetId":id}));
         }
     }
@@ -227,13 +245,111 @@ impl Engine {
         let (a, b) = {
             let mut s = self.state.lock().unwrap();
             s.sequence += 1;
+            s.followed_previous = false;
             (s.active.take(), s.previous.take())
         };
         if let Some(d) = a {
-            d.close();
+            self.retire(d);
         }
         if let Some(d) = b {
-            d.close();
+            self.retire(d);
+        }
+    }
+    /// Shows a started capture's file as dataset `id`, following it while
+    /// the capture records. Closing the dataset stops the capture.
+    pub fn open_capture(self: &Arc<Self>, id: u64, capture: Arc<Capture>) -> io::Result<Value> {
+        let source = match Source::granted(capture.path()) {
+            Ok(source) => source,
+            Err(e) => {
+                capture.stop();
+                return Err(e);
+            }
+        };
+        let weak = Arc::downgrade(self);
+        capture.observe(move |c| {
+            let Some(engine) = weak.upgrade() else { return };
+            let active = engine.state.lock().unwrap().active.clone();
+            let Some(d) = active.filter(|d| d.id == id) else {
+                return;
+            };
+            // The rows the capture wrote last complete the dataset, even
+            // one whose following was paused.
+            if !c.live() {
+                engine.follow_capture(&d);
+            }
+            engine.emit(json!({"status":"capture","datasetId":id,"capture":c.json()}));
+        });
+        self.state
+            .lock()
+            .unwrap()
+            .captures
+            .push((id, capture.clone()));
+        let opened = self.install(id, source);
+        if opened.is_err() {
+            let mut s = self.state.lock().unwrap();
+            s.captures.retain(|(d, _)| *d != id);
+            drop(s);
+            capture.stop();
+        }
+        opened
+    }
+    /// The capture dataset `id` shows, open or kept for rollback.
+    pub fn capture(&self, id: u64) -> Option<Arc<Capture>> {
+        let s = self.state.lock().unwrap();
+        s.captures
+            .iter()
+            .find(|(d, _)| *d == id)
+            .map(|(_, c)| c.clone())
+    }
+    /// The capture the shown log holds, with the log's dataset ID.
+    pub fn shown_capture(&self) -> Option<(u64, Arc<Capture>)> {
+        let id = self.state.lock().unwrap().active.as_ref()?.id;
+        Some((id, self.capture(id)?))
+    }
+    /// Stops the capture dataset `id` shows; its rows stay shown.
+    pub fn stop_capture(&self, id: u64) -> io::Result<Value> {
+        let c = self
+            .capture(id)
+            .ok_or_else(|| error("No device capture is open"))?;
+        c.stop();
+        Ok(c.json())
+    }
+    /// A dataset's status with its capture's.
+    fn status_of(&self, d: &Dataset, pane: usize) -> Value {
+        let mut status = d.status(pane);
+        if let Some(c) = self.capture(d.id) {
+            status["capture"] = c.json();
+        }
+        status
+    }
+    /// Closes a dataset, then the capture it shows, which may delete its
+    /// file once nothing reads it.
+    fn retire(&self, d: Arc<Dataset>) {
+        let capture = {
+            let mut s = self.state.lock().unwrap();
+            let k = s.captures.iter().position(|(id, _)| *id == d.id);
+            k.map(|k| s.captures.remove(k).1)
+        };
+        d.close();
+        if let Some(c) = capture {
+            c.close();
+        }
+    }
+    /// Resumes a dataset kept for rollback. A capture that was followed is
+    /// followed again: its rows arrived meanwhile.
+    fn revive(&self, d: &Arc<Dataset>, followed: bool) {
+        d.resume();
+        if followed {
+            self.follow_capture(d);
+        }
+    }
+    /// Follows a capture's file; one that ended is read to its end.
+    fn follow_capture(&self, d: &Arc<Dataset>) {
+        let Some(c) = self.capture(d.id) else { return };
+        let _ = d.follow(true);
+        // A capture that ended meanwhile does not turn following off again.
+        if !c.live() {
+            let _ = d.follow(false);
         }
     }
     /// Exports a pane's completed results to `path` through a temporary file
@@ -339,7 +455,9 @@ impl Engine {
         };
         let d = self.state.lock().unwrap().active.clone();
         if action == "status" {
-            return Ok(d.map(|d| d.status(pane)).unwrap_or(json!({"empty":true})));
+            return Ok(d
+                .map(|d| self.status_of(&d, pane))
+                .unwrap_or(json!({"empty":true})));
         }
         if action == "close" {
             self.close();
@@ -354,7 +472,7 @@ impl Engine {
                 .as_bool()
                 .ok_or_else(|| error("Invalid follow"))?;
             d.follow(on)?;
-            return Ok(d.status(pane));
+            return Ok(self.status_of(&d, pane));
         }
         let id = v["queryId"]
             .as_u64()
