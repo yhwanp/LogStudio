@@ -1,4 +1,4 @@
-//! Capture checks against a real iPhone or iPad connected by USB and
+//! Capture checks against a real iPhone or iPad connected by USB or Wi-Fi and
 //! trusted, run by hand:
 //!
 //! cargo test -p logstudio-core --test ios_device -- --ignored --test-threads 1 --nocapture

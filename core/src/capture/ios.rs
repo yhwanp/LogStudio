@@ -43,6 +43,9 @@ const FAILED: &str = "Could not reach the device; check its connection and retry
 const SERVICE: &str = "com.apple.os_trace_relay";
 /// How long one device request may take.
 const TIMEOUT: Duration = Duration::from_secs(5);
+/// How long describing one listed device may take within `TIMEOUT`, so a
+/// Wi-Fi device that stopped answering cannot hide the others.
+const DESCRIBE_TIMEOUT: Duration = Duration::from_secs(3);
 /// The name the device's logs give this app's requests.
 const LABEL: &str = "LogStudio";
 
@@ -282,7 +285,8 @@ impl Stream for IosStream {
 }
 
 /// Apple's device service, which lists and reaches iPhones and iPads
-/// connected by USB. A device is named by its UDID however it connects.
+/// connected by USB or Wi-Fi. A device is named by its UDID however it
+/// connects.
 #[derive(Default)]
 pub struct IosLink {
     addr: UsbmuxdAddr,
@@ -325,12 +329,20 @@ fn io_error(e: IdeviceError) -> io::Error {
         _ => error(FAILED),
     }
 }
-/// The devices connected by USB, each once.
-fn usb(list: Vec<UsbmuxdDevice>) -> Vec<UsbmuxdDevice> {
+/// The devices connected by USB or Wi-Fi, each once. A device on both is
+/// reached through USB.
+fn reachable(list: Vec<UsbmuxdDevice>) -> Vec<UsbmuxdDevice> {
     let mut found: Vec<UsbmuxdDevice> = vec![];
     for d in list {
-        if d.connection_type == Connection::Usb && !found.iter().any(|f| f.udid == d.udid) {
-            found.push(d);
+        let usb = match d.connection_type {
+            Connection::Usb => true,
+            Connection::Network(_) => false,
+            Connection::Unknown(_) => continue,
+        };
+        match found.iter_mut().find(|f| f.udid == d.udid) {
+            Some(f) if usb => *f = d,
+            Some(_) => {}
+            None => found.push(d),
         }
     }
     found
@@ -356,15 +368,19 @@ async fn value(lockdown: &mut LockdownClient, key: &str) -> String {
         Err(_) => String::new(),
     }
 }
-/// The listed device's names and whether a capture can start on it.
-async fn describe(addr: &UsbmuxdAddr, d: UsbmuxdDevice) -> Device {
-    let provider = d.to_provider(addr.clone(), LABEL);
-    let mut device = Device {
-        serial: d.udid,
+/// A listed device that cannot be described.
+fn offline(udid: String) -> Device {
+    Device {
+        serial: udid,
         state: "offline".into(),
         platform: Platform::Ios,
         ..Device::default()
-    };
+    }
+}
+/// The listed device's names and whether a capture can start on it.
+async fn describe(addr: UsbmuxdAddr, d: UsbmuxdDevice) -> Device {
+    let provider = d.to_provider(addr, LABEL);
+    let mut device = offline(d.udid);
     let Ok(mut lockdown) = LockdownClient::connect(&provider).await else {
         return device;
     };
@@ -429,7 +445,7 @@ async fn start(provider: &UsbmuxdProvider) -> io::Result<Idevice> {
 impl IosLink {
     async fn listed(&self) -> io::Result<Vec<UsbmuxdDevice>> {
         let mut mux = self.addr.connect(0).await.map_err(|_| error(NO_SERVICE))?;
-        Ok(usb(mux.get_devices().await.map_err(io_error)?))
+        Ok(reachable(mux.get_devices().await.map_err(io_error)?))
     }
 }
 impl Link for IosLink {
@@ -438,9 +454,25 @@ impl Link for IosLink {
     }
     fn devices(&self) -> io::Result<Vec<Device>> {
         request(async {
+            // Side by side, each within its own time: a device that does not
+            // answer is offline instead of failing the whole list.
+            let tasks: Vec<_> = self
+                .listed()
+                .await?
+                .into_iter()
+                .map(|d| {
+                    let udid = d.udid.clone();
+                    let described = describe(self.addr.clone(), d);
+                    let task = tokio::spawn(tokio::time::timeout(DESCRIBE_TIMEOUT, described));
+                    (udid, task)
+                })
+                .collect();
             let mut devices = vec![];
-            for d in self.listed().await? {
-                devices.push(describe(&self.addr, d).await);
+            for (udid, task) in tasks {
+                devices.push(match task.await {
+                    Ok(Ok(device)) => device,
+                    _ => offline(udid),
+                });
             }
             Ok(devices)
         })
@@ -664,6 +696,122 @@ mod tests {
             ("U", "", "plain message")
         );
         assert_eq!(rows[0].time, "05:02:11.482913");
+    }
+
+    #[test]
+    fn wifi_devices_are_listed_once_and_usb_wins() {
+        let at = |udid: &str, device_id, connection_type| UsbmuxdDevice {
+            connection_type,
+            udid: udid.into(),
+            device_id,
+        };
+        let wifi = || Connection::Network("192.0.2.7".parse().unwrap());
+        let list = reachable(vec![
+            at("QA0UDID0000000000000001", 1, wifi()),
+            at("QA0UDID0000000000000002", 2, wifi()),
+            at("QA0UDID0000000000000001", 3, Connection::Usb),
+            at("QA0UDID0000000000000001", 4, wifi()),
+            at(
+                "QA0UDID0000000000000003",
+                5,
+                Connection::Unknown("Bluetooth".into()),
+            ),
+        ]);
+        let got: Vec<_> = list
+            .iter()
+            .map(|d| (d.udid.as_str(), d.device_id))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("QA0UDID0000000000000001", 3),
+                ("QA0UDID0000000000000002", 2)
+            ]
+        );
+    }
+
+    /// A device service that lists `udids` as Wi-Fi devices and never
+    /// answers a connection to them, as for a device that went out of range.
+    #[cfg(unix)]
+    fn silent_service(dir: &std::path::Path, udids: &[&str]) -> UsbmuxdAddr {
+        use std::{io::Read, os::unix::net::UnixListener};
+        let path = dir.join("usbmuxd");
+        let listener = UnixListener::bind(&path).unwrap();
+        let list: Vec<plist::Value> = udids
+            .iter()
+            .enumerate()
+            .map(|(i, udid)| {
+                let mut properties = plist::Dictionary::new();
+                properties.insert("ConnectionType".into(), "Network".into());
+                // A sockaddr_in as macOS gives it: length, AF_INET, port,
+                // then 192.0.2.7.
+                let address = vec![0x10, 2, 0, 0, 192, 0, 2, 7, 0, 0, 0, 0, 0, 0, 0, 0];
+                properties.insert("NetworkAddress".into(), plist::Value::Data(address));
+                properties.insert("SerialNumber".into(), (*udid).into());
+                let mut device = plist::Dictionary::new();
+                device.insert("DeviceID".into(), (i as u64 + 1).into());
+                device.insert("MessageType".into(), "Attached".into());
+                device.insert("Properties".into(), properties.into());
+                device.into()
+            })
+            .collect();
+        let mut reply = plist::Dictionary::new();
+        reply.insert("DeviceList".into(), list.into());
+        let mut body = vec![];
+        plist::Value::Dictionary(reply)
+            .to_writer_xml(&mut body)
+            .unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let (Ok(mut stream), body) = (stream, body.clone()) else {
+                    return;
+                };
+                std::thread::spawn(move || {
+                    let mut header = [0; 16];
+                    if stream.read_exact(&mut header).is_err() {
+                        return;
+                    }
+                    let len = u32::from_le_bytes([header[0], header[1], header[2], header[3]]);
+                    let mut request = vec![0; len as usize - 16];
+                    if stream.read_exact(&mut request).is_err() {
+                        return;
+                    }
+                    let request: plist::Dictionary = plist::from_bytes(&request).unwrap();
+                    if request.get("MessageType").and_then(plist::Value::as_string)
+                        == Some("ListDevices")
+                    {
+                        let mut out = ((16 + body.len()) as u32).to_le_bytes().to_vec();
+                        out.extend(1u32.to_le_bytes());
+                        out.extend(8u32.to_le_bytes());
+                        out.extend_from_slice(&header[12..]);
+                        out.extend(&body);
+                        let _ = stream.write_all(&out);
+                    }
+                    // Connections stay unanswered until the client leaves.
+                    let _ = io::copy(&mut stream, &mut io::sink());
+                });
+            }
+        });
+        UsbmuxdAddr::UnixSocket(path.to_string_lossy().into_owned())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn wifi_devices_that_do_not_answer_are_offline_without_hiding_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let udids = ["QA0UDID0000000000000001", "QA0UDID0000000000000002"];
+        let link = IosLink {
+            addr: silent_service(dir.path(), &udids),
+        };
+        let at = std::time::Instant::now();
+        let devices = link.devices().unwrap();
+        // One after another, the two would take longer than the request may.
+        assert!(at.elapsed() < TIMEOUT, "{:?}", at.elapsed());
+        let got: Vec<_> = devices
+            .iter()
+            .map(|d| (d.serial.as_str(), d.state.as_str()))
+            .collect();
+        assert_eq!(got, [(udids[0], "offline"), (udids[1], "offline")]);
     }
 
     #[cfg(unix)]

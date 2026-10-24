@@ -28,11 +28,11 @@ test('the device menu lists what adb and Apple\'s device service see, or why the
   assert.equal(missing[1][2], 'QA iPhone의 로그를 지금부터 기록합니다', 'an iPhone is not named by its UDID');
   assert.equal(missing[1][3].key, iphone.serial, 'focus follows it when the menu is listed again');
   missing[1][1](); missing[3][1](); assert.deepEqual(calls, [iphone.serial, 'help']);
-  assert.deepEqual(labels(deviceMenuItems({adb:{found:false}, list:[]}, actions)).slice(0, 2), ['연결된 기기가 없습니다', 'iPhone·iPad를 케이블로 연결해 주세요']);
+  assert.deepEqual(labels(deviceMenuItems({adb:{found:false}, list:[]}, actions)).slice(0, 2), ['연결된 기기가 없습니다', 'iPhone·iPad를 케이블이나 Wi-Fi로 연결해 주세요']);
   const adb = {found:true, origin:'studio', version:'37.0.1'};
   assert.equal(describeAdb(adb), 'adb 37.0.1 · Android Studio');
   const none = deviceMenuItems({adb, list:[]}, actions);
-  assert.deepEqual(labels(none), ['연결된 기기가 없습니다', 'Android 기기는 USB 디버깅을 켜고, iPhone·iPad는 케이블로 연결해 주세요', null, '새로 고침', 'adb 위치 지정…']);
+  assert.deepEqual(labels(none), ['연결된 기기가 없습니다', 'Android 기기는 USB 디버깅을 켜고, iPhone·iPad는 케이블이나 Wi-Fi로 연결해 주세요', null, '새로 고침', 'adb 위치 지정…']);
   assert.equal(none[4][2], '지금 쓰는 adb: adb 37.0.1 · Android Studio');
   // Without Apple's device service (Windows without Apple Devices or
   // iTunes), one item leads to getting it; other failures are said as they are.
