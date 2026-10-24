@@ -1,10 +1,12 @@
 // Device captures, of Android devices through adb and of iPhones and iPads
 // through Apple's device service: the device menu, the capture bar, how to
-// get adb, the question before a capture's unsaved rows go, and the capture
-// files an earlier run left. Native code owns adb, the devices and the
+// get adb, the question before a capture's unsaved rows go, starting a
+// developer build on the iPhone being recorded, and the capture files an
+// earlier run left. Native code owns adb, the devices, the apps and the
 // files; the page names a device by the serial of the last listing (an
-// iPhone's UDID) and a left file by an ID. A capture's rows are a temporary
-// file until the user saves them.
+// iPhone's UDID), an app by its bundle in the last app listing and a left
+// file by an ID. A capture's rows are a temporary file until the user saves
+// them.
 import {formatSize, describeLogError} from './describe.js';
 import {textSpan, writeClipboard} from './dom.js';
 
@@ -112,6 +114,30 @@ export function deviceMenuItems({adb, list, error, androidError, iosError, loadi
   if (missing.length) items.push(null, ...missing);
   return items.concat(footer);
 }
+// Native code's word for a computer without Xcode, and where to get it.
+export const NO_XCODE = 'Starting an app needs Xcode; install it from the App Store';
+export const XCODE_URL = 'https://apps.apple.com/app/xcode/id497799835';
+// The app menu's items (menu.js) for an iPhone or iPad being recorded: its
+// developer builds. One started from here runs anew, and its rows keep the
+// values they would otherwise give as <private>. An app's rows carry its
+// executable's name, which may not be its name.
+export function appMenuItems({list, error, loading}, actions) {
+  if (loading) return [['앱을 찾는 중…']];
+  const footer = [null, ['새로 고침', actions.refresh]];
+  if (error === NO_XCODE) return [[describeLogError(error)], ['Xcode 설치 주소 복사', actions.copyXcode, 'App Store의 Xcode 페이지 주소를 복사합니다'], ...footer];
+  if (error) return [[describeLogError(error)], ...footer];
+  const apps = (Array.isArray(list) ? list : []).filter(app => typeof app?.bundle === 'string' && app.bundle);
+  if (!apps.length) return [['이 기기에 개발용으로 서명한 앱이 없습니다'], ...footer];
+  const items = [['실행할 앱을 선택해 주세요 · 실행 중이면 종료하고 다시 시작합니다'], ['기기 잠금을 풀어 두어야 실행됩니다']];
+  for (const app of apps) {
+    const name = String(app.name || app.bundle), version = app.version ? ` ${app.version}` : '';
+    const process = typeof app.executable === 'string' && app.executable && app.executable !== name ? app.executable : '';
+    const title = `${name}${version}${process ? ` · 로그의 프로세스 이름: ${process}` : ''}`;
+    // The bundle, often long, takes a second line so the name stays whole.
+    items.push([name, () => actions.launch(app), title, {...(process ? {detail:process} : {}), note:app.bundle, key:app.bundle}]);
+  }
+  return items.concat(footer);
+}
 // What a waiting capture needs of a device that is listed again: words for
 // the bar, and what to do for its tooltip. The app retries on its own.
 // `back`: the device is plugged in again and waits on the person.
@@ -133,7 +159,7 @@ export function describeCapture(capture) {
     case 'recording':
       return {
         tone:'live',
-        text:`기록 중 · ${device}${kept}`,
+        text:`기록 중${kept} · ${device}`,
         title:'기기에서 들어오는 로그를 임시 파일에 기록하고 있습니다. 저장하지 않고 닫으면 지워집니다.',
       };
     case 'waiting': {
@@ -156,7 +182,7 @@ export function describeCapture(capture) {
       // The reason is a sentence; the error bar shows it whole.
       return {
         tone:'failed',
-        text:`기록 중단 · ${device}${kept}`,
+        text:`기록 중단${kept} · ${device}`,
         title:`${describeLogError(capture.error)} 그때까지 기록한 로그는 그대로 볼 수 있습니다.`,
       };
     default:
@@ -165,15 +191,17 @@ export function describeCapture(capture) {
       }
       return {
         tone:'stopped',
-        text:`기록 중지됨 · ${device}${kept}`,
+        text:`기록 중지됨${kept} · ${device}`,
         title:capture.unsaved ? `기록을 멈췄습니다. 지금까지 기록한 로그(${size})를 저장할 수 있습니다.` : `기록을 멈췄습니다. 기록한 로그(${size})를 저장했습니다.`,
       };
   }
 }
-// Where a capture lost its device and found it again: the first row after
-// each break, in row order.
+// Where a capture lost its device and found it again, and where an app it
+// started with its private values shown begins: the first row after each,
+// in row order.
 export function captureBreaks(capture) {
-  return (capture?.breaks ?? []).filter(b => Number.isSafeInteger(b?.row)).sort((a, b) => a.row - b.row);
+  const away = (capture?.breaks ?? []).map(b => ({...b, kind:'away'})), launches = (capture?.launches ?? []).map(l => ({...l, kind:'launch'}));
+  return [...away, ...launches].filter(b => Number.isSafeInteger(b?.row)).sort((a, b) => a.row - b.row);
 }
 // The label of the breaks after row `after` up to and including `row`. A
 // filtered list may hide a break's own first row; the next row shown carries
@@ -181,12 +209,26 @@ export function captureBreaks(capture) {
 export function breakLabel(breaks, after, row) {
   const between = breaks.filter(b => b.row > after && b.row <= row);
   if (!between.length) return '';
-  const first = between[0], last = between[between.length - 1], reboot = between.some(b => b.reboot), gap = between.some(b => b.gap);
-  const span = between.length === 1
-    ? `${clockTime(first.lost)} 연결 끊김 → ${clockTime(first.resumed)} 다시 연결`
-    : `${clockTime(first.lost)}–${clockTime(last.resumed)} 연결 끊김 ${between.length}번`;
-  // An iPhone's rows from while it was away were never recorded.
-  return `${span}${reboot ? ' · 기기 재부팅' : ''}${gap ? ' · 끊긴 동안 로그 기록 안 됨' : ''}`;
+  // Each kind reads as one part, in the order its first mark came.
+  const parts = [], away = between.filter(b => b.kind !== 'launch'), started = between.filter(b => b.kind === 'launch');
+  if (away.length) {
+    const first = away[0], last = away[away.length - 1], reboot = away.some(b => b.reboot), gap = away.some(b => b.gap);
+    const span = away.length === 1
+      ? `${clockTime(first.lost)} 연결 끊김 → ${clockTime(first.resumed)} 다시 연결`
+      : `${clockTime(first.lost)}–${clockTime(last.resumed)} 연결 끊김 ${away.length}번`;
+    // An iPhone's rows from while it was away were never recorded.
+    parts.push({row:first.row, text:`${span}${reboot ? ' · 기기 재부팅' : ''}${gap ? ' · 끊긴 동안 로그 기록 안 됨' : ''}`});
+  }
+  if (started.length) {
+    // The app's rows say its process, which may not be its name.
+    const first = started[0], last = started[started.length - 1];
+    const name = last.process && last.process !== last.app ? `${last.app}(${last.process})` : last.app || last.process;
+    // The mark is where the start began: rows of a copy still running may
+    // follow it until Xcode ends that copy.
+    const kept = '새 프로세스부터 <private> 없이 기록';
+    parts.push({row:first.row, text:started.length === 1 ? `${clockTime(last.at)} ${name} 실행 · ${kept}` : `${clockTime(first.at)}–${clockTime(last.at)} 앱 실행 ${started.length}번 · 마지막 ${name} · ${kept}`});
+  }
+  return parts.sort((a, b) => a.row - b.row).map(p => p.text).join(' · ');
 }
 // How to get adb on this computer.
 export function installCommand(platform) {
@@ -250,14 +292,22 @@ export function mountCaptureDialog({document = globalThis.document} = {}) {
   return {ask, dismiss:() => close('cancel'), get isOpen() {return dialog.open;}};
 }
 
-export function mountDevices({ui, document, window, native, menu, logs, isGone, report, notify}) {
+export function mountDevices({ui, document, window, native, menu, logs, isGone, report, unreport = () => {}, notify}) {
   const invoke = (command, args) => native.core.invoke(command, args);
   const fail = error => report(String(error).slice(0, 500));
   const $ = id => document.getElementById(id);
   const dialog = mountCaptureDialog({document});
   const platform = window.navigator.platform ?? '';
   const mod = /Mac|iPhone|iPad/.test(platform) ? '⌘' : 'Ctrl+';
-  let adb = null, busy = false, saving = false;
+  // Apps start through Xcode, which only a Mac has.
+  const xcode = /Mac/.test(platform);
+  // An app that has not started after this long likely waits on a locked
+  // device, which devicectl gives up on after about 10 s.
+  const SLOW_LAUNCH_MS = 2000;
+  // Apps starting, by the dataset of the capture they start on: another
+  // capture shown meanwhile has its own button.
+  const starting = new Map();
+  let adb = null, busy = false, saving = false, launchError = '';
 
   // The device menu opens at once and fills in when adb and the devices
   // answer.
@@ -298,6 +348,53 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
       const now = JSON.stringify(listed);
       if (now !== shown) showMenu(listing(listed));
       shown = now;
+    }
+  }
+  // The developer builds of the iPhone being recorded, in the same menu: a
+  // newer menu of either kind drops a late answer.
+  async function openAppMenu(anchor) {
+    const datasetId = logs.getState().datasetId;
+    if (isGone() || !Number.isSafeInteger(datasetId)) return;
+    const box = anchor.getBoundingClientRect(), sequence = ++menuSequence;
+    menuAt = null;
+    const stale = () => sequence !== menuSequence || isGone() || ui.rowMenu.hidden || logs.getState().datasetId !== datasetId;
+    const copyXcode = () => {void writeClipboard(window, XCODE_URL).then(() => notify('Xcode 설치 주소를 복사했습니다. 브라우저에 붙여 넣어 App Store에서 설치해 주세요.'), () => {});};
+    const actions = {refresh:() => void openAppMenu(anchor), launch:app => void launch(datasetId, app), copyXcode};
+    const show = content => menu.show(appMenuItems(content, actions), box.left, box.bottom + 4, '앱 실행');
+    show({loading:true});
+    try {
+      const list = await invoke('capture_apps', {datasetId});
+      if (!stale()) show({list});
+    } catch (error) {
+      if (!stale()) show({error:String(error).slice(0, 500)});
+    }
+  }
+  // Starts the app anew; Xcode may first mount its disk image on the device.
+  // A failure from an earlier try goes once this one starts, and an answer
+  // for a capture no longer shown is dropped.
+  async function launch(datasetId, app) {
+    if (starting.has(datasetId) || isGone()) return;
+    const name = String(app.name || app.bundle);
+    const shown = () => !isGone() && logs.getState().datasetId === datasetId;
+    starting.set(datasetId, name);
+    unreport(launchError);
+    launchError = '';
+    ui.captureAppStatus.textContent = `${name} 앱을 실행하는 중입니다`;
+    render();
+    const slow = window.setTimeout(() => {if (shown()) notify(`${name} 앱을 실행하는 중입니다. 기기 잠금이 풀려 있는지 확인해 주세요.`);}, SLOW_LAUNCH_MS);
+    try {
+      const result = await invoke('launch_capture_app', {datasetId, bundle:app.bundle});
+      if (shown()) notify(`${result?.name || name} 앱을 실행했습니다. 이번 실행의 로그는 <private> 없이 기록합니다.`);
+    } catch (error) {
+      if (shown()) {
+        launchError = String(error).slice(0, 500);
+        fail(error);
+      }
+    } finally {
+      window.clearTimeout(slow);
+      starting.delete(datasetId);
+      if (shown()) ui.captureAppStatus.textContent = '';
+      render();
     }
   }
   async function pick() {
@@ -452,6 +549,9 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
     }
   });
   for (const button of [ui.deviceButton, ui.emptyDevice]) button.addEventListener('click', () => void openMenu(button));
+  // While an app starts the button keeps focus, so it is only marked
+  // unavailable.
+  ui.captureApp.addEventListener('click', () => {if (!starting.has(logs.getState().datasetId)) void openAppMenu(ui.captureApp);});
 
   // The capture bar follows the shown log's capture. Unsaved rows make
   // saving the main action; opening a log, which replaces them, steps back.
@@ -473,6 +573,13 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
     const live = capture.state === 'recording' || capture.state === 'waiting';
     ui.captureStop.hidden = !live;
     ui.captureStop.disabled = busy;
+    // An app starts on an iPhone or iPad only while it is being recorded.
+    ui.captureApp.hidden = !xcode || capture.platform !== 'ios' || capture.state !== 'recording';
+    ui.captureApp.disabled = busy;
+    const launching = starting.get(state.datasetId) ?? '';
+    ui.captureApp.setAttribute('aria-disabled', launching ? 'true' : 'false');
+    ui.captureApp.textContent = launching ? '앱 실행 중…' : '앱 실행…';
+    ui.captureApp.title = launching ? `${launching} 앱을 실행하는 중입니다` : '개발용 서명 앱을 다시 실행해 그 앱의 로그를 <private> 없이 기록합니다';
     ui.captureSave.classList.toggle('primary', unsaved && !saving);
     ui.captureSave.textContent = saving ? '저장 취소' : '저장…';
     if (saving) ui.captureSave.title = '저장을 멈춥니다. 저장하던 파일은 남기지 않습니다';
@@ -562,5 +669,5 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
     if (!isGone() && payload?.datasetId === logs.getState().datasetId) void logs.start();
   }).catch(() => {});
 
-  return {render, guard, keep, save, loadLeftovers, openMenu, isAsking:() => dialog.isOpen || helpDialog.open || appleDialog.open};
+  return {render, guard, keep, save, loadLeftovers, openMenu, openAppMenu, isAsking:() => dialog.isOpen || helpDialog.open || appleDialog.open};
 }

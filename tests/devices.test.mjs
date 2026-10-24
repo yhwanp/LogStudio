@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {setImmediate as nextTurn} from 'node:timers/promises';
-import {describeAdb, deviceProblem, deviceName, deviceMenuItems, describeCapture, captureBreaks, breakLabel, clockTime, shortDate, installCommand, mountDevices} from '../dist/devices.js';
+import {describeAdb, deviceProblem, deviceName, deviceMenuItems, appMenuItems, describeCapture, captureBreaks, breakLabel, clockTime, shortDate, installCommand, mountDevices} from '../dist/devices.js';
 import {captureState} from '../dist/controller.js';
 
 async function settle() {for (let i = 0; i < 20; i++) await nextTurn();}
@@ -11,8 +11,10 @@ test('capture states from the engine are checked; other logs have none', () => {
   assert.equal(captureState(undefined), null);
   assert.equal(captureState({state:'unknown'}), null);
   const c = captureState({state:'waiting', device:'Pixel 8', serial:'emulator-5554', bytes:2048, error:7, lost:at(14, 2, 11), unsaved:true, recovered:'yes', breaks:[{row:3, lost:1, resumed:2, reboot:true}, {row:0}, {row:'x'}, null]});
-  assert.deepEqual(c, {state:'waiting', device:'Pixel 8', serial:'emulator-5554', bytes:2048, error:'', breaks:[{row:3, lost:1, resumed:2, reboot:true, gap:false}], lost:at(14, 2, 11), reason:'', unsaved:true, recovered:false, platform:'android'});
+  assert.deepEqual(c, {state:'waiting', device:'Pixel 8', serial:'emulator-5554', bytes:2048, error:'', breaks:[{row:3, lost:1, resumed:2, reboot:true, gap:false}], launches:[], lost:at(14, 2, 11), reason:'', unsaved:true, recovered:false, platform:'android'});
   assert.equal(captureState({state:'recording', platform:'ios'}).platform, 'ios');
+  const started = captureState({state:'recording', platform:'ios', launches:[{row:40, at:at(14, 3, 0), app:'SampleApp', process:'SampleCore'}, {row:0, app:'x'}, null]});
+  assert.deepEqual(started.launches, [{row:40, at:at(14, 3, 0), app:'SampleApp', process:'SampleCore'}]);
 });
 
 test('the device menu lists what adb and Apple\'s device service see, or why they see nothing', () => {
@@ -72,8 +74,9 @@ test('the device menu lists what adb and Apple\'s device service see, or why the
 
 test('the capture bar names each state; breaks name where the device left and came back', () => {
   const base = {device:'Pixel 8', bytes:3 * 1048576, unsaved:true, breaks:[]};
-  // Unsaved rows are named; a state leads with what to know or do.
-  assert.equal(describeCapture({...base, state:'recording'}).text, '기록 중 · Pixel 8 · 저장 안 됨');
+  // Unsaved rows are named; a state leads with what to know or do, so a
+  // narrow bar cuts the device name first.
+  assert.equal(describeCapture({...base, state:'recording'}).text, '기록 중 · 저장 안 됨 · Pixel 8');
   assert.equal(describeCapture({...base, state:'recording', bytes:0}).text, '기록 중 · Pixel 8');
   const waiting = describeCapture({...base, state:'waiting', lost:at(14, 2, 11)});
   assert.equal(waiting.text, '연결 끊김 · 다시 연결을 기다리는 중 · Pixel 8');
@@ -92,14 +95,14 @@ test('the capture bar names each state; breaks name where the device left and ca
   // The app retries on its own: the tooltip says what to do, not to retry.
   assert.equal(approve.title, '14:02:11에 연결이 끊겼습니다. 기기 화면에서 USB 디버깅을 허용해 주세요. 준비되면 이어서 기록합니다.');
   assert.equal(waiting.title, '14:02:11에 연결이 끊겼습니다. 기기가 다시 연결되면 이어서 기록합니다.');
-  assert.equal(describeCapture({...base, state:'stopped', unsaved:false}).text, '기록 중지됨 · Pixel 8 · 저장함');
-  assert.equal(describeCapture({...base, state:'stopped'}).text, '기록 중지됨 · Pixel 8 · 저장 안 됨');
+  assert.equal(describeCapture({...base, state:'stopped', unsaved:false}).text, '기록 중지됨 · 저장함 · Pixel 8');
+  assert.equal(describeCapture({...base, state:'stopped'}).text, '기록 중지됨 · 저장 안 됨 · Pixel 8');
   assert.match(describeCapture({...base, state:'stopped'}).title, /지금까지 기록한 로그\(3\.0 MiB\)를 저장할 수 있습니다/);
   assert.equal(describeCapture({...base, state:'stopped', recovered:true}).text, '남은 기기 로그 · 저장 안 됨');
   assert.equal(describeCapture({...base, state:'stopped', recovered:true, unsaved:false}).text, '남은 기기 로그 · 저장함');
   // A failure's reason is a sentence: the bar keeps it to its title.
   const failed = describeCapture({...base, state:'failed', error:'Recording stopped: not enough disk space'});
-  assert.equal(failed.text, '기록 중단 · Pixel 8 · 저장 안 됨');
+  assert.equal(failed.text, '기록 중단 · 저장 안 됨 · Pixel 8');
   assert.match(failed.title, /^디스크 공간이 부족해 기록을 멈췄습니다\. 그때까지 기록한 로그는/);
   assert.equal(describeCapture(null), null);
   const breaks = captureBreaks({breaks:[{row:400, lost:at(15, 0, 0), resumed:at(15, 0, 40), reboot:true}, {row:120, lost:at(14, 2, 11), resumed:at(14, 2, 35), reboot:false}, {row:'x'}]});
@@ -115,6 +118,17 @@ test('the capture bar names each state; breaks name where the device left and ca
   const lossy = captureBreaks({breaks:[{row:9, lost:at(14, 2, 11), resumed:at(14, 2, 35), reboot:false, gap:true}]});
   assert.equal(breakLabel(lossy, 8, 9), '14:02:11 연결 끊김 → 14:02:35 다시 연결 · 끊긴 동안 로그 기록 안 됨');
   assert.deepEqual(captureBreaks(null), []);
+  // An app started with its private values shown marks where its rows
+  // begin, by the name its rows carry when that differs.
+  const marked = captureBreaks({breaks:[{row:9, lost:at(14, 2, 11), resumed:at(14, 2, 35), reboot:false, gap:true}],
+    launches:[{row:30, at:at(14, 3, 0), app:'SampleMaps', process:'SampleMapsCore'}, {row:9, at:at(14, 2, 40), app:'SampleApp', process:'SampleApp'}]});
+  assert.deepEqual(marked.map(b => b.row), [9, 9, 30]);
+  assert.equal(breakLabel(marked, 29, 30), '14:03:00 SampleMaps(SampleMapsCore) 실행 · 새 프로세스부터 <private> 없이 기록');
+  assert.equal(breakLabel(marked, 8, 9), '14:02:11 연결 끊김 → 14:02:35 다시 연결 · 끊긴 동안 로그 기록 안 됨 · 14:02:40 SampleApp 실행 · 새 프로세스부터 <private> 없이 기록');
+  assert.equal(breakLabel(marked.filter(b => b.kind === 'launch'), 0, 40), '14:02:40–14:03:00 앱 실행 2번 · 마지막 SampleMaps(SampleMapsCore) · 새 프로세스부터 <private> 없이 기록');
+  // Hidden behind a filter, the two kinds read in the order they came.
+  const later = captureBreaks({breaks:[{row:50, lost:at(14, 5, 0), resumed:at(14, 5, 9), reboot:false, gap:true}], launches:[{row:10, at:at(14, 0, 0), app:'SampleApp', process:'SampleApp'}]});
+  assert.equal(breakLabel(later, 5, 60), '14:00:00 SampleApp 실행 · 새 프로세스부터 <private> 없이 기록 · 14:05:00 연결 끊김 → 14:05:09 다시 연결 · 끊긴 동안 로그 기록 안 됨');
   assert.equal(shortDate(at(9, 54, 32)), '10-24 09:54');
   assert.equal(shortDate(null), '');
   assert.equal(clockTime('x'), '');
@@ -148,7 +162,7 @@ class Dialog extends Element {
   close() {if (!this.open) return; this.open = false; this.fire('close');}
 }
 // A page with the device parts, a scripted native side and log state.
-function rig({state = {}, answers = {}} = {}) {
+function rig({state = {}, answers = {}, platform = 'MacIntel', unreport = null} = {}) {
   const document = {activeElement:null, body:null};
   const elements = new Map();
   document.getElementById = id => {
@@ -157,7 +171,7 @@ function rig({state = {}, answers = {}} = {}) {
   };
   document.createElement = tag => new Element(document, tag);
   document.body = new Element(document, 'body');
-  const ui = Object.fromEntries(['deviceButton', 'emptyDevice', 'captureBar', 'captureState', 'captureText', 'captureHint', 'captureStop', 'captureSave', 'captureLeftovers', 'leftoverList', 'rowMenu', 'openFile'].map(id => [id, document.getElementById(id)]));
+  const ui = Object.fromEntries(['deviceButton', 'emptyDevice', 'captureBar', 'captureState', 'captureText', 'captureHint', 'captureApp', 'captureAppStatus', 'captureStop', 'captureSave', 'captureLeftovers', 'leftoverList', 'rowMenu', 'openFile'].map(id => [id, document.getElementById(id)]));
   const calls = [], listeners = {}, menus = [], notes = [], reports = [];
   const native = {
     core:{invoke:async (command, args) => {
@@ -172,9 +186,10 @@ function rig({state = {}, answers = {}} = {}) {
   const logs = {state:{datasetId:7, closed:false, capture:null, ...state}, getState() {return this.state;}, start:async () => calls.push(['poll'])};
   const menu = {show:(items, x, y, label) => {ui.rowMenu.hidden = false; menus.push({items, x, y, label});}, close:() => {ui.rowMenu.hidden = true;}};
   const timers = [];
-  const window = {navigator:{platform:'MacIntel'}, setTimeout:(fn, ms) => {timers.push(fn); return timers.length;}, clearTimeout:() => {}};
-  const devices = mountDevices({ui, document, window, native, menu, logs, isGone:() => false, report:m => reports.push(m), notify:m => notes.push(m)});
-  return {document, ui, calls, listeners, menus, notes, reports, logs, devices, dialog:document.getElementById('captureDialog'), $:document.getElementById, timers};
+  const window = {navigator:{platform}, setTimeout:(fn, ms) => {timers.push(fn); return timers.length;}, clearTimeout:() => {}};
+  const unreported = [];
+  const devices = mountDevices({ui, document, window, native, menu, logs, isGone:() => false, report:m => reports.push(m), unreport:unreport ?? (m => unreported.push(m)), notify:m => notes.push(m)});
+  return {document, ui, calls, listeners, menus, notes, reports, unreported, logs, devices, dialog:document.getElementById('captureDialog'), $:document.getElementById, timers};
 }
 const unsaved = {state:'recording', device:'Pixel 8', bytes:4096, unsaved:true, breaks:[]};
 
@@ -254,7 +269,7 @@ test('the capture bar shows the shown capture and its actions', () => {
   r.devices.render();
   assert.equal(r.ui.captureBar.hidden, false);
   assert.equal(r.ui.captureBar.dataset.tone, 'live');
-  assert.equal(r.ui.captureText.textContent, '기록 중 · Pixel 8 · 저장 안 됨');
+  assert.equal(r.ui.captureText.textContent, '기록 중 · 저장 안 됨 · Pixel 8');
   assert.equal(r.ui.captureStop.hidden, false);
   // Unsaved rows make saving the main action instead of opening a log.
   assert.equal(r.ui.captureSave.classList.contains('primary'), true);
@@ -342,4 +357,114 @@ test('without Apple\'s device service the menu leads to a dialog that finds it a
   r.$('appleRetry').fire('click'); await settle();
   assert.equal(r.$('appleDialog').open, false);
   assert.match(r.notes.at(-1), /Apple 기기 서비스를 찾았습니다/);
+});
+
+test('the app menu lists the developer builds and says that a running one starts anew', () => {
+  const calls = [], actions = {refresh:() => calls.push('refresh'), launch:app => calls.push(app.bundle)};
+  assert.deepEqual(appMenuItems({loading:true}, actions), [['앱을 찾는 중…']]);
+  const noXcode = appMenuItems({error:'Starting an app needs Xcode; install it from the App Store'}, {...actions, copyXcode:() => calls.push('xcode')});
+  assert.deepEqual(noXcode.map(item => item?.[0] ?? null), ['앱을 실행하려면 Xcode가 필요합니다. App Store에서 Xcode를 설치해 주세요.', 'Xcode 설치 주소 복사', null, '새로 고침']);
+  noXcode[1][1]();
+  const failed = appMenuItems({error:'Could not start the app: The device is locked.'}, actions);
+  assert.equal(failed[0][0], '앱을 실행하지 못했습니다: The device is locked.');
+  // LogStudio's own reasons read in Korean.
+  assert.equal(appMenuItems({error:'Xcode did not start the app within 90 s; check the device and retry'}, actions)[0][0], 'Xcode가 90초 안에 앱을 실행하지 못했습니다. 기기 상태를 확인하고 다시 시도해 주세요.');
+  assert.equal(appMenuItems({error:"Could not run Xcode's devicectl; check the Xcode installation"}, actions)[0][0], 'Xcode의 devicectl을 실행하지 못했습니다. Xcode 설치를 확인해 주세요.');
+  assert.deepEqual(appMenuItems({list:[]}, actions).map(item => item?.[0] ?? null), ['이 기기에 개발용으로 서명한 앱이 없습니다', null, '새로 고침']);
+  const items = appMenuItems({list:[{bundle:'com.example.sample', name:'SampleApp', version:'1.4.0', executable:'SampleApp'}, {bundle:'com.example.maps', name:'SampleMaps', version:'2.0', executable:'SampleMapsCore'}, {bundle:'com.example.bare', name:''}, {name:'no bundle'}]}, actions);
+  assert.deepEqual(items.slice(0, 2).map(item => item[0]), ['실행할 앱을 선택해 주세요 · 실행 중이면 종료하고 다시 시작합니다', '기기 잠금을 풀어 두어야 실행됩니다']);
+  // An app whose rows carry another name says it.
+  assert.deepEqual(items.slice(2, 5).map(item => [item[0], item[2], item[3]]), [
+    ['SampleApp', 'SampleApp 1.4.0', {note:'com.example.sample', key:'com.example.sample'}],
+    ['SampleMaps', 'SampleMaps 2.0 · 로그의 프로세스 이름: SampleMapsCore', {detail:'SampleMapsCore', note:'com.example.maps', key:'com.example.maps'}],
+    ['com.example.bare', 'com.example.bare', {note:'com.example.bare', key:'com.example.bare'}],
+  ]);
+  assert.equal(items.length, 7, 'an entry without a bundle is left out');
+  items[2][1]();
+  assert.deepEqual(calls, ['xcode', 'com.example.sample']);
+});
+
+test('an iPhone being recorded on a Mac offers to start an app, which runs once at a time', async () => {
+  const iphone = {...unsaved, device:'QA iPhone', platform:'ios'};
+  let finish;
+  const r = rig({state:{capture:iphone}, answers:{
+    capture_apps:[{bundle:'com.example.sample', name:'SampleApp', version:'1.4.0'}],
+    launch_capture_app:() => new Promise(resolve => {finish = resolve;}),
+  }});
+  r.devices.render();
+  assert.equal(r.ui.captureApp.hidden, false);
+  assert.equal(r.ui.captureApp.textContent, '앱 실행…');
+  r.ui.captureApp.fire('click'); await settle();
+  assert.deepEqual(r.menus.map(m => m.items[0][0]), ['앱을 찾는 중…', '실행할 앱을 선택해 주세요 · 실행 중이면 종료하고 다시 시작합니다']);
+  assert.equal(r.menus.at(-1).label, '앱 실행');
+  assert.deepEqual(r.calls.find(c => c[0] === 'capture_apps'), ['capture_apps', {datasetId:7}]);
+  r.menus.at(-1).items[2][1](); await settle();
+  assert.deepEqual(r.calls.find(c => c[0] === 'launch_capture_app'), ['launch_capture_app', {datasetId:7, bundle:'com.example.sample'}]);
+  // The button keeps focus while the app starts: it is marked unavailable,
+  // not disabled, and screen readers hear what happens.
+  assert.equal(r.ui.captureApp.disabled, false);
+  assert.equal(r.ui.captureApp.getAttribute('aria-disabled'), 'true');
+  assert.equal(r.ui.captureApp.textContent, '앱 실행 중…');
+  assert.equal(r.ui.captureAppStatus.textContent, 'SampleApp 앱을 실행하는 중입니다');
+  // A press, or a second pick, while one starts is dropped.
+  r.ui.captureApp.fire('click'); r.menus.at(-1).items[2][1](); await settle();
+  assert.equal(r.calls.filter(c => c[0] === 'launch_capture_app').length, 1);
+  assert.equal(r.calls.filter(c => c[0] === 'capture_apps').length, 1);
+  // A start that takes long likely waits on a locked device.
+  r.timers.at(-1)();
+  assert.equal(r.notes.at(-1), 'SampleApp 앱을 실행하는 중입니다. 기기 잠금이 풀려 있는지 확인해 주세요.');
+  finish({name:'SampleApp'}); await settle();
+  assert.equal(r.ui.captureApp.getAttribute('aria-disabled'), 'false');
+  assert.equal(r.ui.captureAppStatus.textContent, '');
+  assert.equal(r.notes.at(-1), 'SampleApp 앱을 실행했습니다. 이번 실행의 로그는 <private> 없이 기록합니다.');
+  // A failure is reported as the error bar reports others, and goes once
+  // the next try starts.
+  let answer = new Error('Unlock the device, then retry');
+  const failing = rig({state:{capture:iphone}, answers:{capture_apps:[{bundle:'com.example.sample', name:'SampleApp'}], launch_capture_app:() => {if (answer instanceof Error) throw answer.message; return answer;}}});
+  await failing.devices.openAppMenu(failing.ui.captureApp);
+  failing.menus.at(-1).items[2][1](); await settle();
+  assert.deepEqual(failing.reports, ['Unlock the device, then retry']);
+  assert.deepEqual(failing.notes, []);
+  answer = {name:'SampleApp'};
+  failing.menus.at(-1).items[2][1](); await settle();
+  assert.deepEqual(failing.unreported, ['', 'Unlock the device, then retry']);
+  assert.equal(failing.notes.at(-1), 'SampleApp 앱을 실행했습니다. 이번 실행의 로그는 <private> 없이 기록합니다.');
+  // Another capture shown while an app starts has its own button.
+  let held;
+  const other = rig({state:{capture:iphone}, answers:{capture_apps:[{bundle:'com.example.sample', name:'SampleApp'}], launch_capture_app:() => new Promise(resolve => {held = resolve;})}});
+  await other.devices.openAppMenu(other.ui.captureApp);
+  other.menus.at(-1).items[2][1](); await settle();
+  assert.equal(other.ui.captureApp.getAttribute('aria-disabled'), 'true');
+  other.devices.render({datasetId:8, closed:false, capture:iphone});
+  assert.deepEqual([other.ui.captureApp.getAttribute('aria-disabled'), other.ui.captureApp.textContent], ['false', '앱 실행…']);
+  other.devices.render();
+  assert.equal(other.ui.captureApp.textContent, '앱 실행 중…');
+  held({name:'SampleApp'}); await settle();
+  // An answer for a capture no longer shown is dropped.
+  let late;
+  const closed = rig({state:{capture:iphone}, answers:{capture_apps:[{bundle:'com.example.sample', name:'SampleApp'}], launch_capture_app:() => new Promise((_, reject) => {late = reject;})}});
+  await closed.devices.openAppMenu(closed.ui.captureApp);
+  closed.menus.at(-1).items[2][1](); await settle();
+  closed.logs.state = {...closed.logs.state, datasetId:8};
+  late('Unlock the device, then retry'); await settle();
+  assert.deepEqual([closed.reports, closed.notes], [[], []]);
+  // Only while an iPhone records, and only on a Mac.
+  for (const [capture, platform] of [[unsaved, 'MacIntel'], [{...iphone, state:'waiting'}, 'MacIntel'], [{...iphone, state:'stopped'}, 'MacIntel'], [iphone, 'Win32']]) {
+    const other = rig({state:{capture}, platform});
+    other.devices.render();
+    assert.equal(other.ui.captureApp.hidden, true, `${capture.platform} ${capture.state} ${platform}`);
+  }
+});
+
+test('a device menu answer that comes after the app menu opened is dropped', async () => {
+  let listed;
+  const r = rig({state:{capture:{...unsaved, platform:'ios'}}, answers:{
+    adb_status:{found:true, origin:'studio', version:'37.0.1'},
+    list_devices:() => new Promise(resolve => {listed = resolve;}),
+    capture_apps:[{bundle:'com.example.sample', name:'SampleApp'}],
+  }});
+  const devices = r.devices.openMenu(r.ui.deviceButton); await settle();
+  await r.devices.openAppMenu(r.ui.captureApp);
+  listed({devices:[], androidError:null, iosError:null}); await devices;
+  assert.equal(r.menus.at(-1).label, '앱 실행');
 });

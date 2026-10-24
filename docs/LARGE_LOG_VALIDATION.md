@@ -282,6 +282,21 @@ Apple M5 Pro MacBook Pro(macOS 27.0.1)에서 같은 iPhone 16 Pro(iOS 27.0.1)로
 - Wi-Fi를 끄면 Apple 기기 서비스가 연결을 닫아 기록이 대기 상태로 넘어갔으므로, 데이터가 오지 않을 때 끊긴 것으로 보는 별도 시간 제한은 두지 않았습니다.
 - 기록하지 않는 동안 잠긴 iPhone이 목록에서 사라졌다가, 잠금을 풀자 다시 나타났습니다.
 
+### 개발용 서명 앱 실행 (`OS_ACTIVITY_DT_MODE`)
+
+Apple M4 Mac mini(macOS 27.0.1, Xcode 27.1, `devicectl` 651.13.5)에서 Wi-Fi로 연결한 같은 iPhone 16 Pro(iOS 27.0.1)로 확인했습니다. 대상 앱은 사용자가 Xcode로 설치한 개발용 서명 앱이며, 기기 로그와 앱 이름·bundle ID는 저장소에 남기지 않았습니다.
+
+| 항목 | 결과 |
+| --- | --- |
+| 앱 목록(`developer_builds_are_listed`) | Xcode 확인을 포함해 0.59초. 사용자 앱 5개 중 `get-task-allow` 앱 3개만 담김. 같은 기기에서 `devicectl device info apps`의 `builtByDeveloper`는 App Store 앱 2개를 포함한 5개 모두 `true` |
+| 기록 중 다시 실행(`a_developer_build_started_again_logs_its_private_values`) | `devicectl` 실행 0.5초. 이후 10초 동안 그 앱 프로세스 18,152줄 중 `<private>` 0줄, 다른 프로세스는 `<private>` 12,097줄 그대로 |
+| QA 빌드(가짜 기기 없음)에서 실제 기기로 앱 실행 | 기록 중 `앱 실행…` 표시 → 메뉴에 개발용 서명 앱 3개(0.54초) → 앱 선택부터 완료 알림까지 1.71초 → 약 8초 뒤 기록 중지. 다시 실행된 앱 프로세스 18,152줄 중 `<private>` 0줄, 다른 프로세스 87,618줄 중 `<private>` 27,628줄 |
+| 같은 경로에서 기기가 잠겨 있을 때 | 약 10.7초 뒤 실패. `devicectl`의 최상위 오류는 "The application failed to launch."뿐이고 잠김 이유는 중첩된 `NSUnderlyingError`(`FBSOpenApplicationErrorDomain` 7, `Locked`)에 있어, 잠김을 알아보고 아래쪽 오류의 실패 이유를 쓰도록 고침 |
+
+- `OS_ACTIVITY_DT_MODE` 없이 실행했을 때는 앞서 같은 방식으로 기록한 측정치(그 앱의 `<private>` 3,519줄)를 비교 기준으로 삼았고, 이번에 다시 재지는 않았습니다. `--console`만 주었을 때는 `<private>`가 그대로 가려졌습니다.
+- 위 실기기 확인 뒤에 실행 지점 표시, 실행 중 포커스 유지, 상단 바 문구 순서 변경을 더하고, 실시간 따라가기로 목록이 스크롤될 때 상단 바 메뉴가 닫히지 않도록 고쳤습니다. 이 변경은 가짜 기기 e2e와 단위 테스트로만 확인했고, 실기기에서는 다시 확인하지 않았습니다.
+- 기기 재부팅 직후처럼 개발자 디스크 이미지가 마운트되지 않은 상태의 첫 실행 시간, USB 연결, iPad, iOS 17–26, Xcode가 없는 Mac과 첫 실행 설정이 끝나지 않은 Xcode(`xcodebuild -checkFirstLaunchStatus` 실패), Xcode가 Wi-Fi로 연결하지 못하는 기기(`CoreDeviceError` 1000, 합성 JSON으로만 확인), App Store 앱에 이 변수를 넘겼을 때의 동작은 확인하지 않았습니다.
+
 ---
 
 ## 기능별 검증 요약
@@ -332,5 +347,5 @@ cargo run --release --locked -p logstudio-bench --bin read-lock -- 512 /tmp/logs
 - 코드 서명(Windows Authenticode) 및 Apple 공증(Notarization)이 적용된 배포 패키지
 - 내려받은 ZIP에서 꺼낸 macOS 앱을 처음 열 때 `그래도 열기`로 허용하는 흐름(압축을 푼 앱의 ad-hoc 서명이 유효하고, 다운로드 표시를 붙이면 Gatekeeper 검사에서 거부되는 것까지만 확인)과 macOS 27 이전 버전에서의 실행
 - 파일 크기·수정 시각과 처음·끝 4 KiB를 유지한 채 파일 중간 바이트만 덮어쓰는 특수한 외부 writer 감지
-- iPhone 기기 기록의 신뢰하지 않은 기기에서 신뢰하기까지의 흐름, 잠긴 기기, iPad, iOS 27 이전 버전, Wi-Fi 끄기 외의 끊김(네트워크 범위를 벗어나거나 공유기가 멈춘 경우)과 Wi-Fi로 기록하는 중 기기가 잠겼을 때, 실제로 USB와 Wi-Fi에 함께 보이는 기기, Windows의 Apple Devices 앱·iTunes(Apple Mobile Device Service) 환경(케이블·Wi-Fi 모두), 8 GiB에 이르는 장시간 기록
+- iPhone 기기 기록의 [개발용 서명 앱 실행](#개발용-서명-앱-실행-os_activity_dt_mode)에서 확인하지 않은 항목, iPhone 기기 기록의 신뢰하지 않은 기기에서 신뢰하기까지의 흐름, 잠긴 기기, iPad, iOS 27 이전 버전, Wi-Fi 끄기 외의 끊김(네트워크 범위를 벗어나거나 공유기가 멈춘 경우)과 Wi-Fi로 기록하는 중 기기가 잠겼을 때, 실제로 USB와 Wi-Fi에 함께 보이는 기기, Windows의 Apple Devices 앱·iTunes(Apple Mobile Device Service) 환경(케이블·Wi-Fi 모두), 8 GiB에 이르는 장시간 기록
 - Android 기기 기록의 실제 USB 기기(케이블 분리, USB 디버깅 승인, 제조사 드라이버), Windows, 무선 디버깅, 실제로 다른 버전의 adb와 함께 쓸 때의 충돌 감지(가짜 기기로는 확인), macOS에서 실제로 `Cmd+Q`를 눌러 종료할 때의 저장 확인(같은 종료 함수를 QA 명령으로 불러 확인). Dock의 종료와 로그아웃은 묻지 않고 끝나며, 그 기록은 다음 실행 때 남은 기록으로 표시

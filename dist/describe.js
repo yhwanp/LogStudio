@@ -153,8 +153,19 @@ export function describeLogError(value) {
     'The capture file is gone':'기기 로그 파일을 찾지 못했습니다. 목록을 다시 확인해 주세요.',
     'Could not delete the capture file':'기기 로그 파일을 지우지 못했습니다.',
     'The dropped files are gone; drop them again':'끌어다 놓은 파일을 다시 놓아 주세요.',
+    'Starting an app needs Xcode; install it from the App Store':'앱을 실행하려면 Xcode가 필요합니다. App Store에서 Xcode를 설치해 주세요.',
+    'Open Xcode once to finish installing its components, then retry':'Xcode를 한 번 열어 추가 구성 요소 설치를 마친 뒤 다시 시도해 주세요.',
+    "Xcode cannot reach the device; connect it in Xcode's Devices and Simulators window, then retry":'Xcode가 이 기기에 연결하지 못했습니다. Xcode의 Devices and Simulators 창에서 기기를 연결한 뒤 다시 시도해 주세요.',
+    'App not found; open the app list again':'앱을 찾지 못했습니다. 앱 목록을 다시 열어 주세요.',
+    'Could not start the app':'앱을 실행하지 못했습니다. 기기와 Xcode 연결을 확인하고 다시 시도해 주세요.',
+    'Xcode did not start the app within 90 s; check the device and retry':'Xcode가 90초 안에 앱을 실행하지 못했습니다. 기기 상태를 확인하고 다시 시도해 주세요.',
+    "Could not run Xcode's devicectl; check the Xcode installation":'Xcode의 devicectl을 실행하지 못했습니다. Xcode 설치를 확인해 주세요.',
+    'Could not list the apps; check the connection and retry':'앱 목록을 가져오지 못했습니다. 케이블이나 Wi-Fi 연결을 확인하고 다시 시도해 주세요.',
+    'Apps start only while an iPhone or iPad is recording':'iPhone·iPad를 기록하는 동안에만 앱을 실행할 수 있습니다.',
     [BUSY]:'처리가 지연되고 있습니다. 잠시 후 다시 시도해 주세요.'
   };
+  // devicectl's own reason, in English as Xcode gives it.
+  if (text.startsWith('Could not start the app: ')) return `앱을 실행하지 못했습니다: ${text.slice('Could not start the app: '.length)}`;
   if (text.startsWith('Invalid or unsupported search pattern: ')) return `정규식을 확인해 주세요: ${text.slice('Invalid or unsupported search pattern: '.length)}`;
   // Engine text without a translation keeps its detail behind Korean context.
   return messages[text] ?? (text && !/[가-힣]/.test(text) ? `작업을 완료하지 못했습니다. (${text})` : text);

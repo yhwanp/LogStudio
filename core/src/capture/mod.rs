@@ -6,6 +6,7 @@
 //! and rows it dropped from its buffer while away cannot come back. An
 //! iPhone sends only new rows, so rows it logged while away are lost.
 pub mod adb;
+pub mod apps;
 pub mod cli;
 pub mod fake;
 pub mod gate;
@@ -65,6 +66,17 @@ pub struct Break {
     /// sends only new rows, as an iPhone's does.
     pub gap: bool,
 }
+/// An app the capture's device started with its private values shown:
+/// `row` is the first physical row recorded after the start began, `at` its
+/// Unix milliseconds on this computer, `app` the name its home screen shows
+/// and `process` the executable name its rows carry.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Launch {
+    pub row: u64,
+    pub at: i64,
+    pub app: String,
+    pub process: String,
+}
 #[derive(Clone, Copy, Debug)]
 pub struct Options {
     /// How often a waiting capture looks for its device.
@@ -87,6 +99,7 @@ struct Status {
     rows: u64,
     error: String,
     breaks: Vec<Break>,
+    launches: Vec<Launch>,
     lost: Option<i64>,
     /// While waiting: why the device, listed again, cannot be used yet,
     /// such as USB debugging awaiting the user's approval.
@@ -234,6 +247,7 @@ impl Capture {
                 rows: 0,
                 error: String::new(),
                 breaks: vec![],
+                launches: vec![],
                 lost: None,
                 reason: String::new(),
             }),
@@ -281,6 +295,7 @@ impl Capture {
                 rows: 0,
                 error: String::new(),
                 breaks: vec![],
+                launches: vec![],
                 lost: None,
                 reason: String::new(),
             }),
@@ -339,8 +354,8 @@ impl Capture {
             let _ = self.slot.remove();
         }
     }
-    /// Called when the phase or a waiting capture's reason changes, never
-    /// with a lock held.
+    /// Called when the phase, a waiting capture's reason or the launches
+    /// change, never with a lock held.
     pub fn observe(&self, f: impl Fn(&Capture) + Send + Sync + 'static) {
         *self.observer.lock().unwrap() = Some(Arc::new(f));
     }
@@ -354,6 +369,23 @@ impl Capture {
     pub fn bytes(&self) -> u64 {
         self.status.lock().unwrap().bytes
     }
+    /// The serial the device is recorded under now.
+    pub fn serial(&self) -> String {
+        self.status.lock().unwrap().serial.clone()
+    }
+    /// The physical rows written so far.
+    pub fn rows(&self) -> u64 {
+        self.status.lock().unwrap().rows
+    }
+    /// Remembers an app started on the device, for the page to mark where
+    /// its rows begin; the capture file stays as the device sent it.
+    pub fn mark_launch(&self, launch: Launch) {
+        self.status.lock().unwrap().launches.push(launch);
+        self.notify();
+    }
+    pub fn launches(&self) -> Vec<Launch> {
+        self.status.lock().unwrap().launches.clone()
+    }
     pub fn breaks(&self) -> Vec<Break> {
         self.status.lock().unwrap().breaks.clone()
     }
@@ -366,6 +398,11 @@ impl Capture {
                 json!({"row":b.row,"lost":b.lost,"resumed":b.resumed,"reboot":b.reboot,"gap":b.gap})
             })
             .collect();
+        let launches: Vec<Value> = s
+            .launches
+            .iter()
+            .map(|l| json!({"row":l.row,"at":l.at,"app":l.app,"process":l.process}))
+            .collect();
         let saved = self.saved.load(Ordering::Acquire);
         json!({
             "state": s.phase.as_str(),
@@ -376,6 +413,7 @@ impl Capture {
             "rows": s.rows,
             "error": s.error,
             "breaks": breaks,
+            "launches": launches,
             "lost": s.lost,
             "reason": s.reason,
             "saved": saved,
