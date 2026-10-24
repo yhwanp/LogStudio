@@ -11,6 +11,7 @@ import {LEVEL_NAMES, formatNumber, formatSize, describeLargeProgress, describeLo
 import {textSpan, writeClipboard} from './dom.js';
 import {createPopupMenu} from './menu.js';
 import {mountRecentFiles} from './recent.js';
+import {mountDevices, captureBreaks, breakLabel} from './devices.js';
 import {mountSavedFilters, fieldsOf} from './saved-filters.js';
 import {mountConditions, conditionSummary, rowlessText} from './conditions.js';
 import {createBookmarks, MAX_BOOKMARKS} from './bookmarks.js';
@@ -77,7 +78,10 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
   const $ = id => document.getElementById(id);
   $('largeLogPanel').hidden=false;
   const ids = ['largeName','largeStatus','largeError','largeCount','largeTotal','largeRows','largeViewport','largeFirst','largeLast','largeJump','largeJumpForm','largeCancel','largeClose','largeColumns','largeRaw','largeHeaders','largeRange','largeDetail','largeDetailTitle','largeDetailText','largeDetailPrevious','largeDetailNext','largeDetailClose','levelFilters','allLevels','errorLevels','resetFilters','searchInput','tagFilter','pidFilter','tidFilter','caseSensitive','includeRaw','recognizeLineNumbers','logsCount','logsRows','logsViewport','logsHeaders','logsFirst','logsLast','logsJump','logsJumpForm','logsRange','largeSearchPane','filterBadge','activeFilters','filterRow','logsSelection','largeSelection','toast','largeDetailCopy','toggleFilters','emptyState','logContent','loadProgress','loadProgressBar','paneSplitter','idFilterError','tagFilterError','searchError','dropHint','filterPanel','largeRegex','rowMenu','largeSize','exportLogs','exportSearch','exportCancel','recentFiles','recentList','clearRecent','recentButton','timeFrom','timeTo','timeFilterError','lowerTabs','searchTab','bookmarkTab','bookmarkPane','bookmarkCount','bookmarkList','copyBookmarks','clearBookmarks','logsPending','reopenFile','errorBar','errorReopen','followFile'];
+  for (const id of ['deviceButton','emptyDevice','captureBar','captureState','captureText','captureStop','captureSave','captureLeftovers','leftoverList','openFile']) ids.push(id);
   const ui = Object.fromEntries(ids.map(id => [id,$(id)]));
+  // Device captures (devices.js) mount once the menu and toasts exist.
+  let devices=null;
   // The layout reports its first render before the controllers exist.
   let ready=false;
   // First-use tips are offered where their feature comes into reach.
@@ -245,6 +249,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
           ui[prefix+'First'].disabled=!total||first===0;ui[prefix+'Last'].disabled=!total||last>=total;
         },
         paint:(entries,current)=>{
+          const breaks=captureBreaks(current.capture);
           const nodes=[],nextNodes=new Map(),activeElement=document.activeElement,hadFocus=realViewport.contains(activeElement),selected=selectedRanges(selectionOf(prefix,current),current.count),multiple=selected.length>1||selected[0]?.[1]>selected[0]?.[0];
           for(let k=0;k<entries.length;k++){
             const {row:entry,index}=entries[k];
@@ -255,12 +260,17 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
             }else{
             const fresh=!row;row??=document.createElement('div');
             const fileStart=entry.fileLine===1&&entry.file>0;
+            // A capture's device left and came back before this row, or before
+            // it and after the row shown above it when a filter hides rows.
+            const above=k>0&&entries[k-1].index===index-1?entries[k-1].row:null;
+            const captureBreak=breaks.length?breakLabel(breaks,index===0?0:above?above.lineNumber:entry.lineNumber-1,entry.lineNumber):'';
             // Column rows of one log entry read as one: continuation rows
             // take the entry's level, and no separator splits the entry.
             const entryOwner=rawMode?null:continuationOwner(entry),next=entries[k+1]?.index===index+1?entries[k+1].row:null;
             const continued=!rawMode&&joinsNext(entry,next);
             const kindClass=entryOwner?continuationClass(entryOwner):entry.kind!=='parsed'?'raw-row':`level-row-${entry.level}`;
-            row.className=`log-row ${kindClass}${continued?' record-continued':''}${fileStart?' file-start':''}${current.selectedLine===entry.lineNumber?' selected-log-row':''}${entry.encodingDamaged?' encoding-damaged-row':''}${multiple&&inRanges(selected,index)?' in-selection':''}${bookmarks.has(entry.lineNumber)?' bookmarked':''}${!isSearch&&entry.searchHit?' search-hit':''}`; row.tabIndex=-1;row.dataset.lineNumber=String(entry.lineNumber);row.setAttribute('role','listitem');row.setAttribute('aria-posinset',String(index+1));row.setAttribute('aria-setsize',String(current.queryComplete?current.count:-1));
+            row.className=`log-row ${kindClass}${continued?' record-continued':''}${fileStart?' file-start':''}${captureBreak?' capture-break':''}${current.selectedLine===entry.lineNumber?' selected-log-row':''}${entry.encodingDamaged?' encoding-damaged-row':''}${multiple&&inRanges(selected,index)?' in-selection':''}${bookmarks.has(entry.lineNumber)?' bookmarked':''}${!isSearch&&entry.searchHit?' search-hit':''}`; row.tabIndex=-1;row.dataset.lineNumber=String(entry.lineNumber);row.setAttribute('role','listitem');row.setAttribute('aria-posinset',String(index+1));row.setAttribute('aria-setsize',String(current.queryComplete?current.count:-1));
+            if(captureBreak)row.dataset.captureBreak=captureBreak;else delete row.dataset.captureBreak;
             if(current.selectedLine===entry.lineNumber){row.setAttribute('aria-current','true');selectedAt.set(prefix,{identity:selectionIdentity(current),line:entry.lineNumber,index});}
             else row.removeAttribute('aria-current');
             if(fresh){
@@ -475,7 +485,9 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     ui.searchError.textContent=regexError;ui.searchError.hidden=!regexError;ui.searchInput.setAttribute('aria-invalid',String(!!regexError));
     const fieldMessage=idMessage||listMessage||timeMessage;
     const followMessage=!upper.closed&&upper.followError?describeFollowError(upper.followError):'';
-    const raw=inputError||(fieldMessage&&ui.filterPanel.inert===true?fieldMessage:'')||(regexError?'':lowerError)||(!upper.closed&&upper.error)||followMessage||'';
+    // The capture bar only says a capture stopped; the bar here says why.
+    const captureMessage=!upper.closed&&upper.capture?.state==='failed'?upper.capture.error:'';
+    const raw=inputError||(fieldMessage&&ui.filterPanel.inert===true?fieldMessage:'')||(regexError?'':lowerError)||(!upper.closed&&upper.error)||followMessage||captureMessage||'';
     const message=describeLogError(raw);ui.largeError.textContent=message;ui.largeError.hidden=!message;ui.errorBar.hidden=!message;
     // A changed file is one action away from being read again with its work.
     ui.errorReopen.hidden=!(SOURCE_CHANGES.has(raw)&&canReopen(upper));
@@ -504,7 +516,9 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     const empty=state.closed||!state.count;ui.logsFirst.disabled=empty||state.viewportStart===0;ui.logsLast.disabled=empty||state.viewportStart>=state.count-1;
     ui.logsJump.disabled=!state.count||state.closed;ui.logsJump.title=jumpTitle('현재 필터 결과',state);
     ui.exportLogs.disabled=exporting||!hasFile||!state.queryComplete||!state.count;
-    renderFollow(state,hasFile);
+    renderFollow(state,hasFile);devices?.render(state);
+    // The empty state lists capture files an earlier run left.
+    if(hasFile!==shownFile){shownFile=hasFile;if(!hasFile)void devices?.loadLeftovers();}
     table(state,'logs',logs,false);detail(state,logs);errors();markSelections();resolveMarks(state);
     // Cards and chips say when the engine finds no row for a condition.
     const marks=rowless(state),seen=JSON.stringify([[...marks.include],[...marks.exclude],marks.following]);
@@ -522,13 +536,14 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
   // Following a single opened file: rows appended to it keep arriving, and
   // the upper list keeps its end in view while it is there. A replaced last
   // row (appended bytes completed it) is read again where it is shown.
-  let followSource=null,followRevision=0;
+  let followSource=null,followRevision=0,shownFile=false;
   function renderFollow(state,hasFile){
     const following=hasFile&&!!state.following;
     ui.followFile.hidden=!hasFile||!state.followable;
     ui.followFile.disabled=!state.textComplete||state.closed||state.status==='error'||followBusy;
     ui.followFile.setAttribute('aria-pressed',String(following));
-    ui.followFile.title=following?'따라가기 끄기 · 지금까지 읽은 줄에서 멈춥니다':`${state.grown?'파일 끝에 새 줄이 있습니다 · ':''}파일 끝에 추가되는 줄을 이어서 읽고 위 로그의 끝을 보여 줍니다`;
+    const live=state.capture&&['recording','waiting'].includes(state.capture.state);
+    ui.followFile.title=live?following?'따라가기 끄기 · 화면만 멈추고 기록은 계속합니다':`${state.grown?'새 줄이 있습니다 · ':''}기기에서 들어오는 새 줄을 이어서 보여 줍니다`:following?'따라가기 끄기 · 지금까지 읽은 줄에서 멈춥니다':`${state.grown?'파일 끝에 새 줄이 있습니다 · ':''}파일 끝에 추가되는 줄을 이어서 읽고 위 로그의 끝을 보여 줍니다`;
     const exportHint=following?'따라가기를 끄면 내보낼 수 있습니다':'';
     ui.exportLogs.title=exportHint||'현재 필터 결과의 원문을 파일로 저장';ui.exportSearch.title=exportHint||'검색 결과의 원문을 파일로 저장';
     if(followSource!==state.datasetId){followSource=state.datasetId;followRevision=state.tailRevision??0;return;}
@@ -781,7 +796,8 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
   const columnItems=()=>[['내용에 맞춤',()=>layout.fitColumns(),'현재 표시된 로그에 맞춰 열 폭 조절'],['폭 초기화',()=>layout.resetColumns(),'열 폭을 기본값으로 되돌리기']];
   columnMenu.addEventListener('click',()=>{const box=columnMenu.getBoundingClientRect?.();menu.show(columnItems(),box?box.left:0,box?box.bottom+4:0,'열 폭');});
   for(const header of [ui.logsHeaders,ui.largeHeaders,$('bookmarkHeaders')])header.addEventListener('contextmenu',event=>{if(rawMode||disposed)return;event.preventDefault();menu.show(columnItems(),event.clientX,event.clientY,'열 폭');});
-  mountRecentFiles({ui,document,native,menu,isGone:()=>pageGone,onError:message=>{inputError=message;errors();}});
+  devices=mountDevices({ui,document,window,native,menu,logs,isGone:()=>pageGone,report:message=>{inputError=message;errors();},notify});
+  mountRecentFiles({ui,document,native,menu,isGone:()=>pageGone,onError:message=>{inputError=message;errors();},guard:()=>devices.guard(),keep:id=>devices.keep(id),shown:()=>logs.getState().datasetId});
   function repaintRows(){previousRows.clear();renderLogs(logs.getState());renderSearch(search.getState());}
   const bookmarks=createBookmarks({ui,document,window,notify,mod:MOD,logs,lineCell,openMenu:openBookmarkMenu,isRawMode:()=>rawMode,canNavigate:()=>!disposed&&!inputPending&&!validationError,onChange:()=>{repaintRows();saver.schedule();},onCount:count=>{bookmarkCount=count;updateLowerPane();if(count)tips?.offer('bookmarks');}});
   const saver=createWorkSaver({invoke:(command,args)=>native.core.invoke(command,args),capture:captureWork,setTimer:(fn,ms)=>window.setTimeout(fn,ms),clearTimer:id=>window.clearTimeout(id)});
@@ -1088,7 +1104,8 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
   function canReopen(state=logs.getState()){return !disposed&&!pageGone&&state.datasetId!==null&&!state.closed&&work.datasetId===state.datasetId&&work.reopenable&&reloadRequest===null&&!validating(state);}
   function renderReopen(state=logs.getState(),hasFile=state.datasetId!==null&&!state.closed&&state.status!=='empty'){
     const text=work.datasetId===state.datasetId&&!work.reopenable?'붙여넣은 텍스트와 샘플 로그는 다시 열 수 없습니다':`같은 파일을 다시 읽습니다 · 필터·검색·북마크·위치 유지 (${MOD}R)`;
-    ui.reopenFile.hidden=!hasFile;ui.reopenFile.disabled=!canReopen(state);if(ui.reopenFile.title!==text)ui.reopenFile.title=text;
+    // A capture's file is temporary and tied to its capture.
+    ui.reopenFile.hidden=!hasFile||!!state.capture;ui.reopenFile.disabled=!canReopen(state);if(ui.reopenFile.title!==text)ui.reopenFile.title=text;
   }
   // Reads the open files again (same paths, order and source mode), keeping
   // filters, search, view, lower tab, bookmarks and places by physical row.
@@ -1125,7 +1142,8 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     return Promise.all([closeSearch({remote:false}),logs.close()]);
   }
   search.close=close;search.logs=logs;
-  ui.largeClose.addEventListener('click',close);
+  // A capture's unsaved rows are asked about before its log closes.
+  ui.largeClose.addEventListener('click',async()=>{if(await devices.guard()!=='cancel')void close();});
   window.addEventListener('pagehide',()=>{
     saver.flush();pageGone=true;sourceEventSequence++;pickerSequence++;pickerPending=false;pendingSourceId=null;savedInput=null;pendingPastePrefix=null;
     clearDetail();
@@ -1133,16 +1151,18 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     void closeSearch({remote:false});void logs.close({remote:false});
     for(const view of viewports.values())view.destroy();viewports.clear();
   },{once:true});
-  const MODALS=['pasteDialog','shortcutDialog','filterNameDialog','tipLayer'];
+  const MODALS=['pasteDialog','shortcutDialog','filterNameDialog','tipLayer','captureDialog','adbDialog'];
   document.addEventListener('keydown',event=>{
     // A modal dialog has made the page inert, so its shortcuts wait until the
     // dialog closes: ⌘O or ⌘R under the paste question would open something
     // that the dialog's 열기 then replaces.
     if(MODALS.some(id=>$(id)?.open===true))return;
     const command=(event.metaKey||event.ctrlKey)&&!event.altKey&&!event.shiftKey,key=String(event.key).toLowerCase();
-    if(command&&key==='o'){event.preventDefault();openPicker();return;}
+    if(command&&key==='o'){event.preventDefault();void openPicker();return;}
     // Cmd/Ctrl+R reads the file again; the page itself never reloads.
     if(command&&key==='r'){event.preventDefault();reopenCurrent();return;}
+    // Cmd/Ctrl+S saves a shown device capture; other logs are files already.
+    if(command&&key==='s'&&logs.getState().capture&&!logs.getState().closed){event.preventDefault();void devices.save();return;}
     if(command&&key==='f'&&!disposed){event.preventDefault();selectLowerTab('search');ui.searchInput.focus();ui.searchInput.select?.();return;}
     if(command&&key==='b'&&!disposed&&!isEditableTarget(event.target)){event.preventDefault();toggleBookmarks();return;}
     // In the search results and the bookmarks ⌘/Ctrl+A selects every row; in
@@ -1171,12 +1191,12 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     if(text.length>limit||(size??new TextEncoder().encode(text).byteLength)>limit){inputError='붙여넣기는 최대 25 MiB입니다. 큰 파일은 파일 선택으로 열어 주세요.';errors();return;}
     try{await native.core.invoke('open_text',{text,name});}catch(error){inputError=String(error).slice(0,500);errors();}
   }
-  function openPicker(){
-    if(pageGone)return;
-    const sequence=++pickerSequence;pickerPending=true;updateInputCancellation();
-    void native.core.invoke('pick_file').catch(error=>{if(sequence===pickerSequence&&!pageGone){inputError=String(error).slice(0,500);errors();}}).finally(()=>{if(sequence===pickerSequence){pickerPending=false;updateInputCancellation();}});
+  async function openPicker(){
+    if(pageGone||await devices.guard()==='cancel')return;
+    const sequence=++pickerSequence,shown=logs.getState().datasetId;pickerPending=true;updateInputCancellation();
+    void native.core.invoke('pick_file').then(result=>{if(result?.cancelled)devices.keep(shown);},error=>{devices.keep(shown);if(sequence===pickerSequence&&!pageGone){inputError=String(error).slice(0,500);errors();}}).finally(()=>{if(sequence===pickerSequence){pickerPending=false;updateInputCancellation();}});
   }
-  $('openFile').addEventListener('click',openPicker);$('emptyOpen').addEventListener('click',openPicker);
+  $('openFile').addEventListener('click',()=>void openPicker());$('emptyOpen').addEventListener('click',()=>void openPicker());
   ui.reopenFile.addEventListener('click',reopenCurrent);ui.errorReopen.addEventListener('click',reopenCurrent);
   document.addEventListener('paste',event=>{
     const prefix=pendingPastePrefix;pendingPastePrefix=null;
@@ -1192,7 +1212,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
   // A paste that would replace the shown log, or one being opened, asks
   // first; with nothing open it opens at once (paste-confirm.js).
   const pasteDialog=mountPasteConfirm({document});
-  const pastes=createPasteFlow({invoke:(command,args)=>native.core.invoke(command,args),dialog:pasteDialog,
+  const pastes=createPasteFlow({invoke:(command,args)=>native.core.invoke(command,args),dialog:pasteDialog,guard:()=>devices.guard(),
     replaces:()=>replacesLog(logs.getState(),pendingSourceId!==null),
     closing:()=>{const state=logs.getState();return describeClosing(work.datasetId===state.datasetId?work.reopenable:null);},
     openText:item=>{void openInput(item.text,'붙여넣은 로그 텍스트',item.size);},
@@ -1205,7 +1225,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     catch(error){if(pendingPastePrefix?.grant===payload.grant)pendingPastePrefix=null;if(!pageGone){inputError=String(error).slice(0,500);errors();}}
   });
   void native.event.listen('native-file-paste',({payload})=>pastes.file(payload));
-  $('loadDemo').addEventListener('click',()=>{void openInput(makeDemo(),'샘플 로그');});
+  $('loadDemo').addEventListener('click',async()=>{if(await devices.guard()!=='cancel')void openInput(makeDemo(),'샘플 로그');});
   $('cancelInput').addEventListener('click',async()=>{
     const sequence=pickerSequence;
     try{
@@ -1262,8 +1282,9 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
       inputError=typeof payload.file==='string'&&payload.file?describeFileError(payload.error,payload.file):payload.error??'';
       const sequence=++sourceEventSequence;updateInputCancellation();saver.stop();
       await reconnect(snapshot,()=>sequence===sourceEventSequence&&!pageGone);errors();
-      // The restored dataset is the one native code kept for rollback.
-      const restored=logs.getState().datasetId;
+      // The restored dataset is the one native code kept for rollback; a
+      // capture shown again keeps its file.
+      const restored=logs.getState().datasetId;devices.keep(restored);
       if(sequence!==sourceEventSequence||pageGone||!Number.isSafeInteger(restored)||restored<=0)return;
       const info=await loadWork(restored);
       if(sequence!==sourceEventSequence||pageGone||disposed)return;

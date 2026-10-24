@@ -32,14 +32,17 @@ export function describeClosing(reopenable) {
 // field has focus (a file paste then stays the standard Paste). A file's
 // grant is held while the dialog asks, and dropped, never pasted, when the
 // user keeps the log or a newer paste arrives while it is being held.
-export function createPasteFlow({invoke, dialog, replaces, closing, openText, report, isGone, inField}) {
+// A shown device capture with unsaved rows asks its own question instead
+// (`guard`, devices.js): 'asked' opens, 'cancel' keeps the log.
+export function createPasteFlow({invoke, dialog, replaces, closing, openText, report, isGone, inField, guard = async () => 'none'}) {
   let ticket = 0;
   const drop = grant => {void Promise.resolve().then(() => invoke('finish_file_paste', {grant, action:'discard'})).catch(() => {});};
   async function finish(grant, action) {
     try {await invoke('finish_file_paste', {grant, action});} catch (error) {if (!isGone()) report(error);}
   }
   async function confirm(item) {
-    const answer = await dialog.ask({what:describePaste(item), note:closing()});
+    const asked = await guard();
+    const answer = asked === 'cancel' ? 'cancel' : asked === 'asked' ? 'open' : await dialog.ask({what:describePaste(item), note:closing()});
     if (answer === 'open' && !isGone()) return true;
     if (item.kind === 'file') drop(item.grant);
     return false;
