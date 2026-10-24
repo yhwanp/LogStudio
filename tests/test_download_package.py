@@ -34,7 +34,7 @@ class DownloadTests(unittest.TestCase):
                 self.assertEqual(file.read('THIRD_PARTY_NOTICES.md'),
                                  (package_download.ROOT / 'desktop/THIRD_PARTY_NOTICES.md').read_bytes())
             expected = '{}  {}\n'.format(hashlib.sha256(archive.read_bytes()).hexdigest(), archive.name)
-            self.assertEqual(archive.with_suffix('.zip.sha256').read_text(), expected)
+            self.assertEqual(archive.with_suffix('.zip.sha256').read_bytes(), expected.encode('utf-8'))
 
     def test_wrong_architecture_and_non_executables_are_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
