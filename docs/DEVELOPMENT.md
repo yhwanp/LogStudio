@@ -15,7 +15,7 @@
 | `core/src/search.rs` | 고정 버전 `grep-regex` / `grep-searcher` 기반 문자열·정규식 검색 및 하이라이트 범위 계산 |
 | `core/src/encoding.rs` | 표시 텍스트 디코딩: 손상된 UTF-8 바이트의 표시용 대체(``)와 손상 위치 마스크, Mac OS Roman으로 잘못 읽혀 깨진 UTF-8 문자 복원(`repair`), UTF-16·압축 파일 판별 |
 | `core/src/launch.rs` | CLI 경로 인자(복수 지정 시 병합 열기) 및 `--large-log`(반복 가능) 옵션 해석 |
-| `core/src/capture/` | 기기 기록: `mod.rs`(기록기·재연결 상태 흐름·저장·버리기), `gate.rs`(`threadtime` 시각과 시작 경계·중복 제거), `link.rs`(연결 계층 trait·기기 종류·`adb devices -l` 파서·공개 오류 문구), `cli.rs`(adb 명령 실행 연결), `adb.rs`(adb 탐지·`adb version` 검증·시간 제한 실행), `ios.rs`(Apple 기기 서비스(usbmuxd)로 iPhone·iPad 목록과 `os_trace_relay` 로그를 받아 iOS 로그 줄로 쓰는 연결), `store.rs`(임시 기록 파일과 잠금·남은 기록), `fake.rs`(테스트·QA용 가짜 연결과 합성 로그) |
+| `core/src/capture/` | 기기 기록: `mod.rs`(기록기·재연결 상태 흐름·저장·버리기), `gate.rs`(`threadtime` 시각과 시작 경계·중복 제거), `link.rs`(연결 계층 trait·기기 종류·`adb devices -l` 파서·공개 오류 문구), `cli.rs`(adb 명령 실행 연결), `adb.rs`(adb 탐지·`adb version` 검증·시간 제한 실행), `ios.rs`(Apple 기기 서비스(usbmuxd)로 iPhone·iPad 목록과 `os_trace_relay` 로그를 받아 iOS 로그 줄로 쓰는 연결), `apps.rs`(기록 중인 iPhone·iPad의 개발용 서명 앱 목록과 Xcode `devicectl`로 `OS_ACTIVITY_DT_MODE=1` 실행), `store.rs`(임시 기록 파일과 잠금·남은 기록), `fake.rs`(테스트·QA용 가짜 연결과 합성 로그) |
 | `core/src/lib.rs` | `Engine`: 파일 열기·검증·롤백 복원, 기기 기록 로그 열기(`open_capture`)와 수명 관리, IPC 요청 처리, 진행 상태 이벤트 발행 |
 | `src-tauri/src/main.rs` | Tauri 커맨드 핸들러, 동시 요청 수 제한, 파일 선택·드롭 처리(다중 파일은 `order::arrange` 정렬), 시작 인자 오류 보관(`take_startup_error`) |
 | `src-tauri/src/clipboard.rs` | macOS Finder 파일 및 UTF-8 BOM 붙여넣기용 일회성 권한(grant) 발급·연장·폐기 |
@@ -23,7 +23,7 @@
 | `src-tauri/src/geometry.rs` | 창 크기·위치·최대화 상태 저장(`window-state.json`) 및 현재 연결된 모니터 작업 영역 안으로 보정 복원 |
 | `src-tauri/src/work.rs` | 파일별 작업 상태 저장(`work-states.json`): 정규 경로·크기·수정 시각으로 식별, 최근 50개 보관, 크기 제한 적용 |
 | `src-tauri/src/filters.rs` | 저장된 필터 관리(`saved-filters.json`): 이름 정규화 및 중복 검사, 크기 제한, 원자적 파일 교체 저장 |
-| `src-tauri/src/devices.rs` | 기기 기록의 데스크톱 상태: adb 탐지 결과와 사용자가 지정한 adb(`adb.json`), Android 기기와 iPhone·iPad를 함께 담은 마지막 기기 목록(기록은 이 목록의 serial·UDID로만 시작하며, 기기 종류에 맞는 연결을 고름), 앱 캐시의 임시 기록 폴더(`captures/`)와 남은 기록 ID, QA 빌드의 가짜 기기 |
+| `src-tauri/src/devices.rs` | 기기 기록의 데스크톱 상태: adb 탐지 결과와 사용자가 지정한 adb(`adb.json`), Android 기기와 iPhone·iPad를 함께 담은 마지막 기기 목록(기록은 이 목록의 serial·UDID로만 시작하며, 기기 종류에 맞는 연결을 고름), 기록 중인 iPhone·iPad의 마지막 앱 목록(앱은 이 목록의 bundle ID로만 실행), 앱 캐시의 임시 기록 폴더(`captures/`)와 남은 기록 ID, QA 빌드의 가짜 기기 |
 | `src-tauri/src/recent.rs` | 최근 파일 목록 관리(`recent-files.json`): 프론트엔드에는 ID와 표시 이름만 전달하고 검증된 파일만 재열기 허용 |
 | `src-tauri/tauri.conf.json`, `src-tauri/capabilities/` | 앱 메타데이터·버전·식별자, 프론트엔드 경로(`frontendDist`), CSP 설정, Tauri 권한 정의 |
 | `src-tauri/icons/` | 앱 아이콘 원본(`icon.svg`, `icon-rounded.svg`) 및 생성된 `icon.icns`·`icon.ico`·`icon.png`([빌드와 배포](#빌드와-배포) 참고) |
@@ -46,7 +46,7 @@
 | 필터 | `filter-model.js`(레벨 목록, 붙여넣기 25 MiB 상한, 조건 모델 및 입력 검증), `conditions.js`(필터 패널의 조건 카드 UI), `saved-filters.js`(저장된 필터 직렬화·비교·메뉴·이름 대화상자) |
 | 행 선택·목록 | `row-selection.js`(상단·검색·북마크 공통 행 선택 상태 머신, DOM 비의존), `row-gestures.js`(마우스 클릭·드래그·자동 스크롤), `bookmarks.js`(북마크 관리), `recent.js`(최근 파일 메뉴) |
 | 공통·유틸 | `dom.js`(DOM 헬퍼), `demo.js`(빈 화면의 `샘플 로그 보기`용 합성 로그) |
-| 기기 기록 | `devices.js`(Android 기기와 iPhone·iPad를 종류별로 보여 주고, USB 디버깅 허용·신뢰·잠금 해제를 기다리는 기기가 있으면 열린 동안 다시 조회하는 기기 메뉴, adb·Apple 기기 서비스 설치 안내, 상단 바 기록 상태와 화면 낭독기용 설명, 저장 확인 대화상자, 남은 기록 목록, 드롭·창 닫기 보류 응답) |
+| 기기 기록 | `devices.js`(Android 기기와 iPhone·iPad를 종류별로 보여 주고, USB 디버깅 허용·신뢰·잠금 해제를 기다리는 기기가 있으면 열린 동안 다시 조회하는 기기 메뉴, adb·Apple 기기 서비스 설치 안내, 상단 바 기록 상태와 화면 낭독기용 설명, 기록 중인 iPhone·iPad의 `앱 실행…` 메뉴(macOS만)와 실행 지점 표시, 저장 확인 대화상자, 남은 기록 목록, 드롭·창 닫기 보류 응답) |
 | 메뉴·대화상자·문구 | `menu.js`(팝업 메뉴), `shortcuts.js`(단축키 안내 대화상자), `clipboard.js`(붙여넣기 대상 판별: 입력란·로그 텍스트·파일 경로), `paste-confirm.js`(열린 로그 교체 확인 대화상자), `tips.js`(첫 사용 팁 및 기능 둘러보기), `describe.js`(진행 상태·오류·필터 요약 문구) |
 
 ## 처리 구조
@@ -104,6 +104,12 @@
   - **목록과 신뢰 확인:** USB나 Wi-Fi로 연결한 기기를 UDID당 하나씩 담고, USB와 Wi-Fi로 함께 보이면 USB 연결을 씁니다. 연결 종류를 알 수 없는 기기는 뺍니다. Wi-Fi 기기도 usbmuxd가 같은 방식으로 중계하므로 연결하는 과정은 USB와 같습니다. 기기 정보는 기기마다 3초 안에 동시에 읽고, 그 안에 답하지 않는 기기(네트워크를 벗어난 Wi-Fi 기기 등)는 `offline`으로 담아 요청 전체의 5초 제한에 걸려 다른 기기까지 목록에서 사라지지 않게 합니다. 세션 전 lockdown 값으로 이름·제품·iOS 버전을 읽고, 페어링 기록(`ReadPairRecord`)과 세션 시작으로 `device`·`untrusted`·`locked`를 판단합니다.
   - **로그 스트림:** `com.apple.os_trace_relay`에 `StartActivity`(모든 프로세스·모든 레벨)를 요청하고, 받은 이진 레코드를 직접 경계 검사하며 읽어 `날짜 시각.마이크로초 프로세스[PID:TID] [레벨] [subsystem:category] 메시지` 줄로 씁니다. 시각은 이 컴퓨터의 시간대로 바꾸고, 기본 레벨에는 레벨 칸을 쓰지 않으며, 메시지 바이트는 그대로 둡니다. 라이브러리의 레코드 파서는 손실 변환(`from_utf8_lossy`)과 경계 검사 없는 자르기를 하므로 쓰지 않습니다.
   - **런타임:** 비동기 라이브러리는 요청마다 단일 스레드 tokio 런타임에서 시간 제한을 두고 돌리고, 스트림은 읽기 중에만 런타임을 돌리며 닫기는 `Notify`로 깨웁니다. 라이브러리 패닉은 오류로 바꿉니다.
+  - **개발용 서명 앱 실행(`apps.rs`):** 기록 중인 기기에서 고른 개발용 서명 앱을 `OS_ACTIVITY_DT_MODE=1`로 다시 실행해, 그 프로세스의 로그가 `<private>` 없이 `os_trace_relay`로 오게 합니다. 다른 프로세스는 계속 가려지고, 이미 기록한 줄은 바뀌지 않습니다. Apple은 이 변수를 내부 구현이라 하므로 iOS 업데이트로 동작이 바뀔 수 있습니다.
+    - **목록:** usbmuxd로 `com.apple.mobile.installation_proxy`에 `Browse`(`ApplicationType` `User`)를 요청해, 서명 권한(`Entitlements`)에 `get-task-allow`가 `true`인 앱만 담습니다. 이 조회는 USB와 Wi-Fi에서 같고 Xcode를 쓰지 않지만, 실행할 수 없는 목록을 보여 주지 않도록 앱 목록을 열 때 Xcode를 먼저 확인합니다. `devicectl device info apps`의 `builtByDeveloper`는 App Store 앱에도 `true`여서 쓰지 않습니다([측정](LARGE_LOG_VALIDATION.md#개발용-서명-앱-실행-os_activity_dt_mode)).
+    - **실행 지점:** 데스크톱은 실행을 시작할 때의 다음 행 번호와 시각을 잡아 두었다가, 실행이 성공하면 기록에 앱 이름·프로세스 이름(실행 파일 이름)과 함께 남깁니다(`Capture::mark_launch`, 기록 상태의 `launches`). 새 프로세스의 줄은 이 행 뒤에만 옵니다. 화면은 재연결 구분선과 같은 방식으로 그 행 위에 표시하며, 기록 파일에는 아무것도 쓰지 않습니다.
+    - **실행:** Xcode의 `devicectl device process launch --device <UDID> --terminate-existing --environment-variables {"OS_ACTIVITY_DT_MODE":"1"} --json-output <임시 파일> --quiet -- <bundle ID>`를 셸 없이 실행하고, JSON 결과(`info.outcome`, `error.userInfo`의 설명·실패 이유)로 성공과 이유를 판단합니다. `CoreDeviceError` 1000(기기를 찾지 못함)은 Xcode가 그 기기에 연결하지 못한다는 안내로 바꿉니다. 잠긴 기기 같은 실패 이유는 최상위 오류에 없으므로, 중첩된 `NSUnderlyingError`를 따라가 잠김 여부(`FBSOpenApplicationErrorDomain` 7, `Locked`)와 가장 안쪽 실패 이유를 찾습니다.
+    - **Xcode 찾기:** `DEVELOPER_DIR`, `/usr/bin/xcode-select --print-path`, `/Applications/Xcode.app/Contents/Developer` 순서로 `usr/bin/devicectl`이 있는 폴더를 씁니다. `xcrun`은 개발자 도구가 없으면 설치를 제안하므로 실행하지 않습니다. Xcode의 `devicectl`은 CoreDevice 버전이 맞지 않으면 `xcodebuild -runFirstLaunch`(시스템 구성 요소 설치)를 먼저 실행하는 셸 스크립트이므로, 실행 전에 `xcodebuild -checkFirstLaunchStatus`로 첫 실행 설정이 끝났는지 확인하고, 끝나지 않았으면 Xcode를 열라고 안내합니다.
+    - **`idevice`로 직접 실행하지 않는 이유:** iOS 17부터 앱 실행(DVT `processcontrol`)은 RSD의 `com.apple.instruments.dtservicehub`에만 있고, 이 서비스는 CoreDevice 터널(USB는 lockdown의 CoreDeviceProxy와 사용자 공간 TCP, Wi-Fi는 Xcode가 따로 맺는 RemotePairing TLS-PSK 페어링)과 기기별로 Apple TSS 서명을 받아 마운트하는 개발자 디스크 이미지(Xcode가 `/Library/Developer/DeveloperDiskImages`에 설치)가 있어야 열립니다. Xcode 없이 하려면 디스크 이미지를 내려받고 페어링을 새로 만들어야 해서 사용자가 모르는 도구 설치와 기존 페어링 변경을 피하는 원칙에 어긋나고, Xcode가 있으면 `devicectl`이 이 과정을 모두 처리합니다. 개발용 서명 앱은 대개 Xcode로 빌드하므로 Xcode를 요구해도 실제 사용에는 거의 제약이 없습니다. 다만 이 기능은 macOS에서만 동작합니다.
   - **재연결과 레벨 이름:** 기기는 연결된 동안의 로그만 보내므로 재연결 뒤에는 그때부터 이어서 기록하고, 끊긴 지점에 `gap`을 표시합니다. 재부팅은 구분하지 않습니다. Wi-Fi 기기도 연결이 끊기면 usbmuxd가 연결을 닫아 스트림이 끝나므로(macOS에서 iPhone의 Wi-Fi를 꺼서 확인), 데이터가 오지 않는 시간으로 끊김을 판단하지 않습니다. 데이터셋 상태의 `ios`(모든 파일이 iOS 로그)나 기록의 `platform`이 iOS면 화면은 F·U 레벨을 `Fault`·`Default`로 부릅니다.
 - **엔진 연동:** `Engine::open_capture`가 기록 파일을 데이터셋으로 열고 검증 직후 따라가기를 켭니다. 기록이 끝나면 따라가기를 꺼 마지막 줄까지 읽어 건수를 확정하며, 데이터셋을 닫거나 교체가 확정되면 기록을 닫습니다. 롤백으로 되살아난 기록 로그는 일시중지 직전에 따라가고 있었을 때만 다시 따라갑니다.
 - **임시 파일(`store.rs`):** 기록 파일 옆 잠금 파일(`.lock`)을 실행 중인 앱이 잡고 있으며, 잡히지 않은 파일은 비정상 종료로 남은 기록입니다. 닫을 때 사용자가 버리기로 했거나 저장하지 않은 바이트가 없으면 파일을 지웁니다.
@@ -133,7 +139,7 @@
 | `follow` | `follow:true`/`false`로 실시간 따라가기 켜기·끄기(단일 텍스트 파일 전용) |
 | `cancel`, `close` | 진행 중인 쿼리 취소 및 파일 닫기(동시 요청 수 제한과 별도로 즉시 처리) |
 
-기기 기록은 별도 Tauri 명령을 씁니다: `adb_status`·`pick_adb`(adb 탐지·지정), `list_devices`(Android 기기와 iPhone·iPad 목록, 종류별로 목록을 받지 못한 이유), `start_capture`·`stop_capture`, `save_capture`·`discard_capture`(저장·버리기 표시), `capture_leftovers`·`open_leftover`·`delete_leftover`(남은 기록, ID로만 지칭), `finish_drop`·`answer_close`(기록 로그가 열려 있을 때 보류한 드롭과 창 닫기에 대한 화면의 답). 엔진은 기록 상태가 바뀌면 `capture-changed` 이벤트를 보내고, 상태 응답과 `query-progress`에는 `capture`가 함께 실립니다.
+기기 기록은 별도 Tauri 명령을 씁니다: `adb_status`·`pick_adb`(adb 탐지·지정), `list_devices`(Android 기기와 iPhone·iPad 목록, 종류별로 목록을 받지 못한 이유), `start_capture`·`stop_capture`, `save_capture`·`discard_capture`(저장·버리기 표시), `capture_leftovers`·`open_leftover`·`delete_leftover`(남은 기록, ID로만 지칭), `capture_apps`·`launch_capture_app`(기록 중인 iPhone·iPad의 개발용 서명 앱 목록과 실행, 데이터셋 ID와 마지막 앱 목록의 bundle ID로만 지칭), `finish_drop`·`answer_close`(기록 로그가 열려 있을 때 보류한 드롭과 창 닫기에 대한 화면의 답). 엔진은 기록 상태가 바뀌면 `capture-changed` 이벤트를 보내고, 상태 응답과 `query-progress`에는 `capture`가 함께 실립니다.
 
 동시 데이터 요청은 최대 4개까지 허용하며, 초과 시 `Local engine is busy; retry`를 반환해 프론트엔드가 짧게 재시도합니다. 엔진은 상태 변화 시 `source-changed`(`opened`·`validated`·`rollback`·`error`), `files-ordered`, `query-progress` 이벤트를 발행합니다.
 
@@ -153,7 +159,7 @@
 ## 파일 접근 및 보안 경계
 
 - **승인된 파일만 접근:** Rust 백엔드는 OS 파일 선택 대화상자, 네이티브 드래그 앤 드롭, 명시적 CLI 인자, macOS Finder 파일 붙여넣기 일회성 권한(grant)으로 사용자가 직접 승인한 파일만 읽습니다. 프론트엔드에는 파일 경로를 직접 열어 볼 수 있는 API가 없으며, 최근 파일(`recent-files.json`), 다시 열기(`reopen_source`), 작업 상태(`work-states.json`) 모두 내부 ID(`datasetId` 또는 항목 ID)로만 통신합니다.
-- **기기 기록과 외부 프로그램 실행:** 앱이 실행하는 외부 프로그램은 adb뿐입니다. iPhone·iPad는 외부 프로그램 없이 OS의 Apple 기기 서비스와 기기가 이미 맺은 페어링 기록으로만 연결하며, 페어링을 새로 만들거나 바꾸지 않고 로그 서비스 하나만 엽니다. adb는 백엔드가 정해진 위치에서 찾거나 OS 파일 선택 창으로 지정한 파일만 쓰며, `adb version` 출력으로 adb인지 확인합니다. 화면은 실행 파일 경로나 명령을 보낼 수 없고, adb의 출처와 버전만 받습니다. 기기 serial은 백엔드가 마지막으로 받은 기기 목록에 있는 값만 허용하며, 셸을 거치지 않고 프로세스 인자로 넘깁니다. 기기에서 실행하는 명령은 고정된 조회와 `logcat`뿐이며, 임시 기록 파일과 남은 기록도 화면에는 ID와 이름만 전달합니다.
+- **기기 기록과 외부 프로그램 실행:** 앱이 실행하는 외부 프로그램은 adb와, macOS에서 iPhone·iPad 앱 목록을 열거나 앱을 실행할 때만 쓰는 `xcode-select`·`xcodebuild`·`devicectl`뿐입니다. iPhone·iPad는 외부 프로그램 없이 OS의 Apple 기기 서비스와 기기가 이미 맺은 페어링 기록으로만 연결하며, 페어링을 새로 만들거나 바꾸지 않고 로그 서비스 하나만 엽니다. adb는 백엔드가 정해진 위치에서 찾거나 OS 파일 선택 창으로 지정한 파일만 쓰며, `adb version` 출력으로 adb인지 확인합니다. 화면은 실행 파일 경로나 명령을 보낼 수 없고, adb의 출처와 버전만 받습니다. 기기 serial은 백엔드가 마지막으로 받은 기기 목록에 있는 값만 허용하며, 셸을 거치지 않고 프로세스 인자로 넘깁니다. 기기에서 실행하는 명령은 고정된 조회와 `logcat`뿐이며, 앱 실행의 bundle ID는 마지막 앱 목록에 있고 허용 문자(영문자·숫자·`-`·`.`·`_`)만으로 된 값만 받아 `--` 뒤에 넘깁니다. 임시 기록 파일과 남은 기록도 화면에는 ID와 이름만 전달합니다.
 - **메모리 및 원자적 쓰기:** 로그 원문 전체를 메모리에 복제하지 않고 필요할 때마다 128 KiB 블록 단위로 파일에서 직접 읽으며 반복 읽기는 OS 페이지 캐시를 활용합니다. 결과 내보내기와 설정 파일(`recent-files.json`, `work-states.json`, `saved-filters.json`) 저장은 모두 임시 파일에 먼저 기록한 뒤 원자적으로 교체(atomic rename)합니다.
 
 ## 빌드와 배포
@@ -210,10 +216,11 @@ python3 tests/e2e/run.py target/qa/release/logstudio-desktop
 
 ### 실제 기기·에뮬레이터 검사
 
-`core/tests/ios_device.rs`는 이 컴퓨터를 신뢰한 iPhone·iPad(USB나 Wi-Fi 연결)로 제품의 iOS 기기 연결을 검증하며, 평소 테스트에서는 건너뜁니다. 시작한 뒤의 줄만 기록되는지, 모든 줄이 iOS 로그로 읽히는지(이어지는 줄 제외)와 초당 줄 수를 확인하고, 케이블을 뽑았다 꽂는 재연결 검사는 사람이 직접 해야 합니다. Finder에서 Wi-Fi 보기를 켠 기기는 케이블을 뽑아도 Wi-Fi로 이어지므로, 케이블 재연결을 확인하려면 이 설정을 끄고 합니다. 여러 대가 연결되어 있으면 `LOGSTUDIO_IOS_UDID`로 고릅니다.
+`core/tests/ios_device.rs`는 이 컴퓨터를 신뢰한 iPhone·iPad(USB나 Wi-Fi 연결)로 제품의 iOS 기기 연결을 검증하며, 평소 테스트에서는 건너뜁니다. 시작한 뒤의 줄만 기록되는지, 모든 줄이 iOS 로그로 읽히는지(이어지는 줄 제외)와 초당 줄 수를 확인하고, 케이블을 뽑았다 꽂는 재연결 검사는 사람이 직접 해야 합니다. Finder에서 Wi-Fi 보기를 켠 기기는 케이블을 뽑아도 Wi-Fi로 이어지므로, 케이블 재연결을 확인하려면 이 설정을 끄고 합니다. 여러 대가 연결되어 있으면 `LOGSTUDIO_IOS_UDID`로 고릅니다. 개발용 서명 앱 실행 검사는 Xcode와 기기의 개발용 서명 앱이 필요하며, `LOGSTUDIO_IOS_APP`에 그 앱의 bundle ID를 지정하면 기록 중에 앱을 다시 실행해 그 앱 프로세스의 줄에 `<private>`가 없는지 확인합니다. 지정한 앱은 종료된 뒤 다시 실행됩니다.
 
 ```sh
 cargo test -p logstudio-core --test ios_device -- --ignored --test-threads 1 --nocapture
+LOGSTUDIO_IOS_APP=<bundle ID> cargo test -p logstudio-core --test ios_device a_developer_build -- --ignored --nocapture
 ```
 
 `core/tests/capture_device.rs`는 연결한 기기나 에뮬레이터로 제품의 adb 연결을 검증하며, 평소 테스트에서는 건너뜁니다(`#[ignore]`). 시작 경계, adb 서버 재시작 후 이어 붙이기, 재부팅 후 기록, 설치된 adb 탐지를 확인하며, 기기 쪽 로그는 테스트가 실행 중에 직접 찍은 확인용 줄로만 판정합니다.

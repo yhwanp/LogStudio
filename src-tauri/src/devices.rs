@@ -1,10 +1,13 @@
 //! Device captures for the window: the adb that runs, the Android devices
-//! it lists and the iPhones Apple's device service lists, and the temporary
-//! capture files. The page names a device by a serial of the last listing,
-//! an iPhone's UDID, and a leftover file by an ID; paths stay here.
+//! it lists and the iPhones Apple's device service lists, the developer
+//! builds an iPhone being recorded has, and the temporary capture files.
+//! The page names a device by a serial of the last listing, an iPhone's
+//! UDID, an app by a bundle of the last app listing, and a leftover file by
+//! an ID; paths stay here.
 use logstudio_core::{
     capture::{
         adb::{self, Adb, Origin},
+        apps::{self, App, Apps, IosApps},
         cli::AdbCli,
         ios::IosLink,
         link::{Device, Link, Platform},
@@ -33,6 +36,9 @@ pub struct Devices {
     /// What QA builds use instead of adb, and instead of Apple's service.
     replaced: Mutex<Option<Replaced>>,
     replaced_ios: Mutex<Option<Replaced>>,
+    replaced_apps: Mutex<Option<Arc<dyn Apps>>>,
+    /// The serial and apps of the last app listing: only these start.
+    listed_apps: Mutex<Option<(String, Vec<App>)>>,
 }
 /// Leftover files by the IDs the page has, and the ID the next one gets.
 #[derive(Default)]
@@ -126,6 +132,42 @@ impl Devices {
     #[cfg_attr(not(feature = "qa"), allow(dead_code))]
     pub fn replace_ios(&self, with: Option<Replaced>) {
         *self.replaced_ios.lock().unwrap() = with;
+    }
+    /// Uses scripted developer builds instead of the device's (QA builds).
+    #[cfg_attr(not(feature = "qa"), allow(dead_code))]
+    pub fn replace_apps(&self, with: Option<Arc<dyn Apps>>) {
+        *self.replaced_apps.lock().unwrap() = with;
+    }
+    fn launcher(&self) -> Arc<dyn Apps> {
+        let replaced = self.replaced_apps.lock().unwrap().clone();
+        replaced.unwrap_or_else(|| Arc::new(IosApps::default()))
+    }
+    /// The developer builds on the iPhone recorded under `serial`.
+    pub fn apps(&self, serial: &str) -> Result<Value, String> {
+        let found = self.launcher().apps(serial).map_err(|e| {
+            public_message(
+                &e,
+                "Could not list the apps; check the connection and retry",
+            )
+        })?;
+        let page: Vec<Value> = found.iter().map(App::json).collect();
+        *self.listed_apps.lock().unwrap() = Some((serial.into(), found));
+        Ok(json!(page))
+    }
+    /// Starts an app of the last listing, with its private values shown.
+    pub fn launch(&self, serial: &str, bundle: &str) -> Result<App, String> {
+        let app = self
+            .listed_apps
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|(listed, _)| listed == serial)
+            .and_then(|(_, found)| found.iter().find(|a| a.bundle == bundle).cloned())
+            .ok_or(apps::NOT_LISTED)?;
+        self.launcher()
+            .launch(serial, &app.bundle)
+            .map_err(|e| public_message(&e, apps::LAUNCH_FAILED))?;
+        Ok(app)
     }
     fn ios_link(&self) -> Result<Arc<dyn Link>, String> {
         match self.replaced_ios.lock().unwrap().clone() {
@@ -339,6 +381,55 @@ mod tests {
             d.start("QA0UDID0000000000000001").err().as_deref(),
             Some(NOT_LISTED)
         );
+    }
+
+    #[test]
+    fn only_listed_apps_of_the_listed_device_start() {
+        use logstudio_core::capture::{apps::NO_XCODE, fake::FakeLink};
+        const IPHONE: &str = "QA0UDID0000000000000001";
+        let dir = tempfile::tempdir().unwrap();
+        let d = devices(dir.path());
+        let link = FakeLink::live();
+        link.add_ios(IPHONE, "QA iPhone", "27.0");
+        link.add_ios("QA0UDID0000000000000002", "QA iPad", "27.0");
+        link.add_app(IPHONE, "com.example.sample", "SampleApp", "1.4.0");
+        d.replace_apps(Some(link.clone()));
+        // Nothing was listed yet.
+        let not_listed = Some(apps::NOT_LISTED);
+        assert_eq!(
+            d.launch(IPHONE, "com.example.sample").err().as_deref(),
+            not_listed
+        );
+        assert_eq!(
+            d.apps(IPHONE).unwrap(),
+            json!([{"bundle":"com.example.sample","name":"SampleApp","version":"1.4.0","executable":"SampleApp"}])
+        );
+        assert_eq!(
+            d.launch(IPHONE, "com.example.other").err().as_deref(),
+            not_listed
+        );
+        let other = "QA0UDID0000000000000002";
+        assert_eq!(
+            d.launch(other, "com.example.sample").err().as_deref(),
+            not_listed
+        );
+        let started = d.launch(IPHONE, "com.example.sample").unwrap();
+        assert_eq!(
+            (started.name.as_str(), started.executable.as_str()),
+            ("SampleApp", "SampleApp")
+        );
+        assert_eq!(
+            link.launched(),
+            [(IPHONE.to_string(), "com.example.sample".to_string())]
+        );
+        // Listing another device forgets the first one's apps.
+        assert_eq!(d.apps(other).unwrap(), json!([]));
+        assert_eq!(
+            d.launch(IPHONE, "com.example.sample").err().as_deref(),
+            not_listed
+        );
+        link.apps_error(Some(NO_XCODE));
+        assert_eq!(d.apps(IPHONE).err().as_deref(), Some(NO_XCODE));
     }
 
     #[test]
