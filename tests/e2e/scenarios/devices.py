@@ -1,8 +1,9 @@
-"""Android device captures with scripted devices (QA builds; no adb or
-device runs): a capture file a crashed run left, getting adb, the device
-menu, recording, a device that leaves and comes back, stopping, the save
-question before a capture's log closes or the app quits, opening a left
-file, and a capture that fails."""
+"""Device captures with scripted devices (QA builds; no adb, device
+service or device runs): a capture file a crashed run left, getting adb,
+the device menu with Android devices and iPhones, recording, a device that
+leaves and comes back, stopping, the save question before a capture's log
+closes or the app quits, opening a left file, a capture that fails, and an
+iPhone that leaves and must trust the computer again."""
 import time
 
 MENU = "return [...document.querySelectorAll('#rowMenu>*')].map(e=>e.tagName==='HR'?'---':e.textContent)"
@@ -13,7 +14,7 @@ QA = "window.__TAURI__.core.invoke('qa_devices',{action:arguments[0]});return tr
 # window.__quit.
 QUIT = "window.__quit=null;window.__TAURI__.core.invoke('qa_quit').then(ids=>{window.__quit=ids;});return true;"
 STATE = """const bar=document.getElementById('captureBar'),rows=[...document.querySelectorAll('#logsRows .log-row')];return {
-  bar:bar.hidden?null:{tone:bar.dataset.tone,text:document.getElementById('captureState').textContent,stop:!document.getElementById('captureStop').hidden,
+  bar:bar.hidden?null:{tone:bar.dataset.tone,text:document.getElementById('captureText').textContent,stop:!document.getElementById('captureStop').hidden,
     save:document.getElementById('captureSave').classList.contains('primary')},
   open:document.getElementById('openFile').classList.contains('primary'),
   count:document.getElementById('logsCount').textContent,following:document.getElementById('followFile').getAttribute('aria-pressed'),
@@ -48,13 +49,18 @@ def run(ctx):
         check('a capture file a crashed run left is offered with the empty state', s['leftovers'] == [left.name], s['leftovers'])
         app.capture('01-empty-leftover', hover='emptyDevice')
 
-        # Without adb the device menu says how to get it.
+        # Without adb the device menu still lists iPhones, and one item leads
+        # to getting adb. Scripted iPhones keep a connected one out of the test.
+        js(QA, 'ios')
         js(QA, 'missing')
         app.click('emptyDevice')
-        m = menu(lambda v: v[0] == 'adb를 찾지 못했습니다', 'no adb menu')
-        check('without adb the device menu offers how to get it', '설치 방법 보기…' in m and 'adb 위치 지정…' in m, m)
+        m = menu(lambda v: 'Android 기기 로그를 기록하려면 adb를 설치해 주세요…' in v, 'no adb menu')
+        check('without adb the device menu lists iPhones and leads to getting adb',
+              'QA iPhone · iOS 27.0' in m and 'adb 위치 지정…' not in m and 'Android' not in m, m)
+        described = js("const m=document.getElementById('rowMenu'),ids=(m.getAttribute('aria-describedby')||'').split(' ');return ids.map(id=>document.getElementById(id)?.textContent)")
+        check('the menu\'s notes describe it for screen readers', described == ['기록할 기기를 선택해 주세요 · 지금부터 들어오는 로그를 기록합니다'], described)
         app.capture('02-menu-no-adb')
-        js(PICK, '설치 방법 보기')
+        js(PICK, 'Android 기기 로그를 기록하려면')
         until(lambda v: v['adb'], 'adb help')
         command = js("return document.getElementById('adbCommand').textContent")
         check('the help names the install command for this computer', command == 'brew install --cask android-platform-tools', command)
@@ -67,12 +73,22 @@ def run(ctx):
         # Scripted devices: one ready, one waiting for authorization.
         js(QA, 'fake')
         app.click('emptyDevice')
-        m = menu(lambda v: len(v) > 2, 'device menu')
-        check('the menu lists the ready device and says what the other needs',
-              'Pixel 8 · emulator-5554' in m and 'Tablet X1 · 기기 화면에서 USB 디버깅을 허용해 주세요' in m, m)
+        m = menu(lambda v: any(x.startswith('Pixel 8') for x in v), 'device menu')
+        check('the menu lists each kind of device under its name and says what the others need',
+              m[1:4] == ['Android', 'Pixel 8 · emulator-5554', 'Tablet X1 · QA0SERIAL01 기기 화면에서 USB 디버깅을 허용해 주세요']
+              and 'iPhone·iPad' in m and 'QA iPhone · iOS 27.0' in m and any(x.startswith('QA iPad · iPadOS 27.0 기기 화면의') for x in m), m)
+        trust = js("const b=[...document.querySelectorAll('#rowMenu>button')].find(b=>b.textContent.startsWith('QA iPad'));return b?b.querySelector('.menu-sub').textContent:null")
+        check('an iPad that does not trust the computer says how it comes to, in view', '이 컴퓨터를 신뢰하겠습니까' in (trust or ''), trust)
         waiting_item = js("const b=[...document.querySelectorAll('#rowMenu>button')].find(b=>b.textContent.startsWith('Tablet X1'));return b?b.getAttribute('aria-disabled'):null")
         check('a device that cannot be picked is still a menu item the keyboard reaches', waiting_item == 'true', waiting_item)
         app.capture('04-menu-devices')
+        # Trusted while the menu is open, the iPad becomes choosable on its
+        # own, and focus stays on it.
+        js("[...document.querySelectorAll('#rowMenu>button')].find(b=>b.textContent.startsWith('QA iPad')).focus();return true;")
+        js(QA, 'ios-ipad-trusted')
+        state = app.wait(lambda: js("const b=[...document.querySelectorAll('#rowMenu>button')].find(b=>b.textContent.startsWith('QA iPad'));"
+                                    "return b&&!b.hasAttribute('aria-disabled')&&{text:b.textContent,focused:document.activeElement===b}"), 10, what='iPad choosable')
+        check('a device trusted while the menu is open becomes choosable, keeping focus', state['text'] == 'QA iPad · iPadOS 27.0' and state['focused'], state)
         js(PICK, 'Pixel 8')
         s = until(lambda v: v['bar'] and v['bar']['tone'] == 'live' and v['following'] == 'true', 'recording')
         s = until(lambda v: v['count'].endswith('건') and not v['count'].endswith(' 0건') and v['bar']['text'].endswith('저장 안 됨'), 'rows arrive')
@@ -98,8 +114,8 @@ def run(ctx):
         # and a narrow window ends its words in an ellipsis.
         js(QA, 'unauthorized')
         js(QA, 'plug')
-        s = until(lambda v: v['bar'] and v['bar']['text'].startswith('연결 끊김 · USB 디버깅을 허용해 주세요'), 'waiting for approval')
-        check('a device listed but not allowed says what it needs first', s['bar']['text'] == '연결 끊김 · USB 디버깅을 허용해 주세요 · Pixel 8', s['bar'])
+        s = until(lambda v: v['bar'] and v['bar']['text'].startswith('다시 연결됨 · USB 디버깅을 허용해 주세요'), 'waiting for approval')
+        check('a device plugged in again but not allowed says what it needs first', s['bar']['text'] == '다시 연결됨 · USB 디버깅을 허용해 주세요 · Pixel 8', s['bar'])
         frame = app.rect()
         app.rect(width=900, height=frame['height'])
         time.sleep(.5)
@@ -180,3 +196,65 @@ def run(ctx):
         app.click('captureDiscard')
         until(lambda v: v['empty'], 'failed capture closed')
         js(QA, 'real')
+
+        # An iPhone: its rows are iOS rows, recorded only while it is there,
+        # and it may need to trust the computer again when it comes back.
+        app.click('emptyDevice')
+        menu(lambda v: any(x.startswith('QA iPhone') for x in v), 'device menu with the iPhone')
+        js(PICK, 'QA iPhone')
+        s = until(lambda v: v['bar'] and v['bar']['tone'] == 'live' and v['bar']['text'].endswith('저장 안 됨')
+                  and int(''.join(c for c in v['count'] if c.isdigit()) or 0) >= 6, 'iPhone recording')
+        check('an iPhone capture records its rows', s['bar']['text'] == '기록 중 · QA iPhone · 저장 안 됨', s['bar'])
+        files = sorted(p.name for p in captures.glob('ios-QA_iPhone-*.log'))
+        check('an iPhone capture file is named for the device', len(files) == 1, [p.name for p in captures.glob('*')])
+        cells = js("""return [...document.querySelectorAll('#logsRows .log-row')].slice(0,12).map(r=>({level:r.querySelector('.level')?.textContent,
+          title:r.querySelector('.level')?.title,tag:r.querySelector('.tag')?.textContent,pid:r.querySelector('.pid')?.textContent}))""")
+        app_error = next((c for c in cells if c['tag'] == 'Sync' and c['level'] == 'Error'), None)
+        fault = next((c for c in cells if c['title'] == 'Fault'), None)
+        check('iPhone rows take the level the app wrote, or the entry\'s own level, by Apple\'s names', app_error is not None and fault is not None
+              and fault['level'] == 'Fault' and all(c['pid'] == '812' for c in cells), cells)
+        chip = js("return document.querySelector('#levelFilters [data-level=F] .letter').textContent+'/'+document.querySelector('#levelFilters [data-level=U] .letter').textContent")
+        check('the level filter names Apple\'s levels for an iPhone log', chip == 'Fault/Default', chip)
+        shown = js("""const r=[...document.querySelectorAll('#logsRows .log-row')].find(r=>r.querySelector('.timestamp.apple-stamp'));
+          const t=r.querySelector('.timestamp'),g=r.querySelector('.tag');return {stamp:t.scrollWidth<=t.clientWidth+1,text:t.textContent,tag:getComputedStyle(g).direction}""")
+        check('an iPhone row shows its process whole and cuts its tag from the start', shown['stamp'] and shown['tag'] == 'rtl', shown)
+        app.capture('11-ios-recording')
+        js(QA, 'ios-unplug')
+        s = until(lambda v: v['bar'] and v['bar']['tone'] == 'waiting', 'iPhone waiting')
+        hint = js("return document.getElementById('captureHint').textContent")
+        check('an iPhone that leaves is waited for, and the bar and screen readers say what it logs meanwhile is lost',
+              s['bar']['text'] == '연결 끊김 · 끊긴 동안 로그 기록 안 됨 · QA iPhone' and hint.endswith('끊긴 동안의 로그는 기록되지 않습니다.'), {'bar': s['bar'], 'hint': hint})
+        app.capture('11b-ios-away')
+        js(QA, 'ios-untrusted')
+        js(QA, 'ios-plug')
+        s = until(lambda v: v['bar'] and '신뢰' in v['bar']['text'], 'iPhone waiting for trust')
+        check('an iPhone back but not trusting the computer says so first', s['bar']['text'] == '다시 연결됨 · 이 컴퓨터를 신뢰해 주세요 · QA iPhone', s['bar'])
+        app.capture('12-ios-trust')
+        js(QA, 'ios-trusted')
+        s = until(lambda v: v['bar'] and v['bar']['tone'] == 'live' and v['breaks'], 'iPhone back')
+        check('an iPhone back is recorded again after a break that says its rows meanwhile are missing',
+              '연결 끊김 →' in s['breaks'][0]['label'] and s['breaks'][0]['label'].endswith(' · 끊긴 동안 로그 기록 안 됨'), s['breaks'])
+        app.click('followFile')
+        until(lambda v: v['following'] == 'false', 'iPhone paused')
+        js(SHOW_BREAK)
+        time.sleep(.4)
+        app.capture('12b-ios-break')
+        app.click('largeClose')
+        until(lambda v: v['dialog'], 'asked about the iPhone capture')
+        app.click('captureDiscard')
+        until(lambda v: v['empty'], 'iPhone capture closed')
+        time.sleep(.5)
+        check('an iPhone capture not kept is deleted', not list(captures.glob('ios-*.log')), [p.name for p in captures.glob('*')])
+
+        # Without Apple's device service (Windows without Apple Devices or
+        # iTunes), one item leads to a dialog on getting it.
+        js(QA, 'ios-missing')
+        app.click('emptyDevice')
+        m = menu(lambda v: any(x.startswith('iPhone·iPad 로그를 기록하려면') for x in v), 'menu without the device service')
+        check('without Apple\'s device service one item leads to getting it', 'iPhone·iPad 로그를 기록하려면 Apple Devices 앱을 설치해 주세요…' in m, m)
+        js(PICK, 'iPhone·iPad 로그를 기록하려면')
+        url = app.wait(lambda: js("const d=document.getElementById('appleDialog');return d.open&&document.getElementById('appleUrl').textContent"), what='Apple help')
+        check('the Apple help names the Store page', url == 'https://apps.microsoft.com/detail/9np83lwlpz9k', url)
+        app.capture('13-apple-help')
+        app.click('appleClose')
+        js(QA, 'ios-real')

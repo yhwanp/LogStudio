@@ -16,13 +16,14 @@ export const DEFAULT_FILTERS = Object.freeze(defaultFilters());
 const number = value => Number.isSafeInteger(value) && value >= 0;
 const CAPTURE_STATES = new Set(['recording', 'waiting', 'stopped', 'failed']);
 // A device capture as the engine reports it; null for any other log. A
-// break is where the device left and came back: `row` is the first after it.
+// break is where the device left and came back: `row` is the first after it,
+// and `gap` says rows logged meanwhile were not recorded.
 export function captureState(value) {
   if (!value || typeof value !== 'object' || !CAPTURE_STATES.has(value.state)) return null;
   const text = (v, n = 300) => typeof v === 'string' ? v.slice(0, n) : '';
   const time = v => Number.isSafeInteger(v) ? v : null;
-  const breaks = Array.isArray(value.breaks) ? value.breaks.slice(0, 1000).filter(b => number(b?.row) && b.row > 0).map(b => ({row:b.row, lost:time(b.lost), resumed:time(b.resumed), reboot:b.reboot === true})) : [];
-  return {state:value.state, device:text(value.device), serial:text(value.serial), bytes:number(value.bytes) ? value.bytes : 0, error:text(value.error, 500), breaks, lost:time(value.lost), reason:text(value.reason), unsaved:value.unsaved === true, recovered:value.recovered === true};
+  const breaks = Array.isArray(value.breaks) ? value.breaks.slice(0, 1000).filter(b => number(b?.row) && b.row > 0).map(b => ({row:b.row, lost:time(b.lost), resumed:time(b.resumed), reboot:b.reboot === true, gap:b.gap === true})) : [];
+  return {state:value.state, device:text(value.device), serial:text(value.serial), bytes:number(value.bytes) ? value.bytes : 0, error:text(value.error, 500), breaks, lost:time(value.lost), reason:text(value.reason), unsaved:value.unsaved === true, recovered:value.recovered === true, platform:value.platform === 'ios' ? 'ios' : 'android'};
 }
 const CONDITION_STATES = new Set(['some', 'none', 'pending', null]);
 // The engine's state of each condition a logs pane query sent, or null.
@@ -46,7 +47,7 @@ export function createLargeLogController({transport, onChange=()=>{}, onLocate=(
   let detailHistory = [], locationBusy = false, locationNearest = false, locationRestore = null, searchMarks = null;
   let querySequence = 0, desiredFilters = defaultFilters();
   const requests = new Map();
-  const initialState = {datasetId:null, name:'', files:[], size:0, status:'connecting', indexedBytes:0, total:0, summary:null, complete:false, textComplete:false, summaryComplete:false, analysis:null, queryComplete:false, fieldFiltering:false, queryId:0, queryAccepted:false, queryStatus:'idle', caughtUp:false, count:0, scannedBytes:0, viewportStart:0, scrollRevision:0, scrollAlign:'start', selectedIndex:null, locationPending:null, detail:null, selectedLine:null, error:'', closed:false, followable:false, following:false, grown:false, followError:'', tailRevision:0, format:'text', conditions:null, checkedConditions:null, capture:null};
+  const initialState = {datasetId:null, name:'', files:[], size:0, status:'connecting', indexedBytes:0, total:0, summary:null, complete:false, textComplete:false, summaryComplete:false, analysis:null, queryComplete:false, fieldFiltering:false, queryId:0, queryAccepted:false, queryStatus:'idle', caughtUp:false, count:0, scannedBytes:0, viewportStart:0, scrollRevision:0, scrollAlign:'start', selectedIndex:null, locationPending:null, detail:null, selectedLine:null, error:'', closed:false, followable:false, following:false, grown:false, followError:'', tailRevision:0, format:'text', ios:false, conditions:null, checkedConditions:null, capture:null};
   const state = {...initialState};
   const snapshot = () => ({...state, detail:state.detail && {...state.detail}});
   const emit = () => { if (!disposed) onChange(snapshot()); };
@@ -121,6 +122,8 @@ export function createLargeLogController({transport, onChange=()=>{}, onLocate=(
     if (typeof data.name === 'string') state.name = data.name;
     // DLT files show their own columns; anything else reads as text.
     if (typeof data.format === 'string') state.format = data.format === 'dlt' ? 'dlt' : 'text';
+    // Every file is an iOS log, whose levels go by Apple's names.
+    if (typeof data.ios === 'boolean') state.ios = data.ios;
     state.followable = data.followable === true; state.following = data.following === true; state.grown = data.grown === true; state.followError = safeMessage(data.followError);
     // Every status of a capture's log carries the capture.
     if (data.capture !== undefined) state.capture = captureState(data.capture);

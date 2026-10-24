@@ -3,8 +3,12 @@ import assert from 'node:assert/strict';
 import {createPopupMenu} from '../dist/menu.js';
 
 class Element {
-  constructor(document, tag='div') {this.document = document; this.tagName = tag.toUpperCase(); this.children = []; this.attributes = {}; this.listeners = {}; this.style = {}; this.hidden = true; this.textContent = ''; this.className = '';}
+  constructor(document, tag='div') {this.document = document; this.tagName = tag.toUpperCase(); this.children = []; this.attributes = {}; this.listeners = {}; this.style = {}; this.dataset = {}; this.hidden = true; this._text = ''; this.className = '';}
+  get textContent() {return this._text + this.children.map(c => typeof c === 'string' ? c : c?.textContent ?? '').join('');}
+  set textContent(value) {this._text = String(value); this.children = [];}
+  append(...nodes) {this.children.push(...nodes);}
   setAttribute(key, value) {this.attributes[key] = String(value);}
+  removeAttribute(key) {delete this.attributes[key];}
   getAttribute(key) {return this.attributes[key] ?? null;}
   replaceChildren(...nodes) {this.children = nodes;}
   addEventListener(key, fn) {(this.listeners[key] ??= []).push(fn);}
@@ -19,6 +23,7 @@ class Element {
     if (selector === '[aria-checked=true]') return this.children.filter(c => c.attributes['aria-checked'] === 'true');
     if (selector === '[role^=menuitem]') return this.children.filter(c => c.attributes.role?.startsWith('menuitem'));
     if (selector === '[role^=menuitem]:not([aria-disabled=true])') return this.children.filter(c => c.attributes.role?.startsWith('menuitem') && c.attributes['aria-disabled'] !== 'true');
+    if (selector === '.menu-note') return this.children.filter(c => c?.className?.split(' ').includes('menu-note'));
     return [];
   }
 }
@@ -39,6 +44,7 @@ test('notes are plain text, a checked choice is a radio item focused first', () 
   assert.deepEqual([a.attributes.role, a.attributes['aria-checked'], a.title], ['menuitemradio', 'false', 'tip']);
   assert.deepEqual([b.attributes.role, b.attributes['aria-checked']], ['menuitemradio', 'true']);
   assert.deepEqual([note.tagName, note.className, note.textContent, note.attributes.role], ['P', 'menu-note', 'note only', undefined]);
+  assert.equal(r.menu.attributes['aria-describedby'], note.id, 'notes describe the menu, as items cannot');
   assert.equal(line.attributes.role, 'separator');
   assert.deepEqual([save.attributes.role, 'aria-checked' in save.attributes], ['menuitem', false]);
   assert.equal(r.document.activeElement, b, 'the current choice has focus');
@@ -78,4 +84,30 @@ test('an item that cannot be chosen is reached but does nothing', () => {
   assert.equal(r.document.activeElement, tablet, 'arrow keys reach it');
   tablet.click();
   assert.deepEqual(picked, []); assert.equal(r.menu.hidden, false);
+});
+
+test('a device item keeps what follows its name, and a second line says what it needs', () => {
+  const r = rig();
+  r.popup.show([['Android', null, undefined, {group:true}], ['Pixel 8', () => {}, 'tip', {detail:'emulator-5554', key:'emulator-5554'}],
+    ['QA iPad', null, undefined, {disabled:true, detail:'iPadOS 27.0', note:'Trust this computer', key:'U2'}]], 0, 0, 'Devices');
+  const [group, pixel, ipad] = r.menu.children;
+  assert.equal(group.className, 'menu-note menu-group');
+  assert.equal(pixel.className, 'menu-rich');
+  assert.equal(pixel.textContent, 'Pixel 8 · emulator-5554', 'the parts read apart');
+  assert.equal(ipad.textContent, 'QA iPad · iPadOS 27.0 Trust this computer');
+  assert.deepEqual([pixel.dataset.key, ipad.attributes['aria-disabled']], ['emulator-5554', 'true']);
+});
+
+test('a menu shown again while open keeps focus on the item of the same key', () => {
+  // The device menu lists devices again while one waits on the person.
+  const r = rig();
+  const items = trusted => [['Pixel 8', () => {}, '', {key:'P'}], trusted ? ['QA iPad', () => {}, '', {key:'U2'}] : ['QA iPad', null, undefined, {disabled:true, note:'Trust', key:'U2'}]];
+  r.popup.show(items(false), 0, 0, 'Devices');
+  r.menu.fire('keydown', {key:'ArrowDown'});
+  assert.equal(r.document.activeElement.dataset.key, 'U2');
+  r.popup.show(items(true), 0, 0, 'Devices');
+  const ipad = r.menu.children[1];
+  assert.equal(r.document.activeElement, ipad, 'focus stays on the iPad, now choosable');
+  r.menu.fire('keydown', {key:'Escape'});
+  assert.equal(r.document.activeElement, r.opener);
 });

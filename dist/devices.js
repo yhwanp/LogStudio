@@ -1,8 +1,10 @@
-// Android device captures: the device menu, the capture bar, how to get adb,
-// the question before a capture's unsaved rows go, and the capture files an
-// earlier run left. Native code owns adb, the devices and the files; the
-// page names a device by the serial of the last listing and a left file by
-// an ID. A capture's rows are a temporary file until the user saves them.
+// Device captures, of Android devices through adb and of iPhones and iPads
+// through Apple's device service: the device menu, the capture bar, how to
+// get adb, the question before a capture's unsaved rows go, and the capture
+// files an earlier run left. Native code owns adb, the devices and the
+// files; the page names a device by the serial of the last listing (an
+// iPhone's UDID) and a left file by an ID. A capture's rows are a temporary
+// file until the user saves them.
 import {formatSize, describeLogError} from './describe.js';
 import {textSpan, writeClipboard} from './dom.js';
 
@@ -32,54 +34,92 @@ export function deviceProblem(device) {
     case 'unauthorized': case 'authorizing': return '기기 화면에서 USB 디버깅을 허용해 주세요';
     case 'offline': case 'connecting': return '오프라인 · 기기를 다시 연결해 주세요';
     case 'no permissions': return 'USB 권한이 없습니다';
+    case 'untrusted': return '기기에서 이 컴퓨터를 신뢰해 주세요';
+    case 'locked': return '기기 잠금을 풀어 주세요';
     default: return `준비되지 않음 (${String(device?.state ?? '').slice(0, 40)})`;
   }
 }
-// A device by its model when adb knows it, else by its serial.
+// A device by its model when adb knows it, else by its serial. An iPhone's
+// name, which its owner chose, stays as it is.
 export function deviceName(device) {
-  return device?.model ? String(device.model).replaceAll('_', ' ') : String(device?.serial ?? '');
+  if (!device?.model) return String(device?.serial ?? '');
+  return device.platform === 'ios' ? String(device.model) : String(device.model).replaceAll('_', ' ');
 }
-// The device menu's items (menu.js): what adb lists, or why it lists none.
-export function deviceMenuItems({adb, list, error, loading}, actions) {
-  if (loading) return [['기기를 찾는 중…']];
-  if (adb && !adb.found) {
-    return [
-      ['adb를 찾지 못했습니다'],
-      ['Android SDK Platform-Tools를 설치하면 기기 로그를 볼 수 있습니다'],
-      null,
-      ['설치 방법 보기…', actions.help],
-      ['다시 찾기', actions.refresh],
-      ['adb 위치 지정…', actions.pick],
-    ];
+// What tells a device apart after its name: an Android device's serial, an
+// iPhone's system version (its UDID means nothing to people), with the end
+// of its UDID when another iPhone has its name (new ones are all "iPhone").
+function deviceDetail(device, alike = false) {
+  if (device?.platform !== 'ios') return String(device?.serial ?? '');
+  const system = device.version ? `${/^iPad/.test(device.product ?? '') ? 'iPadOS' : 'iOS'} ${device.version}` : '';
+  return [system, alike ? `…${String(device.serial ?? '').slice(-4)}` : ''].filter(Boolean).join(' · ');
+}
+// How an iPhone comes to trust this computer, shown under it in the menu.
+const TRUST_STEPS = '기기 화면의 "이 컴퓨터를 신뢰하겠습니까?"에서 신뢰를 누르고 암호를 입력해 주세요';
+const TRUST_HINT = `${TRUST_STEPS}. 창이 보이지 않으면 케이블을 다시 연결해 주세요.`;
+// Native code's word for a computer without Apple's device service.
+export const NO_APPLE_SERVICE = 'Apple device service not found; install Apple Devices or iTunes';
+export const APPLE_DEVICES_URL = 'https://apps.microsoft.com/detail/9np83lwlpz9k';
+// One device of the menu. One that cannot be picked yet still takes focus
+// and says on a second line what it needs, so keyboard and screen reader
+// users learn why.
+function deviceItem(device, alike, actions) {
+  const name = deviceName(device), detail = deviceDetail(device, alike), problem = deviceProblem(device);
+  const key = String(device.serial ?? '');
+  if (problem) {
+    const untrusted = device.state === 'untrusted';
+    return [name, null, untrusted ? TRUST_HINT : undefined, {disabled:true, detail, note:untrusted ? TRUST_STEPS : problem, key}];
   }
-  const footer = [
-    null,
-    ['새로 고침', actions.refresh],
-    ['adb 위치 지정…', actions.pick, adb?.found ? `지금 쓰는 adb: ${describeAdb(adb)}` : 'adb 실행 파일을 직접 선택합니다'],
-  ];
+  const title = `${name}${device.platform === 'ios' ? '' : `(${device.serial})`}의 로그를 지금부터 기록합니다`;
+  return [name, () => actions.start(device.serial), title, {detail, key}];
+}
+// The device menu's items (menu.js): the Android devices adb lists and the
+// iPhones Apple's device service lists, under their kind when both are
+// there, and what a missing kind needs. Without adb, iPhones are listed.
+export function deviceMenuItems({adb, list, error, androidError, iosError, loading}, actions) {
+  if (loading) return [['기기를 찾는 중…']];
+  const footer = [null, ['새로 고침', actions.refresh]];
+  // Without adb, picking one is part of how to get it (actions.help).
+  if (adb?.found) footer.push(['adb 위치 지정…', actions.pick, `지금 쓰는 adb: ${describeAdb(adb)}`]);
   if (error) return [[describeLogError(error)], ...footer];
+  const noAdb = !!adb && !adb.found;
   const items = [];
   if (adb?.chosenFailed) items.push(['지정한 adb를 실행할 수 없어 자동으로 찾은 adb를 씁니다']);
   const devices = Array.isArray(list) ? list : [];
-  if (devices.length) items.push(['기록할 기기를 선택해 주세요 · 지금부터 들어오는 로그를 기록합니다']);
-  else items.push(['연결된 기기가 없습니다'], ['USB 디버깅을 켠 기기를 연결하거나 에뮬레이터를 실행해 주세요']);
-  for (const device of devices) {
-    const problem = deviceProblem(device), name = deviceName(device);
-    if (problem) {
-      // A device that cannot be picked still takes focus, so keyboard and
-      // screen reader users learn why.
-      items.push([`${name} · ${problem}`, null, undefined, {disabled:true}]);
-    } else {
-      items.push([`${name} · ${device.serial}`, () => actions.start(device.serial), `${name}(${device.serial})의 로그를 지금부터 기록합니다`]);
+  if (devices.length) {
+    items.push(['기록할 기기를 선택해 주세요 · 지금부터 들어오는 로그를 기록합니다']);
+  } else {
+    items.push(['연결된 기기가 없습니다']);
+    if (!noAdb && !iosError) items.push(['Android 기기는 USB 디버깅을 켜고, iPhone·iPad는 케이블로 연결해 주세요']);
+    else if (!noAdb) items.push(['USB 디버깅을 켠 기기를 연결하거나 에뮬레이터를 실행해 주세요']);
+    else if (!iosError) items.push(['iPhone·iPad를 케이블로 연결해 주세요']);
+  }
+  const ios = devices.filter(d => d?.platform === 'ios'), android = devices.filter(d => d?.platform !== 'ios');
+  const names = ios.map(deviceName);
+  for (const [heading, group] of [['Android', android], ['iPhone·iPad', ios]]) {
+    if (!group.length) continue;
+    if (android.length && ios.length) items.push([heading, null, undefined, {group:true}]);
+    for (const device of group) {
+      const alike = group === ios && names.filter(n => n === deviceName(device)).length > 1;
+      items.push(deviceItem(device, alike, actions));
     }
   }
+  // What a missing kind of device needs, as an item that leads there.
+  const missing = [];
+  if (noAdb) missing.push(['Android 기기 로그를 기록하려면 adb를 설치해 주세요…', actions.help, 'adb 설치 방법과 adb 위치 지정을 안내합니다']);
+  else if (androidError) missing.push([describeLogError(androidError)]);
+  if (iosError === NO_APPLE_SERVICE) missing.push(['iPhone·iPad 로그를 기록하려면 Apple Devices 앱을 설치해 주세요…', actions.appleHelp, 'Apple Devices 앱이나 iTunes 설치를 안내합니다']);
+  else if (iosError) missing.push([describeLogError(iosError)]);
+  if (missing.length) items.push(null, ...missing);
   return items.concat(footer);
 }
 // What a waiting capture needs of a device that is listed again: words for
 // the bar, and what to do for its tooltip. The app retries on its own.
+// `back`: the device is plugged in again and waits on the person.
 const WAITING_FOR = {
-  'Allow USB debugging on the device, then retry':{need:'USB 디버깅을 허용해 주세요', hint:'기기 화면에서 USB 디버깅을 허용해 주세요.'},
+  'Allow USB debugging on the device, then retry':{need:'USB 디버깅을 허용해 주세요', hint:'기기 화면에서 USB 디버깅을 허용해 주세요.', back:true},
   'Device is offline; reconnect it and retry':{need:'기기가 오프라인입니다', hint:'케이블이나 기기 연결을 확인해 주세요.'},
+  'Trust this computer on the device, then retry':{need:'이 컴퓨터를 신뢰해 주세요', hint:TRUST_HINT, back:true},
+  'Unlock the device, then retry':{need:'기기 잠금을 풀어 주세요', hint:'기기 잠금을 풀어 주세요.', back:true},
 };
 const NOT_READY = {need:'기기가 준비되기를 기다리는 중', hint:'기기가 아직 로그를 보낼 준비가 되지 않았습니다.'};
 // The capture bar's words for a capture; `tone` picks its color. Each state
@@ -101,10 +141,15 @@ export function describeCapture(capture) {
       // USB debugging after a reboot.
       const wait = capture.reason ? WAITING_FOR[capture.reason] ?? NOT_READY : null;
       const lost = `${clockTime(capture.lost)}에 연결이 끊겼습니다.`;
+      // An iPhone sends only new rows: what it logs while away is lost, and
+      // the bar says so while nothing more is needed of the person.
+      const ios = capture.platform === 'ios', gap = ios ? ' 끊긴 동안의 로그는 기록되지 않습니다.' : '';
+      let text = `연결 끊김 · ${ios ? '끊긴 동안 로그 기록 안 됨' : '다시 연결을 기다리는 중'} · ${device}`;
+      if (wait) text = `${wait.back ? '다시 연결됨' : '연결 끊김'} · ${wait.need} · ${device}`;
       return {
         tone:'waiting',
-        text:`연결 끊김 · ${wait ? wait.need : '다시 연결을 기다리는 중'} · ${device}`,
-        title:wait ? `${lost} ${wait.hint} 준비되면 이어서 기록합니다.` : `${lost} 기기가 다시 연결되면 이어서 기록합니다.`,
+        text,
+        title:wait ? `${lost} ${wait.hint} 준비되면 이어서 기록합니다.${gap}` : `${lost} 기기가 다시 연결되면 이어서 기록합니다.${gap}`,
       };
     }
     case 'failed':
@@ -136,11 +181,12 @@ export function captureBreaks(capture) {
 export function breakLabel(breaks, after, row) {
   const between = breaks.filter(b => b.row > after && b.row <= row);
   if (!between.length) return '';
-  const first = between[0], last = between[between.length - 1], reboot = between.some(b => b.reboot);
+  const first = between[0], last = between[between.length - 1], reboot = between.some(b => b.reboot), gap = between.some(b => b.gap);
   const span = between.length === 1
     ? `${clockTime(first.lost)} 연결 끊김 → ${clockTime(first.resumed)} 다시 연결`
     : `${clockTime(first.lost)}–${clockTime(last.resumed)} 연결 끊김 ${between.length}번`;
-  return `${span}${reboot ? ' · 기기 재부팅' : ''}`;
+  // An iPhone's rows from while it was away were never recorded.
+  return `${span}${reboot ? ' · 기기 재부팅' : ''}${gap ? ' · 끊긴 동안 로그 기록 안 됨' : ''}`;
 }
 // How to get adb on this computer.
 export function installCommand(platform) {
@@ -213,13 +259,19 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
   const mod = /Mac|iPhone|iPad/.test(platform) ? '⌘' : 'Ctrl+';
   let adb = null, busy = false, saving = false;
 
-  // The device menu opens at once and fills in when adb answers.
+  // The device menu opens at once and fills in when adb and the devices
+  // answer.
   let menuAt = null, menuSequence = 0;
   function showMenu(content) {
     if (!menuAt) return;
-    const actions = {refresh:() => void openMenu(menuAt.anchor), pick, help:openHelp, start};
-    menu.show(deviceMenuItems({adb, ...content}, actions), menuAt.x, menuAt.y, 'Android 기기');
+    const actions = {refresh:() => void openMenu(menuAt.anchor), pick, help:openHelp, appleHelp:openAppleHelp, start};
+    menu.show(deviceMenuItems({adb, ...content}, actions), menuAt.x, menuAt.y, '기기 로그');
   }
+  const listing = listed => ({list:listed?.devices, androidError:listed?.androidError, iosError:listed?.iosError});
+  // A device that waits on the person (USB debugging, trust, unlocking) is
+  // listed again while the menu is open, so it can be chosen once ready.
+  const waitsOnPerson = listed => (listed?.devices ?? []).some(device => deviceProblem(device));
+  const pause = ms => new Promise(resolve => window.setTimeout(resolve, ms));
   async function openMenu(anchor) {
     if (isGone()) return;
     const box = anchor.getBoundingClientRect();
@@ -228,17 +280,24 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
     // A newer menu, a closed one or a closed page drops a late answer.
     const stale = () => sequence !== menuSequence || isGone() || ui.rowMenu.hidden;
     showMenu({loading:true});
+    let listed;
     try {
-      adb = await invoke('adb_status');
+      [adb, listed] = await Promise.all([invoke('adb_status'), invoke('list_devices')]);
       if (stale()) return;
-      if (!adb.found) {
-        showMenu({});
-        return;
-      }
-      const listed = await invoke('adb_devices');
-      if (!stale()) showMenu({list:listed?.devices});
+      showMenu(listing(listed));
     } catch (error) {
       if (!stale()) showMenu({error:String(error).slice(0, 500)});
+      return;
+    }
+    let shown = JSON.stringify(listed);
+    while (waitsOnPerson(listed)) {
+      await pause(1500);
+      if (stale()) return;
+      try {listed = await invoke('list_devices');} catch {return;}
+      if (stale()) return;
+      const now = JSON.stringify(listed);
+      if (now !== shown) showMenu(listing(listed));
+      shown = now;
     }
   }
   async function pick() {
@@ -279,6 +338,32 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
       $('adbDialogError').textContent = '아직 adb를 찾지 못했습니다. 설치가 끝났는지 확인하거나 adb 위치를 지정해 주세요.';
       $('adbDialogError').hidden = false;
     } catch (error) {fail(error);}
+  });
+  // How to get Apple's device service, for Windows without it.
+  const appleDialog = $('appleDialog');
+  function openAppleHelp() {
+    $('appleUrl').textContent = APPLE_DEVICES_URL;
+    $('appleDialogError').hidden = true;
+    if (!appleDialog.open) appleDialog.showModal();
+    $('appleRetry').focus({preventScroll:true});
+  }
+  const closeAppleHelp = () => {if (appleDialog.open) appleDialog.close();};
+  $('appleUrlCopy').addEventListener('click', () => copy(APPLE_DEVICES_URL));
+  $('appleClose').addEventListener('click', closeAppleHelp);
+  $('appleRetry').addEventListener('click', async () => {
+    try {
+      const listed = await invoke('list_devices');
+      if (listed?.iosError !== NO_APPLE_SERVICE) {
+        closeAppleHelp();
+        notify('Apple 기기 서비스를 찾았습니다. 기기 메뉴에서 iPhone·iPad를 선택해 주세요.');
+        return;
+      }
+      $('appleDialogError').textContent = '아직 Apple 기기 서비스를 찾지 못했습니다. 설치가 끝났는지 확인한 뒤 다시 찾아 주세요.';
+      $('appleDialogError').hidden = false;
+    } catch (error) {fail(error);}
+  });
+  appleDialog.addEventListener('click', event => {
+    if (event.target === appleDialog) closeAppleHelp();
   });
   helpDialog.addEventListener('click', event => {
     if (event.target === helpDialog) closeHelp();
@@ -378,8 +463,12 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
     ui.openFile.classList.toggle('primary', !unsaved);
     if (!words) return;
     ui.captureBar.dataset.tone = words.tone;
-    // The status region announces changes; the same words are not news.
-    if (ui.captureText.textContent !== words.text) ui.captureText.textContent = words.text;
+    // The status region announces changes, the tooltip's words with them
+    // (screen readers do not read a title); the same words are not news.
+    if (ui.captureText.textContent !== words.text) {
+      ui.captureText.textContent = words.text;
+      ui.captureHint.textContent = words.title;
+    }
     ui.captureState.title = words.title;
     const live = capture.state === 'recording' || capture.state === 'waiting';
     ui.captureStop.hidden = !live;
@@ -473,5 +562,5 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
     if (!isGone() && payload?.datasetId === logs.getState().datasetId) void logs.start();
   }).catch(() => {});
 
-  return {render, guard, keep, save, loadLeftovers, openMenu, isAsking:() => dialog.isOpen || helpDialog.open};
+  return {render, guard, keep, save, loadLeftovers, openMenu, isAsking:() => dialog.isOpen || helpDialog.open || appleDialog.open};
 }

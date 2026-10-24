@@ -7,7 +7,7 @@
 //! Captures go through the product's adb command line link; `Tool` only
 //! drives the device for the checks.
 use logstudio_core::{
-    capture::{cli::AdbCli, gate::Stamp, store::Store, Capture, Options, Phase},
+    capture::{cli::AdbCli, gate::Stamp, link::Platform, store::Store, Capture, Options, Phase},
     source::error,
 };
 use std::{
@@ -65,7 +65,9 @@ fn start() -> Run {
     let before = adb
         .run(&["-s", &serial(), "logcat", "-d", "-v", "threadtime"])
         .unwrap();
-    let slot = Store::new(dir.path()).create("device").unwrap();
+    let slot = Store::new(dir.path())
+        .create(Platform::Android, "device")
+        .unwrap();
     let options = Options {
         poll: Duration::from_millis(200),
         recent: 256,

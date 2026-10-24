@@ -563,13 +563,15 @@ async fn pick_adb(window: tauri::WebviewWindow) -> Result<Value, String> {
     .await
     .map_err(|_| "File dialog failed".to_string())?
 }
+/// The Android devices and iPhones connected now, and why a kind cannot
+/// be listed.
 #[tauri::command]
-async fn adb_devices(window: tauri::WebviewWindow) -> Result<Value, String> {
+async fn list_devices(window: tauri::WebviewWindow) -> Result<Value, String> {
     main_window(&window)?;
     let app = window.app_handle().clone();
     tauri::async_runtime::spawn_blocking(move || app.state::<devices::Devices>().list())
         .await
-        .map_err(|_| "Request failed".to_string())?
+        .map_err(|_| "Request failed".to_string())
 }
 /// Starts capturing a device of the last listing and shows its rows.
 #[tauri::command]
@@ -628,7 +630,7 @@ async fn save_capture(
             .path()
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "logcat.log".into());
+            .unwrap_or_else(|| "device.log".into());
         let chosen = app
             .dialog()
             .file()
@@ -823,25 +825,66 @@ fn qa_quit(app: tauri::AppHandle) -> Vec<String> {
     quit(&app);
     ids
 }
-/// Scripted devices instead of adb (QA builds only): `fake` lists a ready
-/// device that logs synthetic rows and one awaiting authorization;
-/// `unplug`, `plug`, `reboot`, `unauthorized` and `authorized` act on the
-/// ready one; `conflict` drops it while another adb version holds the
-/// server, which ends a capture; `missing` acts as if no adb were installed;
-/// `real` uses adb again.
+/// Scripted devices instead of adb and Apple's device service (QA builds
+/// only): `fake` lists a ready Android device that logs synthetic rows and
+/// one awaiting authorization; `unplug`, `plug`, `reboot`, `unauthorized`
+/// and `authorized` act on the ready one; `conflict` drops it while another
+/// adb version holds the server, which ends a capture; `missing` acts as if
+/// no adb were installed; `real` uses adb again. `ios` lists a ready iPhone
+/// that logs synthetic rows and an iPad that does not trust the computer;
+/// `ios-unplug`, `ios-plug`, `ios-untrusted` and `ios-trusted` act on the
+/// iPhone and `ios-ipad-trusted` on the iPad; `ios-missing` acts as if no
+/// device service were installed, and `ios-real` uses the service again.
 #[cfg(feature = "qa")]
 #[tauri::command]
 fn qa_devices(app: tauri::AppHandle, action: String) -> Result<(), String> {
     use logstudio_core::capture::fake::FakeLink;
-    static FAKE: Mutex<Option<(Arc<FakeLink>, Arc<AtomicBool>)>> = Mutex::new(None);
+    type Fake = Option<(Arc<FakeLink>, Arc<AtomicBool>)>;
+    static FAKE: Mutex<Fake> = Mutex::new(None);
+    static FAKE_IOS: Mutex<Fake> = Mutex::new(None);
+    // A new script replaces the old one, whose rows stop.
+    fn stop(fake: &mut Fake) {
+        if let Some((_, feeding)) = fake.take() {
+            feeding.store(true, Ordering::Release);
+        }
+    }
     const READY: &str = "emulator-5554";
+    const IPHONE: &str = "QA0UDID0000000000000001";
+    const IPAD: &str = "QA0UDID0000000000000002";
     let devices = app.state::<devices::Devices>();
+    if let Some(action) = action.strip_prefix("ios") {
+        let mut fake = FAKE_IOS.lock().unwrap();
+        match action {
+            "" => {
+                stop(&mut fake);
+                let link = FakeLink::live();
+                link.add_ios(IPHONE, "QA iPhone", "27.0");
+                link.add_ios(IPAD, "QA iPad", "27.0");
+                link.set_state(IPAD, "untrusted");
+                let feeding = link.feed(IPHONE, std::time::Duration::from_millis(150));
+                devices.replace_ios(Some(devices::Replaced::Link(link.clone())));
+                *fake = Some((link, feeding));
+            }
+            "-unplug" | "-plug" | "-untrusted" | "-trusted" | "-ipad-trusted" => {
+                let (link, _) = fake.as_ref().ok_or("No fake devices")?;
+                match action {
+                    "-unplug" => link.unplug(IPHONE),
+                    "-plug" => link.plug(IPHONE),
+                    "-untrusted" => link.set_state(IPHONE, "untrusted"),
+                    "-ipad-trusted" => link.set_state(IPAD, "device"),
+                    _ => link.set_state(IPHONE, "device"),
+                }
+            }
+            "-missing" => devices.replace_ios(Some(devices::Replaced::Missing)),
+            "-real" => devices.replace_ios(None),
+            _ => return Err("Unknown QA device action".into()),
+        }
+        return Ok(());
+    }
     let mut fake = FAKE.lock().unwrap();
     match action.as_str() {
         "fake" => {
-            if let Some((_, feeding)) = fake.take() {
-                feeding.store(true, Ordering::Release);
-            }
+            stop(&mut fake);
             let link = FakeLink::new();
             link.add(READY, "Pixel_8", "QA-PIXEL-8");
             link.add("QA0SERIAL01", "Tablet_X1", "QA-TABLET");
@@ -1106,7 +1149,7 @@ fn main() {
                 take_startup_error,
                 adb_status,
                 pick_adb,
-                adb_devices,
+                list_devices,
                 start_capture,
                 stop_capture,
                 save_capture,
@@ -1147,7 +1190,7 @@ fn main() {
             take_startup_error,
             adb_status,
             pick_adb,
-            adb_devices,
+            list_devices,
             start_capture,
             stop_capture,
             save_capture,

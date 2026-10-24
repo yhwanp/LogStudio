@@ -72,7 +72,7 @@ fn ios_level(s: &str) -> Option<&'static str> {
     let s = trim(s);
     if s.is_ascii() {
         // ASCII uppercasing equals Unicode uppercasing; skip the allocation.
-        const NAMES: [(&str, &str); 15] = [
+        const NAMES: [(&str, &str); 16] = [
             ("V", "V"),
             ("VERBOSE", "V"),
             ("D", "D"),
@@ -86,6 +86,8 @@ fn ios_level(s: &str) -> Option<&'static str> {
             ("ERROR", "E"),
             ("F", "F"),
             ("FATAL", "F"),
+            // Apple's most severe level.
+            ("FAULT", "F"),
             ("A", "A"),
             ("ASSERT", "A"),
         ];
@@ -101,7 +103,7 @@ fn ios_level(s: &str) -> Option<&'static str> {
         "I" | "INFO" => Some("I"),
         "W" | "WARN" | "WARNING" => Some("W"),
         "E" | "ERROR" => Some("E"),
-        "F" | "FATAL" => Some("F"),
+        "F" | "FATAL" | "FAULT" => Some("F"),
         "A" | "ASSERT" => Some("A"),
         _ => None,
     }
@@ -820,6 +822,7 @@ mod tests {
             ("ınfo", Some("I")),
             ("aſſert", Some("A")),
             ("verboſe", Some("V")),
+            ("Fault", Some("F")),
             ("notice", None),
             ("ＩＮＦＯ", None),
         ] {

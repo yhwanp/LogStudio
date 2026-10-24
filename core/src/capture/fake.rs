@@ -1,9 +1,11 @@
-//! A scripted adb connection for tests, measurements and QA builds:
+//! A scripted device connection for tests, measurements and QA builds:
 //! devices with logs that can be written, unplugged, plugged again and
-//! rebooted, as `logcat` would report them.
+//! rebooted, as `logcat` would report them, or, for a live link, iPhones
+//! that send only the rows logged while a stream is open.
 use super::{
     gate::Stamp,
-    link::{self, Closer, Device, Link, Stream},
+    ios,
+    link::{self, Closer, Device, Link, Platform, Stream},
 };
 use crate::source::error;
 use std::{
@@ -20,6 +22,8 @@ use std::{
 #[derive(Default)]
 pub struct FakeLink {
     world: Mutex<World>,
+    /// Streams send only rows logged after they open, as iPhones do.
+    live: bool,
 }
 #[derive(Default)]
 struct World {
@@ -101,6 +105,13 @@ impl FakeLink {
     pub fn new() -> Arc<Self> {
         Arc::new(Self::default())
     }
+    /// A link whose streams send only new rows, like Apple's device service.
+    pub fn live() -> Arc<Self> {
+        Arc::new(Self {
+            live: true,
+            ..Self::default()
+        })
+    }
     /// Plugs in a new ready device.
     pub fn add(&self, serial: &str, model: &str, identity: &str) {
         self.world.lock().unwrap().devices.push(FakeDevice {
@@ -109,6 +120,7 @@ impl FakeLink {
                 state: "device".into(),
                 model: model.into(),
                 product: model.into(),
+                ..Device::default()
             },
             plugged: true,
             identity: identity.into(),
@@ -116,6 +128,21 @@ impl FakeLink {
             log: vec![],
             streams: vec![],
         });
+    }
+    /// Plugs in a new ready iPhone, named by its owner and listed by its
+    /// UDID, which is also its identity.
+    pub fn add_ios(&self, udid: &str, name: &str, version: &str) {
+        self.add(udid, name, udid);
+        let mut w = self.world.lock().unwrap();
+        let info = &mut w.any(udid).info;
+        info.platform = Platform::Ios;
+        info.product = if name.contains("iPad") {
+            "iPad0,0"
+        } else {
+            "iPhone0,0"
+        }
+        .into();
+        info.version = version.into();
     }
     pub fn set_state(&self, serial: &str, state: &str) {
         self.world.lock().unwrap().any(serial).info.state = state.into();
@@ -186,9 +213,15 @@ impl FakeLink {
         let (link, serial, done) = (self.clone(), serial.to_string(), stop.clone());
         thread::spawn(move || {
             let mut n = 0;
+            let ios = link.world.lock().unwrap().any(&serial).info.platform == Platform::Ios;
             while !done.load(Ordering::Acquire) {
                 n += 1;
-                link.log(&serial, &synthetic_row(n));
+                let row = if ios {
+                    synthetic_ios_row(n)
+                } else {
+                    synthetic_row(n)
+                };
+                link.log(&serial, &row);
                 thread::sleep(interval);
             }
         });
@@ -238,7 +271,65 @@ pub fn synthetic_row(n: u64) -> String {
         message.replace('#', &n.to_string())
     )
 }
+/// Synthetic iPhone row `n` at the current time, as a capture writes it.
+pub fn synthetic_ios_row(n: u64) -> String {
+    const ENTRIES: [(u8, &str, &str, &str); 6] = [
+        (0, "SampleApp", "", "[INFO] [Sync] fetched # items in 42 ms"),
+        (
+            0x02,
+            "SampleApp",
+            "com.example.sample:ui",
+            "layout pass # took 7 ms",
+        ),
+        (
+            0x01,
+            "sampled",
+            "com.example.location:core",
+            "fix accuracy # m",
+        ),
+        (
+            0,
+            "SampleApp",
+            "",
+            "[ERROR] [Sync] request # failed: timeout after 5000 ms",
+        ),
+        (
+            0x10,
+            "samplenetd",
+            "com.example.network:task",
+            "task # failed: -1001",
+        ),
+        (
+            0x11,
+            "SampleApp",
+            "com.example.sample:store",
+            "store # could not be opened",
+        ),
+    ];
+    let (level, process, label, message) = ENTRIES[(n % ENTRIES.len() as u64) as usize];
+    let (subsystem, category) = label.split_once(':').unwrap_or_default();
+    let now = chrono::Utc::now();
+    let message = message.replace('#', &n.to_string());
+    let e = ios::Entry {
+        pid: 812,
+        tid: 4410 + n % 3,
+        seconds: now.timestamp() as u32,
+        micros: now.timestamp_subsec_micros(),
+        level,
+        process: process.as_bytes(),
+        message: message.as_bytes(),
+        subsystem: subsystem.as_bytes(),
+        category: category.as_bytes(),
+        ..ios::Entry::default()
+    };
+    let mut out = vec![];
+    ios::write_row(&e, &chrono::Local, &mut out);
+    String::from_utf8(out).unwrap_or_default()
+}
 impl Link for FakeLink {
+    fn replays(&self) -> bool {
+        !self.live
+    }
     fn devices(&self) -> io::Result<Vec<Device>> {
         Ok(self
             .check()?
@@ -265,7 +356,7 @@ impl Link for FakeLink {
         let d = w.device(serial)?;
         let pipe = Arc::new(Pipe::default());
         // As `logcat -T`, rows from that time on, then the live rows.
-        for row in &d.log {
+        for row in d.log.iter().filter(|_| !self.live) {
             let from = match (since, Stamp::of(row)) {
                 (Some(since), Some(time)) => time.order(&since).is_ge(),
                 _ => true,

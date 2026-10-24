@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {PROFILES, dltCells, dltLevelTitle, levelNames, profileOf} from '../dist/columns.js';
+import {PROFILES, dltCells, dltLevelTitle, levelNames, profileOf, useAppleLevels} from '../dist/columns.js';
 import {describeActiveFilters, describeFileError, describeLogError} from '../dist/describe.js';
 import {markOf} from '../dist/bookmarks.js';
 
@@ -50,4 +50,13 @@ test('an open of several files names the file that failed', () => {
 test("a bookmark keeps a DLT row's fields", () => {
   assert.deepEqual(markOf(page.rows[1]).dlt, page.rows[1].dlt);
   assert.equal(markOf({lineNumber:1, raw:'x', kind:'raw'}).dlt, undefined);
+});
+
+test('iOS logs name Apple\'s levels; other logs keep theirs', () => {
+  const text = levelNames('text');
+  assert.equal(useAppleLevels(true), true);
+  assert.deepEqual([text.F, text.U, text.E, levelNames('dlt').U, levelNames('dlt').F], ['Fault', 'Default', 'Error', '기타', 'Fatal']);
+  assert.equal(useAppleLevels(true), false, 'no change, nothing to redraw');
+  assert.equal(useAppleLevels(false), true);
+  assert.deepEqual([text.F, text.U], ['Fatal', 'Unknown']);
 });
