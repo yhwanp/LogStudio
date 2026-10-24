@@ -6,10 +6,12 @@
 // after a label that may be cut, `note` a second line, `key` what names the
 // item when the menu is shown again while open (its focus stays there), and
 // `group` a note that heads the items after it. Escape restores focus to the
-// opener, which a menu shown again while open keeps; Tab, outside presses,
-// window blur/resize and list scrolling close it.
+// opener, which a menu shown again while open keeps; Tab, outside presses
+// and window blur/resize close it. A menu opened on a list (`onList`: its
+// rows or headers) also closes when a list scrolls; one from a button stays
+// while a followed log scrolls under it.
 export function createPopupMenu({menu, document, window, scrollers = []}) {
-  let opener = null, notes = 0;
+  let opener = null, notes = 0, onList = false;
   function close(restore = false) {
     if (menu.hidden) return;
     menu.hidden = true;
@@ -69,8 +71,9 @@ export function createPopupMenu({menu, document, window, scrollers = []}) {
     }
     return button;
   }
-  function show(items, x, y, label) {
+  function show(items, x, y, label, options = {}) {
     const again = !menu.hidden, focused = menu.contains(document.activeElement) ? document.activeElement.dataset?.key : undefined;
+    onList = options.onList === true;
     if (!again) opener = document.activeElement;
     menu.setAttribute('aria-label', label);
     menu.replaceChildren(...items.map(entry));
@@ -118,6 +121,6 @@ export function createPopupMenu({menu, document, window, scrollers = []}) {
   }, true);
   window.addEventListener('blur', () => close(false));
   window.addEventListener('resize', () => close(false));
-  for (const scroller of scrollers) scroller.addEventListener('scroll', () => close(false));
+  for (const scroller of scrollers) scroller.addEventListener('scroll', () => {if (onList) close(false);});
   return {show, close};
 }

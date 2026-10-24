@@ -1,8 +1,10 @@
 //! A scripted device connection for tests, measurements and QA builds:
 //! devices with logs that can be written, unplugged, plugged again and
 //! rebooted, as `logcat` would report them, or, for a live link, iPhones
-//! that send only the rows logged while a stream is open.
+//! that send only the rows logged while a stream is open, with developer
+//! builds that can be started with their private values shown.
 use super::{
+    apps::{self, App, Apps},
     gate::Stamp,
     ios,
     link::{self, Closer, Device, Link, Platform, Stream},
@@ -31,6 +33,11 @@ struct World {
     conflict: bool,
     /// `since` of each stream opened, in order.
     opened: Vec<(String, Option<String>)>,
+    launched: Vec<(String, String)>,
+    /// Why apps can be neither listed nor started, as without Xcode.
+    apps_error: Option<&'static str>,
+    /// How long starting an app takes, as on a device Xcode waits for.
+    launch_delay: Duration,
 }
 struct FakeDevice {
     info: Device,
@@ -40,6 +47,10 @@ struct FakeDevice {
     /// Rows the device holds, each with its line ending.
     log: Vec<Vec<u8>>,
     streams: Vec<Arc<Pipe>>,
+    apps: Vec<App>,
+    /// The process ID SampleApp has since it was started with its private
+    /// values shown.
+    unredacted_pid: Option<u32>,
 }
 #[derive(Default)]
 struct Pipe {
@@ -127,6 +138,8 @@ impl FakeLink {
             boot: 1,
             log: vec![],
             streams: vec![],
+            apps: vec![],
+            unredacted_pid: None,
         });
     }
     /// Plugs in a new ready iPhone, named by its owner and listed by its
@@ -143,6 +156,27 @@ impl FakeLink {
         }
         .into();
         info.version = version.into();
+    }
+    /// Installs a developer build on the device.
+    pub fn add_app(&self, serial: &str, bundle: &str, name: &str, version: &str) {
+        let executable = name.split_whitespace().collect::<String>();
+        self.world.lock().unwrap().any(serial).apps.push(App {
+            bundle: bundle.into(),
+            name: name.into(),
+            version: version.into(),
+            executable,
+        });
+    }
+    /// Makes listing and starting apps fail with `e`, or work again.
+    pub fn apps_error(&self, e: Option<&'static str>) {
+        self.world.lock().unwrap().apps_error = e;
+    }
+    pub fn launch_delay(&self, delay: Duration) {
+        self.world.lock().unwrap().launch_delay = delay;
+    }
+    /// The serial and bundle of each app started, in order.
+    pub fn launched(&self) -> Vec<(String, String)> {
+        self.world.lock().unwrap().launched.clone()
     }
     pub fn set_state(&self, serial: &str, state: &str) {
         self.world.lock().unwrap().any(serial).info.state = state.into();
@@ -217,7 +251,8 @@ impl FakeLink {
             while !done.load(Ordering::Acquire) {
                 n += 1;
                 let row = if ios {
-                    synthetic_ios_row(n)
+                    let pid = link.world.lock().unwrap().any(&serial).unredacted_pid;
+                    ios_row(n, pid)
                 } else {
                     synthetic_row(n)
                 };
@@ -273,6 +308,11 @@ pub fn synthetic_row(n: u64) -> String {
 }
 /// Synthetic iPhone row `n` at the current time, as a capture writes it.
 pub fn synthetic_ios_row(n: u64) -> String {
+    ios_row(n, None)
+}
+/// Row `n`; SampleApp's rows show their values once it runs as
+/// `unredacted_pid`.
+fn ios_row(n: u64, unredacted_pid: Option<u32>) -> String {
     const ENTRIES: [(u8, &str, &str, &str); 6] = [
         (0, "SampleApp", "", "[INFO] [Sync] fetched # items in 42 ms"),
         (
@@ -291,7 +331,7 @@ pub fn synthetic_ios_row(n: u64) -> String {
             0,
             "SampleApp",
             "",
-            "[ERROR] [Sync] request # failed: timeout after 5000 ms",
+            "[ERROR] [Sync] request # to <private> failed: timeout after 5000 ms",
         ),
         (
             0x10,
@@ -309,9 +349,14 @@ pub fn synthetic_ios_row(n: u64) -> String {
     let (level, process, label, message) = ENTRIES[(n % ENTRIES.len() as u64) as usize];
     let (subsystem, category) = label.split_once(':').unwrap_or_default();
     let now = chrono::Utc::now();
-    let message = message.replace('#', &n.to_string());
+    let mut message = message.replace('#', &n.to_string());
+    let mut pid = 812;
+    if let Some(started) = unredacted_pid.filter(|_| process == "SampleApp") {
+        pid = started;
+        message = message.replace("<private>", "api.example.com");
+    }
     let e = ios::Entry {
-        pid: 812,
+        pid,
         tid: 4410 + n % 3,
         seconds: now.timestamp() as u32,
         micros: now.timestamp_subsec_micros(),
@@ -367,5 +412,36 @@ impl Link for FakeLink {
         }
         d.streams.push(pipe.clone());
         Ok(Box::new(FakeStream(pipe)))
+    }
+}
+impl Apps for FakeLink {
+    fn apps(&self, serial: &str) -> io::Result<Vec<App>> {
+        let mut w = self.check()?;
+        if let Some(e) = w.apps_error {
+            return Err(error(e));
+        }
+        Ok(w.device(serial)?.apps.clone())
+    }
+    /// Starting SampleApp shows its private values in the rows it logs
+    /// from then on, as a new process.
+    fn launch(&self, serial: &str, bundle: &str) -> io::Result<()> {
+        let delay = self.world.lock().unwrap().launch_delay;
+        thread::sleep(delay);
+        let mut w = self.check()?;
+        if let Some(e) = w.apps_error {
+            return Err(error(e));
+        }
+        let started = w.launched.len() as u32;
+        let d = w.device(serial)?;
+        let app = d
+            .apps
+            .iter()
+            .find(|a| a.bundle == bundle)
+            .ok_or_else(|| error(apps::NOT_LISTED))?;
+        if app.executable == "SampleApp" {
+            d.unredacted_pid = Some(913 + started);
+        }
+        w.launched.push((serial.into(), bundle.into()));
+        Ok(())
     }
 }

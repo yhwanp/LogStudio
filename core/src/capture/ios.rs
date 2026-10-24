@@ -39,7 +39,7 @@ use tokio::{runtime::Runtime, sync::Notify};
 /// No device service answers: on Windows, neither the Apple Devices app nor
 /// iTunes is installed.
 pub const NO_SERVICE: &str = "Apple device service not found; install Apple Devices or iTunes";
-const FAILED: &str = "Could not reach the device; check its connection and retry";
+pub(super) const FAILED: &str = "Could not reach the device; check its connection and retry";
 const SERVICE: &str = "com.apple.os_trace_relay";
 /// How long one device request may take.
 const TIMEOUT: Duration = Duration::from_secs(5);
@@ -47,7 +47,7 @@ const TIMEOUT: Duration = Duration::from_secs(5);
 /// Wi-Fi device that stopped answering cannot hide the others.
 const DESCRIBE_TIMEOUT: Duration = Duration::from_secs(3);
 /// The name the device's logs give this app's requests.
-const LABEL: &str = "LogStudio";
+pub(super) const LABEL: &str = "LogStudio";
 
 /// One log entry of an `os_trace_relay` record. Strings are the record's
 /// bytes up to their NUL; `process` is the process's executable path.
@@ -289,7 +289,7 @@ impl Stream for IosStream {
 /// connects.
 #[derive(Default)]
 pub struct IosLink {
-    addr: UsbmuxdAddr,
+    pub(super) addr: UsbmuxdAddr,
 }
 fn runtime() -> io::Result<Runtime> {
     tokio::runtime::Builder::new_current_thread()
@@ -311,10 +311,10 @@ fn block_on<T>(runtime: &Runtime, f: impl Future<Output = io::Result<T>>) -> io:
     })?
 }
 /// Runs one request on a runtime of its own.
-fn request<T>(f: impl Future<Output = io::Result<T>>) -> io::Result<T> {
+pub(super) fn request<T>(f: impl Future<Output = io::Result<T>>) -> io::Result<T> {
     block_on(&runtime()?, f)
 }
-fn io_error(e: IdeviceError) -> io::Error {
+pub(super) fn io_error(e: IdeviceError) -> io::Error {
     match e {
         IdeviceError::InvalidHostID => error(link::UNTRUSTED),
         IdeviceError::DeviceLocked => error(link::LOCKED),
@@ -349,7 +349,7 @@ fn reachable(list: Vec<UsbmuxdDevice>) -> Vec<UsbmuxdDevice> {
 }
 /// Starts the session services need on a lockdown connection, with the
 /// pairing record that makes this computer trusted.
-async fn session(
+pub(super) async fn session(
     provider: &UsbmuxdProvider,
     lockdown: &mut LockdownClient,
 ) -> io::Result<PairingFile> {
@@ -443,7 +443,7 @@ async fn start(provider: &UsbmuxdProvider) -> io::Result<Idevice> {
     Ok(device)
 }
 impl IosLink {
-    async fn listed(&self) -> io::Result<Vec<UsbmuxdDevice>> {
+    pub(super) async fn listed(&self) -> io::Result<Vec<UsbmuxdDevice>> {
         let mut mux = self.addr.connect(0).await.map_err(|_| error(NO_SERVICE))?;
         Ok(reachable(mux.get_devices().await.map_err(io_error)?))
     }

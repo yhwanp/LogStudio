@@ -2,8 +2,10 @@
 service or device runs): a capture file a crashed run left, getting adb,
 the device menu with Android devices and iPhones, recording, a device that
 leaves and comes back, stopping, the save question before a capture's log
-closes or the app quits, opening a left file, a capture that fails, and an
-iPhone that leaves and must trust the computer again."""
+closes or the app quits, opening a left file, a capture that fails, an
+iPhone whose developer build starts anew with its private values shown, and
+an iPhone that leaves and must trust the computer again."""
+import re
 import time
 
 MENU = "return [...document.querySelectorAll('#rowMenu>*')].map(e=>e.tagName==='HR'?'---':e.textContent)"
@@ -24,8 +26,11 @@ STATE = """const bar=document.getElementById('captureBar'),rows=[...document.que
   leftovers:document.getElementById('captureLeftovers').hidden?[]:[...document.querySelectorAll('#leftoverList strong')].map(e=>e.textContent),
   error:document.getElementById('largeError').hidden?null:document.getElementById('largeError').textContent};"""
 # Shows the first row after a break near the middle of the logs pane.
-SHOW_BREAK = """const v=document.getElementById('logsViewport');const r=document.querySelector('#logsRows .capture-break');
+SHOW_BREAK = """const v=document.getElementById('logsViewport');const r=[...document.querySelectorAll('#logsRows .capture-break')].find(r=>r.dataset.captureBreak.includes('연결 끊김'));
 if(!r)return false;v.scrollTop+=r.getBoundingClientRect().top-v.getBoundingClientRect().top-v.clientHeight/2;v.dispatchEvent(new Event('scroll'));return true;"""
+# Brings the logs pane to its end: a hidden window runs no animation frames,
+# so following does not keep up with rows after the pane was resized.
+AT_END = "const v=document.getElementById('logsViewport');v.scrollTop=v.scrollHeight;v.dispatchEvent(new Event('scroll'));return true;"
 # Whether the capture state's words end in an ellipsis instead of spilling
 # onto the file name beside them.
 FITS = """const t=document.getElementById('captureText'),info=document.querySelector('.file-info'),s=document.getElementById('captureState');
@@ -91,8 +96,8 @@ def run(ctx):
         check('a device trusted while the menu is open becomes choosable, keeping focus', state['text'] == 'QA iPad · iPadOS 27.0' and state['focused'], state)
         js(PICK, 'Pixel 8')
         s = until(lambda v: v['bar'] and v['bar']['tone'] == 'live' and v['following'] == 'true', 'recording')
-        s = until(lambda v: v['count'].endswith('건') and not v['count'].endswith(' 0건') and v['bar']['text'].endswith('저장 안 됨'), 'rows arrive')
-        check('a capture records the device rows and follows them', s['bar']['text'] == '기록 중 · Pixel 8 · 저장 안 됨' and s['bar']['stop'], s['bar'])
+        s = until(lambda v: v['count'].endswith('건') and not v['count'].endswith(' 0건') and '저장 안 됨' in v['bar']['text'], 'rows arrive')
+        check('a capture records the device rows and follows them', s['bar']['text'] == '기록 중 · 저장 안 됨 · Pixel 8' and s['bar']['stop'], s['bar'])
         check('unsaved rows make saving the main action', s['bar']['save'] and not s['open'], {'save': s['bar']['save'], 'open': s['open']})
         app.capture('05-recording', hover='captureStop')
 
@@ -147,7 +152,7 @@ def run(ctx):
 
         app.click('captureStop')
         s = until(lambda v: v['bar'] and v['bar']['tone'] == 'stopped' and not v['bar']['stop'], 'stopped')
-        check('stopping ends the capture and says its rows are not saved', s['bar']['text'] == '기록 중지됨 · Pixel 8 · 저장 안 됨', s['bar'])
+        check('stopping ends the capture and says its rows are not saved', s['bar']['text'] == '기록 중지됨 · 저장 안 됨 · Pixel 8', s['bar'])
 
         # Quitting from the app menu asks about the unsaved rows as closing
         # does; 취소 keeps the app and the log.
@@ -185,10 +190,10 @@ def run(ctx):
         app.click('emptyDevice')
         menu(lambda v: any(x.startswith('Pixel 8') for x in v), 'device menu again')
         js(PICK, 'Pixel 8')
-        until(lambda v: v['bar'] and v['bar']['tone'] == 'live' and v['bar']['text'].endswith('저장 안 됨'), 'recording again')
+        until(lambda v: v['bar'] and v['bar']['tone'] == 'live' and '저장 안 됨' in v['bar']['text'], 'recording again')
         js(QA, 'conflict')
         s = until(lambda v: v['bar'] and v['bar']['tone'] == 'failed', 'failed', 30)
-        check('a capture that fails keeps its rows and gives the whole reason', s['bar']['text'] == '기록 중단 · Pixel 8 · 저장 안 됨'
+        check('a capture that fails keeps its rows and gives the whole reason', s['bar']['text'] == '기록 중단 · 저장 안 됨 · Pixel 8'
               and (s['error'] or '').startswith('버전이 다른 adb가 함께 실행되어'), {'bar': s['bar'], 'error': s['error']})
         app.capture('10-failed')
         app.click('largeClose')
@@ -202,9 +207,9 @@ def run(ctx):
         app.click('emptyDevice')
         menu(lambda v: any(x.startswith('QA iPhone') for x in v), 'device menu with the iPhone')
         js(PICK, 'QA iPhone')
-        s = until(lambda v: v['bar'] and v['bar']['tone'] == 'live' and v['bar']['text'].endswith('저장 안 됨')
+        s = until(lambda v: v['bar'] and v['bar']['tone'] == 'live' and '저장 안 됨' in v['bar']['text']
                   and int(''.join(c for c in v['count'] if c.isdigit()) or 0) >= 6, 'iPhone recording')
-        check('an iPhone capture records its rows', s['bar']['text'] == '기록 중 · QA iPhone · 저장 안 됨', s['bar'])
+        check('an iPhone capture records its rows', s['bar']['text'] == '기록 중 · 저장 안 됨 · QA iPhone', s['bar'])
         files = sorted(p.name for p in captures.glob('ios-QA_iPhone-*.log'))
         check('an iPhone capture file is named for the device', len(files) == 1, [p.name for p in captures.glob('*')])
         cells = js("""return [...document.querySelectorAll('#logsRows .log-row')].slice(0,12).map(r=>({level:r.querySelector('.level')?.textContent,
@@ -219,8 +224,83 @@ def run(ctx):
           const t=r.querySelector('.timestamp'),g=r.querySelector('.tag');return {stamp:t.scrollWidth<=t.clientWidth+1,text:t.textContent,tag:getComputedStyle(g).direction}""")
         check('an iPhone row shows its process whole and cuts its tag from the start', shown['stamp'] and shown['tag'] == 'rtl', shown)
         app.capture('11-ios-recording')
+
+        # A developer build on the iPhone being recorded starts anew from the
+        # bar; its rows then keep the values other processes give as <private>,
+        # and a mark says where they begin.
+        shown = js("const b=document.getElementById('captureApp');return !b.hidden&&[b.textContent,b.getAttribute('aria-haspopup'),document.getElementById(b.getAttribute('aria-describedby')).textContent]")
+        check('an iPhone being recorded offers to start an app, as a menu, with its purpose for screen readers',
+              shown == ['앱 실행…', 'menu', '개발용 서명 앱을 다시 실행해 그 앱의 로그를 <private> 없이 기록합니다'], shown)
+        js(QA, 'ios-no-xcode')
+        app.click('captureApp')
+        m = menu(lambda v: any(x.startswith('앱을 실행하려면') for x in v), 'app menu without Xcode')
+        check('without Xcode the app menu says what it needs and offers where to get it',
+              m == ['앱을 실행하려면 Xcode가 필요합니다. App Store에서 Xcode를 설치해 주세요.', 'Xcode 설치 주소 복사', '---', '새로 고침'], m)
+        app.capture('11c-ios-no-xcode')
+        js(QA, 'ios-xcode')
+        js(PICK, '새로 고침')
+        m = menu(lambda v: any(x.startswith('SampleApp') for x in v), 'app menu')
+        check('the app menu lists the developer builds, says a running one starts anew, and names a process that differs',
+              m[:4] == ['실행할 앱을 선택해 주세요 · 실행 중이면 종료하고 다시 시작합니다', '기기 잠금을 풀어 두어야 실행됩니다', 'SampleApp com.example.sample',
+                        'Sample Widgets · SampleWidgets com.example.sample.widgets'], m)
+        whole = js("return [...document.querySelectorAll('#rowMenu .menu-label')].map(l=>l.scrollWidth<=l.clientWidth+1)")
+        check('every app name in the menu shows whole', whole == [True, True], whole)
+        # A menu taller than the window scrolls; its items keep their height.
+        squeezed = js("""const m=document.getElementById('rowMenu'),items=[...m.querySelectorAll('button')],full=items.map(b=>b.getBoundingClientRect().height);
+          m.style.maxHeight='90px';const kept=items.map((b,i)=>Math.abs(b.getBoundingClientRect().height-full[i])<0.5);const scrolls=m.scrollHeight>m.clientHeight;
+          m.style.maxHeight='';return {kept:kept.every(Boolean),scrolls}""")
+        check('a menu taller than the window scrolls instead of squeezing its items', squeezed == {'kept': True, 'scrolls': True}, squeezed)
+        label = js("const m=document.getElementById('rowMenu');return [m.getAttribute('aria-label'),document.activeElement.textContent]")
+        check('the app menu is named and its first app has focus', label == ['앱 실행', 'SampleApp com.example.sample'], label)
+        app.capture('11d-ios-app-menu')
+        js(PICK, 'SampleApp')
+        toast = app.wait(lambda: (lambda t: '앱을 실행했습니다' in t and t)(app.text('toast')), 10, what='app started')
+        check('starting the app says this run\'s rows are kept unredacted', toast == 'SampleApp 앱을 실행했습니다. 이번 실행의 로그는 <private> 없이 기록합니다.', toast)
+        # Following may move the mark's row out of view; the results of a
+        # search carry it on their first row after it.
+        app.type('searchInput', 'request')
+        found = app.wait(lambda: js("""const r=[...document.querySelectorAll('#largeRows .log-row')];
+          return r.some(e=>e.textContent.includes('to api.example.com'))&&r.some(e=>e.textContent.includes('to <private>'))&&
+          {rows:r.length,mark:(r.find(e=>e.dataset.captureBreak)||{dataset:{}}).dataset.captureBreak||''}"""), 20, what='rows with values')
+        check('rows of the app started again show their values, earlier ones stay as recorded, and a mark names when the app started',
+              found['rows'] >= 2 and re.fullmatch(r'\d\d:\d\d:\d\d SampleApp 실행 · 새 프로세스부터 <private> 없이 기록', found['mark']) is not None, found)
+        # The toast goes, so the rows under it show.
+        time.sleep(2.8)
+        app.capture('11e-ios-app-started')
+        app.type('searchInput', '')
+        js(AT_END)
+        # Opened from the focused button and picked: the button keeps focus
+        # while a slow start runs, marked unavailable.
+        js(QA, 'ios-slow-launch')
+        js("const b=document.getElementById('captureApp');b.focus();b.click();return true;")
+        # The followed log scrolls as rows arrive; the menu from the bar stays.
+        menu(lambda v: any(x.startswith('SampleApp') for x in v), 'app menu from the focused button')
+        time.sleep(.6)
+        still = js("const m=document.getElementById('rowMenu');return !m.hidden&&m.getAttribute('aria-label')")
+        check('a menu from the bar stays open while the followed log scrolls', still == '앱 실행', still)
+        js(PICK, 'SampleApp')
+        busy = app.wait(lambda: js("""const b=document.getElementById('captureApp');return b.getAttribute('aria-disabled')==='true'&&
+          {text:b.textContent,focused:document.activeElement===b,disabled:b.disabled,status:document.getElementById('captureAppStatus').textContent}"""), what='starting')
+        check('while the app starts the button keeps focus and says so', busy == {'text': '앱 실행 중…', 'focused': True, 'disabled': False,
+              'status': 'SampleApp 앱을 실행하는 중입니다'}, busy)
+        toast = app.wait(lambda: (lambda t: '잠금' in t and t)(app.text('toast')), what='slow start hint')
+        check('a start that takes long asks whether the device is unlocked', toast == 'SampleApp 앱을 실행하는 중입니다. 기기 잠금이 풀려 있는지 확인해 주세요.', toast)
+        app.capture('11g-ios-app-starting', hover='captureApp')
+        app.wait(lambda: js("return document.getElementById('captureApp').getAttribute('aria-disabled')==='false'"), 15, what='slow start done')
+        frame = app.rect()
+        app.rect(width=900, height=frame['height'])
+        time.sleep(.5)
+        fit = js(FITS)
+        unsaved = js("""const t=document.getElementById('captureText'),n=t.firstChild,s=t.textContent.indexOf('저장 안 됨');if(!n||s<0)return null;
+          const r=document.createRange();r.setStart(n,s);r.setEnd(n,s+'저장 안 됨'.length);return r.getBoundingClientRect().right<=t.getBoundingClientRect().right+0.5""")
+        check('at 900 px the iPhone bar ends in an ellipsis beside the file name and still shows the unsaved warning',
+              fit['ellipsis'] == 'ellipsis' and fit['apart'] and unsaved is True, {'fit': fit, 'unsaved': unsaved})
+        app.capture('11f-ios-recording-900')
+        app.rect(width=frame['width'], height=frame['height'])
         js(QA, 'ios-unplug')
         s = until(lambda v: v['bar'] and v['bar']['tone'] == 'waiting', 'iPhone waiting')
+        hidden = js("return document.getElementById('captureApp').hidden")
+        check('an iPhone away offers no app to start', hidden is True, hidden)
         hint = js("return document.getElementById('captureHint').textContent")
         check('an iPhone that leaves is waited for, and the bar and screen readers say what it logs meanwhile is lost',
               s['bar']['text'] == '연결 끊김 · 끊긴 동안 로그 기록 안 됨 · QA iPhone' and hint.endswith('끊긴 동안의 로그는 기록되지 않습니다.'), {'bar': s['bar'], 'hint': hint})
@@ -231,9 +311,11 @@ def run(ctx):
         check('an iPhone back but not trusting the computer says so first', s['bar']['text'] == '다시 연결됨 · 이 컴퓨터를 신뢰해 주세요 · QA iPhone', s['bar'])
         app.capture('12-ios-trust')
         js(QA, 'ios-trusted')
-        s = until(lambda v: v['bar'] and v['bar']['tone'] == 'live' and v['breaks'], 'iPhone back')
+        # The app's launch marks come before it; the reconnect is its own.
+        away = lambda v: [b for b in v['breaks'] if '연결 끊김 →' in b['label']]
+        s = until(lambda v: js(AT_END) and v['bar'] and v['bar']['tone'] == 'live' and away(v), 'iPhone back')
         check('an iPhone back is recorded again after a break that says its rows meanwhile are missing',
-              '연결 끊김 →' in s['breaks'][0]['label'] and s['breaks'][0]['label'].endswith(' · 끊긴 동안 로그 기록 안 됨'), s['breaks'])
+              away(s)[0]['label'].endswith(' · 끊긴 동안 로그 기록 안 됨'), s['breaks'])
         app.click('followFile')
         until(lambda v: v['following'] == 'false', 'iPhone paused')
         js(SHOW_BREAK)

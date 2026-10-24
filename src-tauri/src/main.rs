@@ -609,6 +609,68 @@ async fn stop_capture(
         .await
         .map_err(|_| "Request failed".to_string())?
 }
+/// Why no app can be started for a dataset: it shows no iPhone or iPad
+/// being recorded.
+const NOT_RECORDING_IOS: &str = "Apps start only while an iPhone or iPad is recording";
+/// The capture of the iPhone or iPad that dataset `id` records now.
+fn recorded_iphone(
+    engine: &Engine,
+    id: u64,
+) -> Result<Arc<logstudio_core::capture::Capture>, String> {
+    use logstudio_core::capture::{link::Platform, Phase};
+    let capture = engine.capture(id).ok_or("No device capture is open")?;
+    if capture.platform != Platform::Ios || capture.phase() != Phase::Recording {
+        return Err(NOT_RECORDING_IOS.into());
+    }
+    Ok(capture)
+}
+/// The developer builds on the iPhone or iPad a capture records.
+#[tauri::command]
+async fn capture_apps(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+    dataset_id: u64,
+) -> Result<Value, String> {
+    main_window(&window)?;
+    let serial = recorded_iphone(&state.0, dataset_id)?.serial();
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || app.state::<devices::Devices>().apps(&serial))
+        .await
+        .map_err(|_| "Request failed".to_string())?
+}
+/// Starts a listed app on the iPhone or iPad a capture records, ending a
+/// running copy first, so that its rows keep their private values. The
+/// capture marks the first row recorded after the start began, which the
+/// page shows; the new process logs only after it.
+#[tauri::command]
+async fn launch_capture_app(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+    dataset_id: u64,
+    bundle: String,
+) -> Result<Value, String> {
+    main_window(&window)?;
+    let capture = recorded_iphone(&state.0, dataset_id)?;
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let row = capture.rows() + 1;
+        let at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as i64);
+        let started = app
+            .state::<devices::Devices>()
+            .launch(&capture.serial(), &bundle)?;
+        capture.mark_launch(logstudio_core::capture::Launch {
+            row,
+            at,
+            app: started.name.clone(),
+            process: started.executable.clone(),
+        });
+        Ok(json!({"name":started.name,"process":started.executable}))
+    })
+    .await
+    .map_err(|_| "Request failed".to_string())?
+}
 /// Saves a copy of the rows a capture recorded so far.
 #[tauri::command]
 async fn save_capture(
@@ -835,6 +897,10 @@ fn qa_quit(app: tauri::AppHandle) -> Vec<String> {
 /// `ios-unplug`, `ios-plug`, `ios-untrusted` and `ios-trusted` act on the
 /// iPhone and `ios-ipad-trusted` on the iPad; `ios-missing` acts as if no
 /// device service were installed, and `ios-real` uses the service again.
+/// The iPhone has two developer builds; starting SampleApp shows its
+/// private values. `ios-no-xcode` acts as if Xcode were not installed, and
+/// `ios-xcode` as if it were again; `ios-slow-launch` makes starting an app
+/// take 6 s.
 #[cfg(feature = "qa")]
 #[tauri::command]
 fn qa_devices(app: tauri::AppHandle, action: String) -> Result<(), String> {
@@ -861,9 +927,26 @@ fn qa_devices(app: tauri::AppHandle, action: String) -> Result<(), String> {
                 link.add_ios(IPHONE, "QA iPhone", "27.0");
                 link.add_ios(IPAD, "QA iPad", "27.0");
                 link.set_state(IPAD, "untrusted");
+                link.add_app(IPHONE, "com.example.sample", "SampleApp", "1.4.0");
+                link.add_app(
+                    IPHONE,
+                    "com.example.sample.widgets",
+                    "Sample Widgets",
+                    "0.9.1",
+                );
                 let feeding = link.feed(IPHONE, std::time::Duration::from_millis(150));
                 devices.replace_ios(Some(devices::Replaced::Link(link.clone())));
+                devices.replace_apps(Some(link.clone()));
                 *fake = Some((link, feeding));
+            }
+            "-no-xcode" | "-xcode" => {
+                let (link, _) = fake.as_ref().ok_or("No fake devices")?;
+                let missing = logstudio_core::capture::apps::NO_XCODE;
+                link.apps_error((action == "-no-xcode").then_some(missing));
+            }
+            "-slow-launch" => {
+                let (link, _) = fake.as_ref().ok_or("No fake devices")?;
+                link.launch_delay(std::time::Duration::from_secs(6));
             }
             "-unplug" | "-plug" | "-untrusted" | "-trusted" | "-ipad-trusted" => {
                 let (link, _) = fake.as_ref().ok_or("No fake devices")?;
@@ -876,7 +959,10 @@ fn qa_devices(app: tauri::AppHandle, action: String) -> Result<(), String> {
                 }
             }
             "-missing" => devices.replace_ios(Some(devices::Replaced::Missing)),
-            "-real" => devices.replace_ios(None),
+            "-real" => {
+                devices.replace_ios(None);
+                devices.replace_apps(None);
+            }
             _ => return Err("Unknown QA device action".into()),
         }
         return Ok(());
@@ -1155,6 +1241,8 @@ fn main() {
                 save_capture,
                 discard_capture,
                 capture_leftovers,
+                capture_apps,
+                launch_capture_app,
                 open_leftover,
                 delete_leftover,
                 finish_drop,
@@ -1196,6 +1284,8 @@ fn main() {
             save_capture,
             discard_capture,
             capture_leftovers,
+            capture_apps,
+            launch_capture_app,
             open_leftover,
             delete_leftover,
             finish_drop,

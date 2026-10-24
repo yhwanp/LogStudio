@@ -78,7 +78,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
   const $ = id => document.getElementById(id);
   $('largeLogPanel').hidden=false;
   const ids = ['largeName','largeStatus','largeError','largeCount','largeTotal','largeRows','largeViewport','largeFirst','largeLast','largeJump','largeJumpForm','largeCancel','largeClose','largeColumns','largeRaw','largeHeaders','largeRange','largeDetail','largeDetailTitle','largeDetailText','largeDetailPrevious','largeDetailNext','largeDetailClose','levelFilters','allLevels','errorLevels','resetFilters','searchInput','tagFilter','pidFilter','tidFilter','caseSensitive','includeRaw','recognizeLineNumbers','logsCount','logsRows','logsViewport','logsHeaders','logsFirst','logsLast','logsJump','logsJumpForm','logsRange','largeSearchPane','filterBadge','activeFilters','filterRow','logsSelection','largeSelection','toast','largeDetailCopy','toggleFilters','emptyState','logContent','loadProgress','loadProgressBar','paneSplitter','idFilterError','tagFilterError','searchError','dropHint','filterPanel','largeRegex','rowMenu','largeSize','exportLogs','exportSearch','exportCancel','recentFiles','recentList','clearRecent','recentButton','timeFrom','timeTo','timeFilterError','lowerTabs','searchTab','bookmarkTab','bookmarkPane','bookmarkCount','bookmarkList','copyBookmarks','clearBookmarks','logsPending','reopenFile','errorBar','errorReopen','followFile'];
-  for (const id of ['deviceButton','emptyDevice','captureBar','captureState','captureText','captureHint','captureStop','captureSave','captureLeftovers','leftoverList','openFile']) ids.push(id);
+  for (const id of ['deviceButton','emptyDevice','captureBar','captureState','captureText','captureHint','captureApp','captureAppStatus','captureStop','captureSave','captureLeftovers','leftoverList','openFile']) ids.push(id);
   const ui = Object.fromEntries(ids.map(id => [id,$(id)]));
   // Device captures (devices.js) mount once the menu and toasts exist.
   let devices=null;
@@ -103,7 +103,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
   let conds={include:[emptyCondition()],exclude:[]},active={list:'include',index:0},conditionView=null;
   // The open log's format: its columns, level names and filter fields.
   let shownFormat = 'text', levelKey = 'text';
-  const previousRows=new Map(), viewports=new Map(), focusedSelection=new Map(), navigationFocus=new Map(), selections=new Map(), selectedAt=new Map(), paintedSelection=new Map();
+  const previousRows=new Map(), viewports=new Map(), focusedSelection=new Map(), navigationFocus=new Map(), selections=new Map(), selectedAt=new Map(), paintedSelection=new Map(), paintedMarks=new Map();
   const MOD=/Mac|iPhone|iPad/.test(window.navigator?.platform??'')?'⌘':'Ctrl+';
   // Only macOS reads a copied file from the native pasteboard.
   if(MOD!=='⌘'){$('searchShortcut').textContent='Ctrl+F';$('pasteHint').textContent='로그 텍스트 붙여넣기';for(const key of document.querySelectorAll?.('.mod-key')??[])key.textContent='Ctrl';}
@@ -341,7 +341,10 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
         }});
       viewports.set(prefix,view);
     }
-    view.update(state,{force:!previousRows.has(prefix)||previousRows.get(prefix)!==rawMode||paintedSelection.get(prefix)!==selectionRevision,stick:!isSearch&&!!state.following});previousRows.set(prefix,rawMode);paintedSelection.set(prefix,selectionRevision);updateSelectionInfo(prefix,state);
+    // A capture's marks may arrive for rows already painted, as when an app
+    // it started finishes starting after its first rows came.
+    const marks=captureBreaks(state.capture).map(b=>`${b.kind}:${b.row}`).join(',');
+    view.update(state,{force:!previousRows.has(prefix)||previousRows.get(prefix)!==rawMode||paintedSelection.get(prefix)!==selectionRevision||paintedMarks.get(prefix)!==marks,stick:!isSearch&&!!state.following});previousRows.set(prefix,rawMode);paintedSelection.set(prefix,selectionRevision);paintedMarks.set(prefix,marks);updateSelectionInfo(prefix,state);
   }
   function jumpTo(line){if(!inputPending&&!validationError&&!disposed){navigationFocus.set('logs',document.activeElement);void logs.locateLine(line);}}
   // Selecting a search result can reveal its row in the upper logs without
@@ -716,7 +719,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     if(size===1&&(continuationOwner(entry)||(entry.kind==='parsed'&&continuationOwner(next)?.lineNumber===entry.lineNumber)))items.push(['로그 전체 원문 복사',()=>copyRecord(owner,owner.readRecordText(entry.lineNumber))]);
     items.push([size>1?`선택한 ${formatNumber(size)}행 북마크 추가/해제`:bookmarks.has(entry.lineNumber)?'북마크 해제':'북마크 추가',()=>toggleBookmarks(prefix)]);
     if(isSearch)items.push(['위 로그에서 보기',()=>jumpTo(entry.lineNumber)]);
-    menu.show(items,x,y,'행 작업');
+    menu.show(items,x,y,'행 작업',{onList:true});
   }
   // The bookmark list's menu: the same conditions, then its selection's copy
   // and unmark.
@@ -725,7 +728,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     const items=[...textItems(ui.bookmarkList,mark.lineNumber),...conditionItems(mark)];
     items.push([size>1?`선택한 ${formatNumber(size)}행 복사`:'행 원문 복사',()=>copyFromPane('bookmarks')]);
     items.push([size>1?`선택한 북마크 ${formatNumber(size)}개 해제`:'북마크 해제',()=>bookmarks.removeSelected()]);
-    menu.show(items,x,y,'북마크 작업');
+    menu.show(items,x,y,'북마크 작업',{onList:true});
   }
   // Text selected inside the row (the one selected row of its list) is
   // copied from the menu too, since the menu replaces the browser's own.
@@ -799,8 +802,8 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
   const columnMenu=$('columnMenu');
   const columnItems=()=>[['내용에 맞춤',()=>layout.fitColumns(),'현재 표시된 로그에 맞춰 열 폭 조절'],['폭 초기화',()=>layout.resetColumns(),'열 폭을 기본값으로 되돌리기']];
   columnMenu.addEventListener('click',()=>{const box=columnMenu.getBoundingClientRect?.();menu.show(columnItems(),box?box.left:0,box?box.bottom+4:0,'열 폭');});
-  for(const header of [ui.logsHeaders,ui.largeHeaders,$('bookmarkHeaders')])header.addEventListener('contextmenu',event=>{if(rawMode||disposed)return;event.preventDefault();menu.show(columnItems(),event.clientX,event.clientY,'열 폭');});
-  devices=mountDevices({ui,document,window,native,menu,logs,isGone:()=>pageGone,report:message=>{inputError=message;errors();},notify});
+  for(const header of [ui.logsHeaders,ui.largeHeaders,$('bookmarkHeaders')])header.addEventListener('contextmenu',event=>{if(rawMode||disposed)return;event.preventDefault();menu.show(columnItems(),event.clientX,event.clientY,'열 폭',{onList:true});});
+  devices=mountDevices({ui,document,window,native,menu,logs,isGone:()=>pageGone,report:message=>{inputError=message;errors();},unreport:message=>{if(message&&inputError===message){inputError='';errors();}},notify});
   mountRecentFiles({ui,document,native,menu,isGone:()=>pageGone,onError:message=>{inputError=message;errors();},guard:()=>devices.guard(),keep:id=>devices.keep(id),shown:()=>logs.getState().datasetId});
   function repaintRows(){previousRows.clear();renderLogs(logs.getState());renderSearch(search.getState());}
   const bookmarks=createBookmarks({ui,document,window,notify,mod:MOD,logs,lineCell,openMenu:openBookmarkMenu,isRawMode:()=>rawMode,canNavigate:()=>!disposed&&!inputPending&&!validationError,onChange:()=>{repaintRows();saver.schedule();},onCount:count=>{bookmarkCount=count;updateLowerPane();if(count)tips?.offer('bookmarks');}});

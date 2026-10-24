@@ -4,7 +4,7 @@ use logstudio_core::{
         gate::{Gate, Stamp},
         link::{self, parse_devices, Platform},
         store::Store,
-        Break, Capture, Options, Phase,
+        Break, Capture, Launch, Options, Phase,
     },
     search::Filters,
     source::public_message,
@@ -768,4 +768,73 @@ fn synthetic_iphone_rows_parse_as_ios_rows() {
         })
         .collect();
     assert_eq!(levels, ["I", "D", "I", "E", "E", "F"]);
+}
+
+#[test]
+fn a_scripted_developer_build_started_again_shows_its_private_values() {
+    use logstudio_core::capture::apps::{Apps, NOT_LISTED};
+    const IPHONE: &str = "QA0UDID0000000000000001";
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::new(dir.path().join("captures"));
+    let link = FakeLink::live();
+    link.add_ios(IPHONE, "Test iPhone", "27.0");
+    link.add_app(IPHONE, "com.example.sample", "SampleApp", "1.4.0");
+    let feeding = link.feed(IPHONE, Duration::from_millis(1));
+    let slot = store.create(Platform::Ios, "Test iPhone").unwrap();
+    let c = Capture::start(link.clone(), IPHONE, slot, options()).unwrap();
+    let text = || String::from_utf8_lossy(&content(&c)).into_owned();
+    wait("a redacted row", || text().contains("SampleApp[812:"));
+    assert_eq!(c.serial(), IPHONE);
+    let apps = link.apps(IPHONE).unwrap();
+    assert_eq!(
+        (apps[0].name.as_str(), apps[0].executable.as_str()),
+        ("SampleApp", "SampleApp")
+    );
+    let missing = link.launch(IPHONE, "com.example.other").unwrap_err();
+    assert_eq!(public_message(&missing, ""), NOT_LISTED);
+    // As the desktop does: the row after those written when the start
+    // began is marked once the app has started.
+    let row = c.rows() + 1;
+    link.launch(IPHONE, "com.example.sample").unwrap();
+    c.mark_launch(Launch {
+        row,
+        at: 1_792_818_131_000,
+        app: "SampleApp".into(),
+        process: "SampleApp".into(),
+    });
+    wait("a row with its value", || {
+        text().contains("request ") && text().contains("to api.example.com")
+    });
+    feeding.store(true, std::sync::atomic::Ordering::Release);
+    c.stop();
+    let text = text();
+    let shown = text.find("to api.example.com").unwrap();
+    let before = &text[..shown];
+    assert!(before.contains("to <private> failed"), "{before}");
+    // The app started again is a new process; others keep their IDs.
+    let after = &text[text[..shown].rfind('\n').map_or(0, |i| i + 1)..];
+    assert!(
+        after
+            .lines()
+            .filter(|l| l.contains("SampleApp["))
+            .all(|l| l.contains("SampleApp[913:")),
+        "{after}"
+    );
+    assert!(!after.contains("<private>"), "{after}");
+    // The mark comes before the first row with a value; the file holds
+    // only the device's rows.
+    let first_shown = text[..shown].matches('\n').count() as u64 + 1;
+    assert!(
+        row <= first_shown,
+        "mark {row}, first shown row {first_shown}"
+    );
+    assert_eq!(
+        c.json()["launches"],
+        json!([{"row":row,"at":1_792_818_131_000i64,"app":"SampleApp","process":"SampleApp"}])
+    );
+    assert_eq!(c.launches().len(), 1);
+    assert_eq!(
+        link.launched(),
+        [(IPHONE.to_string(), "com.example.sample".to_string())]
+    );
 }

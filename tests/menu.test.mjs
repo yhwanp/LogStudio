@@ -31,9 +31,9 @@ class Element {
 function rig() {
   const document = {activeElement:null, listeners:{}, createElement(tag) {return new Element(document, tag);}, addEventListener(key, fn) {this.listeners[key] = fn;}};
   const window = {innerWidth:800, innerHeight:600, addEventListener() {}};
-  const menu = new Element(document), opener = new Element(document, 'button');
+  const menu = new Element(document), opener = new Element(document, 'button'), list = new Element(document);
   opener.focus();
-  return {document, menu, opener, popup:createPopupMenu({menu, document, window})};
+  return {document, menu, opener, list, popup:createPopupMenu({menu, document, window, scrollers:[list]})};
 }
 
 test('notes are plain text, a checked choice is a radio item focused first', () => {
@@ -110,4 +110,19 @@ test('a menu shown again while open keeps focus on the item of the same key', ()
   assert.equal(r.document.activeElement, ipad, 'focus stays on the iPad, now choosable');
   r.menu.fire('keydown', {key:'Escape'});
   assert.equal(r.document.activeElement, r.opener);
+});
+
+test('a list that scrolls closes a menu on its rows, not one from a button', () => {
+  const r = rig();
+  // A followed log scrolls as rows arrive; the device and app menus stay.
+  r.popup.show([['Pixel 8', () => {}]], 10, 20, '기기 로그');
+  r.list.fire('scroll');
+  assert.equal(r.menu.hidden, false);
+  r.popup.show([['복사', () => {}]], 10, 20, '행 작업', {onList:true});
+  r.list.fire('scroll');
+  assert.equal(r.menu.hidden, true);
+  // The next menu from a button stays again.
+  r.popup.show([['Pixel 8', () => {}]], 10, 20, '기기 로그');
+  r.list.fire('scroll');
+  assert.equal(r.menu.hidden, false);
 });
