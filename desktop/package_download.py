@@ -104,7 +104,9 @@ def package(binary, target, output):
         if damaged is not None:
             raise ValueError('Damaged archive member: ' + damaged)
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-    checksum.write_text('{}  {}\n'.format(digest, name), encoding='utf-8')
+    # Bytes, not text: text mode writes CRLF on Windows, which `shasum -c` reads
+    # as part of the file name.
+    checksum.write_bytes('{}  {}\n'.format(digest, name).encode('utf-8'))
     return archive
 
 
