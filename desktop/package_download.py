@@ -74,9 +74,10 @@ def package(binary, target, output):
             subprocess.run(['codesign', '--force', '--sign', '-', str(app)], check=True)
             subprocess.run(['codesign', '--verify', '--strict', str(app)], check=True)
             instructions = (
-                'Move LogStudio.app to Applications and open it. macOS 12 or later is required.\n'
-                'This app has no Developer ID signature or Apple notarization. If macOS blocks it,\n'
-                'follow https://support.apple.com/102445 for the per-app Open Anyway option.\n'
+                'Move LogStudio.app to Applications and open it. macOS 12 or later on Apple Silicon is required.\n'
+                'This app has no Developer ID signature or Apple notarization, so macOS blocks the first launch.\n'
+                'Allow it once with Open Anyway in System Settings > Privacy & Security:\n'
+                'https://support.apple.com/102445\n'
             )
         else:
             shutil.copy2(binary, payload / 'LogStudio.exe')
@@ -90,7 +91,9 @@ def package(binary, target, output):
             )
         (payload / 'README.txt').write_text(instructions, encoding='utf-8')
         if system == 'Darwin':
-            subprocess.run(['ditto', '-c', '-k', '--sequesterRsrc',
+            # Extended attributes such as com.apple.provenance would add __MACOSX entries;
+            # the ad-hoc signature lives inside the bundle and does not need them.
+            subprocess.run(['ditto', '-c', '-k', '--norsrc', '--noextattr', '--noacl',
                             str(payload), str(archive.resolve())], check=True)
         else:
             with zipfile.ZipFile(archive, 'x', zipfile.ZIP_DEFLATED) as file:

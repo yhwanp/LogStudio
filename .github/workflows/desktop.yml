@@ -30,6 +30,11 @@ jobs:
             label: windows-x64
             executable: logstudio-desktop.exe
             rustflags: -C target-feature=+crt-static
+          - name: macOS Apple Silicon
+            os: macos-15
+            target: aarch64-apple-darwin
+            label: macos-arm64
+            executable: logstudio-desktop
     defaults:
       run:
         shell: bash
@@ -128,7 +133,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          name: LogStudio-windows-x64
+          pattern: LogStudio-*
           path: downloads
           merge-multiple: true
       - name: Verify download checksums
@@ -144,13 +149,19 @@ jobs:
             const {owner, repo} = context.repo;
             const tag = process.env.RELEASE_TAG;
             const files = fs.readdirSync('downloads').sort();
-            if (files.filter(f => f.endsWith('.zip')).length !== 1 || files.filter(f => f.endsWith('.zip.sha256')).length !== 1 || files.length !== 2) {
-              throw new Error('Expected one Windows ZIP and one checksum file');
+            for (const label of ['windows-x64', 'macos-arm64']) {
+              const zip = `LogStudio-${tag.slice(1)}-${label}.zip`;
+              if (!files.includes(zip) || !files.includes(`${zip}.sha256`)) {
+                throw new Error(`Missing ${zip} or its checksum`);
+              }
+            }
+            if (files.length !== 4) {
+              throw new Error('Expected only the Windows and macOS ZIPs and their checksums');
             }
             const {data: release} = await github.rest.repos.createRelease({
               owner, repo, tag_name: tag, target_commitish: context.sha,
               name: `LogStudio ${tag}`, draft: true, prerelease: tag.includes('-'),
-              body: 'Windows x64: download the ZIP, extract it and open LogStudio.exe. It needs the Microsoft Edge WebView2 Runtime and has no publisher certificate, so SmartScreen may warn. The SHA-256 checksum is attached. The app UI is in Korean; macOS builds from source.\n\nAutomated tests passed on the Windows runner; the Windows UI has not been checked by hand yet.'
+              body: 'Windows x64: download the windows-x64 ZIP, extract it and open LogStudio.exe. It needs the Microsoft Edge WebView2 Runtime and has no publisher certificate, so SmartScreen may warn.\n\nmacOS 12 or later on Apple Silicon: download the macos-arm64 ZIP, extract it, move LogStudio.app to Applications and open it. It has no Developer ID signature or Apple notarization, so macOS blocks the first launch; allow it once with Open Anyway in System Settings > Privacy & Security (https://support.apple.com/102445). Intel Macs are not supported.\n\nSHA-256 checksums are attached. The app UI is in Korean.\n\nAutomated tests passed on the Windows and macOS runners; the Windows UI has not been checked by hand yet.'
             });
             for (const name of files) {
               await github.rest.repos.uploadReleaseAsset({
