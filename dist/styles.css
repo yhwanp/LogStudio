@@ -2,17 +2,17 @@
 :root{
   color-scheme:light;
   --bg:#edf1f5;--surface:#fff;--surface-2:#f8fafc;--surface-3:#f2f6f8;
-  --text:#182b43;--text-2:#26394e;--muted:#617087;--faint:#8a98a9;
-  --border:#dbe2e9;--border-strong:#cdd7e1;--row-border:#edf1f5;
+  --text:#182b43;--text-2:#26394e;--muted:#58677c;--faint:#5f6d7e;
+  --border:#dbe2e9;--border-strong:#cdd7e1;--control-border:#808c9a;--row-border:#edf1f5;
   --navy:#14263b;--navy-text:#e8eef4;--navy-muted:#9fb1c4;--brand:#59e0c5;--topbar-edge:transparent;
   --navy-warn:#f0c560;--navy-warn-text:#f6d88f;--navy-error:#ff8f9f;--navy-error-text:#ffb3be;
-  --accent:#0b7568;--on-accent:#fff;--accent-text:#0a6357;--accent-soft:#e4f3f0;--accent-border:#86bdb4;--focus:#5ab9ac;
+  --accent:#0b7568;--on-accent:#fff;--accent-text:#0a6357;--accent-soft:#e4f3f0;--accent-border:#86bdb4;--focus:#3c968b;
   --row-hover:#f0f8f6;--row-selected:#dff4ef;--row-range:#ecf7f4;--row-error:#fff7f8;
   --raw-text:#7c725d;--mark:#f7dc8b;--mark-text:inherit;--search-hit:#d4a514;--search-hit-bg:#fbefc4;
   --row-selected-2:#eef1f4;--row-selected-2-border:#c9d2dc;
   --error-bg:#fff0f1;--error-text:#a83043;--error-border:#f2d0d6;
   --lv-bg:#f0f3f7;--lv-text:#56687c;--lv-i-bg:#e8f5f2;--lv-i:#087061;--lv-d-bg:#eaf2fb;--lv-d:#3d6fa5;
-  --lv-w-bg:#fff3d9;--lv-w:#956309;--lv-e-bg:#fce9ed;--lv-e:#b3384b;--lv-w-border:#d6b85f;--lv-e-border:#dda3ae;
+  --lv-w-bg:#fff3d9;--lv-w:#916008;--lv-e-bg:#fce9ed;--lv-e:#b3384b;--lv-w-border:#d6b85f;--lv-e-border:#dda3ae;
   --lv-border:#bcc8d4;--lv-i-border:#86bdb4;--lv-d-border:#a3bfe0;
   --damage-bg:#fff0d8;--damage-text:#943b00;
   --shadow:0 3px 15px #14263b0d;--tip-dim:#0a121985;--tip-dim-soft:#0a121952;
@@ -22,8 +22,8 @@
 @media(prefers-color-scheme:dark){:root{
   color-scheme:dark;
   --bg:#0e151d;--surface:#151f2a;--surface-2:#18232f;--surface-3:#1c2835;
-  --text:#dbe4ee;--text-2:#c6d1dc;--muted:#8d9cad;--faint:#6d7c8d;
-  --border:#283544;--border-strong:#344455;--row-border:#1d2935;
+  --text:#dbe4ee;--text-2:#c6d1dc;--muted:#97a6b6;--faint:#909eac;
+  --border:#283544;--border-strong:#344455;--control-border:#637281;--row-border:#1d2935;
   --navy:#0a1219;--navy-text:#dbe4ee;--navy-muted:#8193a6;--topbar-edge:#263443;
   --accent:#36b9a3;--on-accent:#0b1a17;--accent-text:#7bdcca;--accent-soft:#16352f;--accent-border:#2c6a60;--focus:#4fc7b2;
   --row-hover:#1a2a31;--row-selected:#17393a;--row-range:#152d2f;--row-error:#1f1a20;
@@ -49,14 +49,14 @@ kbd{font:11px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;border:1px so
 .visually-hidden{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 
 /* Buttons */
-.button{border:1px solid var(--border-strong);border-radius:7px;background:var(--surface);color:var(--text-2);padding:7px 14px;font-size:13px;font-weight:600;min-height:34px;white-space:nowrap}
+.button{border:1px solid var(--control-border);border-radius:7px;background:var(--surface);color:var(--text-2);padding:7px 14px;font-size:13px;font-weight:600;min-height:34px;white-space:nowrap}
 .button:hover:not(:disabled){background:var(--surface-3)}
 .button.primary{color:var(--on-accent);background:var(--accent);border-color:var(--accent)}
 .button.primary:hover:not(:disabled){background:var(--accent);filter:brightness(1.07)}
 .button.small{min-height:30px;padding:4px 10px;font-size:12px}
 .text-button{background:none;color:var(--accent-text);font-size:13px;padding:3px 0;border-radius:3px;white-space:nowrap}
 .text-button:hover:not(:disabled){text-decoration:underline}
-.mini-button{background:var(--surface);color:var(--text-2);border:1px solid var(--border-strong);border-radius:5px;font-size:12px;padding:2px 8px;min-height:24px;white-space:nowrap}
+.mini-button{background:var(--surface);color:var(--text-2);border:1px solid var(--control-border);border-radius:5px;font-size:12px;padding:2px 8px;min-height:24px;white-space:nowrap}
 .mini-button:hover:not(:disabled){background:var(--surface-3)}
 
 /* Top toolbar: brand, current file and file actions in one row. */
@@ -124,13 +124,13 @@ h2{font-size:16px;margin:0;font-weight:650}
 /* Level chips use the row badge colors of their level. A check box, not
    color alone, tells selected from unselected; dimmed chips have no rows. */
 .level-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px}
-.level-chip{--chip:var(--lv-text);--chip-bg:var(--lv-bg);--chip-border:var(--lv-border);border:1px solid var(--border-strong);border-radius:6px;background:var(--surface);display:grid;grid-template-columns:12px minmax(0,1fr);align-items:center;gap:0 6px;padding:3px 8px;min-height:36px;color:var(--muted);text-align:left}
+.level-chip{--chip:var(--lv-text);--chip-bg:var(--lv-bg);--chip-border:var(--lv-border);border:1px solid var(--control-border);border-radius:6px;background:var(--surface);display:grid;grid-template-columns:12px minmax(0,1fr);align-items:center;gap:0 6px;padding:3px 8px;min-height:36px;color:var(--muted);text-align:left}
 .level-chip[data-level=I]{--chip:var(--lv-i);--chip-bg:var(--lv-i-bg);--chip-border:var(--lv-i-border)}
 .level-chip[data-level=D]{--chip:var(--lv-d);--chip-bg:var(--lv-d-bg);--chip-border:var(--lv-d-border)}
 .level-chip[data-level=W]{--chip:var(--lv-w);--chip-bg:var(--lv-w-bg);--chip-border:var(--lv-w-border)}
 .level-chip:is([data-level=E],[data-level=F],[data-level=A]){--chip:var(--lv-e);--chip-bg:var(--lv-e-bg);--chip-border:var(--lv-e-border)}
 .level-chip[aria-pressed=true]{color:var(--chip);background:var(--chip-bg);border-color:var(--chip-border)}
-.level-chip::before{content:'';grid-area:1/1;width:12px;height:12px;border:1.5px solid var(--border-strong);border-radius:3px;background:var(--surface)}
+.level-chip::before{content:'';grid-area:1/1;width:12px;height:12px;border:1.5px solid var(--control-border);border-radius:3px;background:var(--surface)}
 .level-chip[aria-pressed=true]::before{border-color:var(--chip);background:var(--chip)}
 .level-chip[aria-pressed=true]::after{content:'';grid-area:1/1;justify-self:center;width:3px;height:6px;margin-top:-2px;border:solid var(--surface);border-width:0 2px 2px 0;transform:rotate(45deg)}
 .level-chip .letter{grid-area:1/2;font-size:13px;font-weight:600;line-height:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -139,7 +139,7 @@ h2{font-size:16px;margin:0;font-weight:650}
 .level-actions{display:flex;justify-content:space-between;gap:8px;margin-top:6px}
 .level-actions button{font-size:12px}
 .field{font-size:13px;font-weight:600;display:flex;flex-direction:column;gap:5px;margin-bottom:12px}
-.field input,.field select{font-size:13px;color:var(--text);background:var(--surface);border:1px solid var(--border-strong);border-radius:6px;padding:6px 9px;min-height:32px;width:100%}
+.field input,.field select{font-size:13px;color:var(--text);background:var(--surface);border:1px solid var(--control-border);border-radius:6px;padding:6px 9px;min-height:32px;width:100%}
 .field input::placeholder{color:var(--muted);font-weight:400}
 .field input[aria-invalid=true],.search-box:has(input[aria-invalid=true]){border-color:var(--error-text)}
 .id-fields{display:grid;grid-template-columns:1fr 1fr;gap:10px}
@@ -188,7 +188,7 @@ h2{font-size:16px;margin:0;font-weight:650}
 .filter-chip.exclude:hover .chip-remove{background:var(--error-text);color:var(--surface)}
 .filter-chip.no-rows{border-style:dashed}
 .filter-chip .chip-note{flex-shrink:0;font-size:11px;opacity:.85;white-space:nowrap}
-.help-toggle{width:17px;height:17px;border-radius:50%;border:1px solid var(--border-strong);background:var(--surface);color:var(--muted);font-size:11px;font-weight:700;line-height:15px;padding:0;text-align:center;flex-shrink:0}
+.help-toggle{width:17px;height:17px;border-radius:50%;border:1px solid var(--control-border);background:var(--surface);color:var(--muted);font-size:11px;font-weight:700;line-height:15px;padding:0;text-align:center;flex-shrink:0}
 .help-toggle:hover,.help-toggle[aria-expanded=true]{background:var(--accent-soft);border-color:var(--accent-border);color:var(--accent-text)}
 .filters .field-help{margin:0 0 10px}
 .field-error{font-size:12px;color:var(--error-text);margin:0 0 12px;line-height:1.5}
@@ -212,17 +212,16 @@ h2{font-size:16px;margin:0;font-weight:650}
 .pane-nav{display:flex;align-items:center;gap:5px;margin-left:auto;color:var(--muted)}
 .range-text{font-variant-numeric:tabular-nums;white-space:nowrap;margin-right:4px}
 .jump-form{display:flex;align-items:center;gap:4px}
-.jump-form input{width:76px;padding:2px 6px;border:1px solid var(--border-strong);border-radius:5px;min-height:24px;font-size:12px;background:var(--surface);font-variant-numeric:tabular-nums}
+.jump-form input{width:76px;padding:2px 6px;border:1px solid var(--control-border);border-radius:5px;min-height:24px;font-size:12px;background:var(--surface);font-variant-numeric:tabular-nums}
 .jump-form input::placeholder{color:var(--muted)}
 .jump-form input[aria-invalid=true]{border-color:var(--error-text)}
-.follow-toggle{font-size:12px;color:var(--muted)}
 /* Following a growing file: pressed (dot filled) while new rows arrive; the dot keeps the width. */
 .follow-file::before{content:'';display:inline-block;box-sizing:border-box;width:7px;height:7px;margin-right:5px;border-radius:50%;border:1px solid currentColor;opacity:.55;vertical-align:0}
 .follow-file[aria-pressed=true],.follow-file[aria-pressed=true]:hover:not(:disabled){background:var(--accent-soft);border-color:var(--accent-border);color:var(--accent-text)}
 .follow-file[aria-pressed=true]::before{background:var(--accent);border-color:var(--accent);opacity:1}
 .table-tools{display:flex;align-items:center;gap:12px}
 .table-tools>.text-button{font-size:12px}
-.view-switch{display:flex;border:1px solid var(--border-strong);border-radius:6px;overflow:hidden;flex-shrink:0}
+.view-switch{display:flex;border:1px solid var(--control-border);border-radius:6px;overflow:hidden;flex-shrink:0}
 .view-switch button{font-size:12px;background:var(--surface);color:var(--muted);padding:3px 9px}
 .view-switch button[aria-pressed=true]{background:var(--accent-soft);color:var(--accent-text);font-weight:600}
 /* Chips, the pending note and the selection share what the title, the list
@@ -281,9 +280,10 @@ h2{font-size:16px;margin:0;font-weight:650}
 .lower-pane.expanded:has(>.search-result-pane:not([hidden])):has(>.raw-detail:not([hidden])){min-height:min(62%,calc(46px + 63px + 5*var(--row-height) + 112px))}
 .lower-pane.expanded:has(>.raw-detail:not([hidden]))>.search-result-pane{min-height:min(100%,calc(63px + 5*var(--row-height)))}
 .search-toolbar{padding:7px 12px;display:flex;gap:12px;align-items:center;flex-shrink:0}
-.search-box{border:1px solid var(--border-strong);border-radius:7px;background:var(--surface);display:flex;align-items:center;gap:8px;padding:0 8px 0 10px;flex:1;min-width:180px}
+.search-box{border:1px solid var(--control-border);border-radius:7px;background:var(--surface);display:flex;align-items:center;gap:8px;padding:0 8px 0 10px;flex:1;min-width:180px}
 .search-box>svg{width:16px;height:16px;color:var(--faint);flex-shrink:0}
 .search-box input{border:0;outline:none!important;background:transparent;padding:6px 0;font-size:13px;width:100%;min-width:0}
+.search-box input::placeholder{color:var(--muted)}
 .search-box:focus-within{border-color:var(--accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 30%,transparent)}
 /* A running search's cancel takes the shortcut hint's place in the box. */
 .search-box:has(>.search-cancel:not([hidden]))>kbd{display:none}
@@ -420,9 +420,9 @@ mark{background:var(--mark);color:var(--mark-text);padding:0;border-radius:2px}
 .log-row.search-hit .line-number{background:var(--search-hit-bg);box-shadow:inset -3px 0 var(--search-hit)}
 .log-row.search-hit.bookmarked .line-number{box-shadow:inset 3px 0 var(--lv-w),inset -3px 0 var(--search-hit)}
 /* Bookmarks share the lower region with search results as a tab. */
-.lower-tabs{display:flex;border:1px solid var(--border-strong);border-radius:7px;overflow:hidden;flex-shrink:0}
+.lower-tabs{display:flex;border:1px solid var(--control-border);border-radius:7px;overflow:hidden;flex-shrink:0}
 .lower-tabs button{font-size:12px;background:var(--surface);color:var(--muted);padding:5px 11px;white-space:nowrap}
-.lower-tabs button+button{border-left:1px solid var(--border-strong)}
+.lower-tabs button+button{border-left:1px solid var(--control-border)}
 .lower-tabs button[aria-selected=true]{background:var(--accent-soft);color:var(--accent-text);font-weight:600}
 .lower-tabs button:focus-visible{outline-offset:-3px}
 .bookmark-tools{margin-left:auto}
@@ -528,5 +528,5 @@ mark{background:var(--mark);color:var(--mark-text);padding:0;border-radius:2px}
 .tip-card:not([data-side=bottom]):not([data-side=top]):not([data-side=right]):not([data-side=left])>.tip-arrow{display:none}
 .drop-hint{position:fixed;inset:10px;z-index:20;border:2px dashed var(--accent);background:color-mix(in srgb,var(--surface) 88%,transparent);border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:600;color:var(--accent-text);pointer-events:none}
 
-@media(max-width:1000px){.pane-hint{display:none}.table-tools{gap:8px}.file-status{display:none}}
+@media(max-width:1000px){.hint-more{display:none}.table-tools{gap:8px}.file-status{display:none}}
 @media(prefers-reduced-motion:reduce){.workspace,.filter-panel-slot,.filters-collapsed .filter-panel-slot,.load-progress>span,.tip-spot{transition:none}}

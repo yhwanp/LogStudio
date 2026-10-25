@@ -40,7 +40,7 @@ export const TIPS = {
   // Offered when a row of the upper logs is selected.
   rows: {target: document => document.querySelector('#logsRows .selected-log-row'), clip: logsViewport, title: '행 복사·북마크·행 메뉴', body: '행을 드래그하거나 {Shift}+클릭해 이어진 행을, {⌘}+클릭으로 떨어진 행을 선택해 {⌘C}로 원문을 복사합니다.\n다시 볼 행은 {⌘B}로 북마크해 두세요. 필터나 검색을 바꿔도 남고, 아래 북마크 탭에 모여 {F2}로 오갈 수 있습니다.\n행을 우클릭하면 그 행의 태그·PID·시각으로 바로 거를 수 있습니다.'},
   // Offered when search results are shown.
-  search: {target: byId('largeSearchPane'), sides: ['top', 'bottom', 'right', 'left'], title: '검색 결과를 위 로그에서 보기', body: '결과 행을 선택하면 위 로그도 그 행을 보여 주고, 더블클릭이나 {Enter}로 위 로그로 넘어갑니다. 검색창에서는 {Enter}·{Shift}+{Enter}로 결과를 차례로 넘깁니다.'},
+  search: {target: byId('largeSearchPane'), sides: ['top', 'bottom', 'right', 'left'], title: '검색 결과를 위 로그에서 보기', body: '결과 행을 선택하면 위 로그도 그 행을 보여 주고, 더블클릭이나 {Enter}로 위 로그로 이동합니다. 검색창에서는 {Enter}·{Shift}+{Enter}로 결과를 차례로 넘깁니다.'},
   // Offered when the first bookmark makes the tab appear.
   bookmarks: {target: byId('bookmarkTab'), title: '북마크', body: '북마크한 행은 이 탭에 모입니다. {F2}·{Shift}+{F2}로 위 로그에서 북마크 사이를 오갑니다.'},
 };
