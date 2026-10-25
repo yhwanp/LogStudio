@@ -1605,17 +1605,19 @@ impl Dataset {
             _ => false,
         }
     }
-    /// Starts an analysis pass when indexed blocks wait for one and neither
-    /// a pass nor a scan has the analysis state.
+    /// Starts an analysis pass when neither a pass nor a scan has the
+    /// analysis state and indexed blocks wait for it, or it holds blocks not
+    /// published yet: a scan cancelled after its last block puts back a
+    /// state that covers every block, and only a pass publishes it then.
     fn analyze_later(self: &Arc<Self>) {
         let more = {
             let index = self.index.lock().unwrap();
             let analysis = self.analysis.lock().unwrap();
             index.done
                 && index.error.is_empty()
-                && analysis
-                    .as_ref()
-                    .is_some_and(|a| a.levels.len() < index.blocks.len())
+                && analysis.as_ref().is_some_and(|a| {
+                    a.levels.len() < index.blocks.len() || index.analyzed < a.levels.len()
+                })
         };
         if more && !self.stop.load(Ordering::Acquire) && !self.hold.load(Ordering::Acquire) {
             let d = self.clone();

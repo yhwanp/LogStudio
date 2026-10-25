@@ -15,6 +15,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+// A timeout names the line that waited.
+#[track_caller]
 fn wait(mut done: impl FnMut() -> bool) {
     let deadline = Instant::now() + Duration::from_secs(60);
     while !done() {
