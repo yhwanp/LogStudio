@@ -14,9 +14,9 @@
 //! Xcode keeps and the developer disk image Xcode mounts, none of which this
 //! app makes.
 use super::{
-    adb::run,
     ios::{self, IosLink},
     link,
+    process::{command, run},
 };
 use crate::source::error;
 use idevice::{lockdown::LockdownClient, provider::IdeviceProvider, Idevice, IdeviceService};
@@ -25,7 +25,6 @@ use std::{
     ffi::OsString,
     io,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
     time::Duration,
 };
 
@@ -281,13 +280,6 @@ pub fn launch_outcome(output: &[u8]) -> io::Result<()> {
 pub struct Xcode {
     developer: PathBuf,
 }
-/// A command without input, so a tool that asks something fails instead of
-/// waiting.
-fn no_input(program: &Path) -> Command {
-    let mut command = Command::new(program);
-    command.stdin(Stdio::null());
-    command
-}
 impl Xcode {
     /// The first developer folder with `devicectl`. `xcrun` is not run:
     /// without developer tools, it offers to install them.
@@ -295,7 +287,7 @@ impl Xcode {
         if !cfg!(target_os = "macos") {
             return Err(error(NO_XCODE));
         }
-        let mut select = no_input(Path::new("/usr/bin/xcode-select"));
+        let mut select = command(Path::new("/usr/bin/xcode-select"));
         select.arg("--print-path");
         let selected = run(select, QUERY_TIMEOUT, 64 * 1024)
             .ok()
@@ -314,7 +306,7 @@ impl Xcode {
     /// Whether Xcode finished its first-launch setup. `devicectl` would run
     /// that setup itself, installing system components.
     fn ready(&self) -> io::Result<()> {
-        let mut check = no_input(&self.developer.join("usr/bin/xcodebuild"));
+        let mut check = command(&self.developer.join("usr/bin/xcodebuild"));
         check.env("DEVELOPER_DIR", &self.developer);
         check.arg("-checkFirstLaunchStatus");
         match run(check, QUERY_TIMEOUT, 64 * 1024) {
@@ -330,7 +322,7 @@ impl Xcode {
             .prefix("logstudio-devicectl-")
             .suffix(".json")
             .tempfile()?;
-        let mut launch = no_input(&self.devicectl());
+        let mut launch = command(&self.devicectl());
         launch.args(["device", "process", "launch", "--device", udid]);
         launch.args([
             "--terminate-existing",

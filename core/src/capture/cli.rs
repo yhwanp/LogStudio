@@ -1,9 +1,10 @@
 //! The adb command line as a capture's connection. Each request runs one
 //! fixed adb command; the serial is passed as an argument of its own.
 use super::{
-    adb::{command, run, Output},
+    adb::command,
     gate::Stamp,
     link::{self, parse_devices, Closer, Device, Link, Stream},
+    process::{run, Output},
 };
 use crate::source::error;
 use std::{
