@@ -27,6 +27,9 @@ const ARCHIVE: &str = "Compressed archives are not supported; extract the log fi
 /// gaining up to 8 (see docs/LARGE_LOG_VALIDATION.md).
 const MAX_BLOCK_WORKERS: usize = 4;
 const MAX_DLT_WORKERS: usize = 8;
+/// Threads of `read_blocks`, which runs beside the panes' scans and the
+/// analysis rather than in place of them.
+const EXTENSION_WORKERS: usize = 2;
 fn block_workers(format: Format) -> usize {
     let max = match format {
         Format::Text => MAX_BLOCK_WORKERS,
@@ -869,6 +872,36 @@ impl Dataset {
             }
             (i, at) = (i + 1, at + 1);
         }
+    }
+    /// Reads the rows of blocks `from..` for code that interprets them
+    /// itself, such as an app extension: `pick` sees each block with its
+    /// rows as text (`ByteLines` splits them; the block's first row is line
+    /// `first`), several blocks at a time, and `deliver` gets the results in
+    /// block order. Blocks still being indexed are waited for. Returns the
+    /// first block not delivered: the block count once the rows end, or less
+    /// when `stop`, closing or the replacement of a followed file's last
+    /// block halted it. A followed file's later blocks, and its last block
+    /// once replaced, need another call from there.
+    pub fn read_blocks<T: Send>(
+        &self,
+        from: usize,
+        stop: &AtomicBool,
+        pick: impl Fn(&Block, &Rows) -> T + Sync,
+        mut deliver: impl FnMut(usize, T),
+    ) -> io::Result<usize> {
+        let mut next = from;
+        self.blocks_in_order(
+            from,
+            EXTENSION_WORKERS.min(block_workers(self.format)),
+            stop,
+            |_, _| true,
+            |_, b| Ok((pick(&b, &self.read_rows(&b)?), true)),
+            |i, value| {
+                next = i + 1;
+                deliver(i, value);
+            },
+        )?;
+        Ok(next)
     }
     fn wait_block(&self, i: usize, halted: &dyn Fn() -> bool) -> io::Result<Option<Block>> {
         let mut index = self.index.lock().unwrap();

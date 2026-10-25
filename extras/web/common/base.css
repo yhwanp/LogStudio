@@ -1,0 +1,34 @@
+/* The main window's colors and controls (dist/styles.css), for extension
+   pages. Colors live in variables so the dark scheme only swaps values. */
+:root{
+  color-scheme:light;
+  --bg:#edf1f5;--surface:#fff;--surface-3:#f2f6f8;
+  --text:#182b43;--text-2:#26394e;--muted:#617087;
+  --border:#dbe2e9;--border-strong:#cdd7e1;
+  --accent:#0b7568;--on-accent:#fff;--accent-text:#0a6357;--accent-soft:#e4f3f0;--focus:#5ab9ac;
+  --error-bg:#fff0f1;--error-text:#a83043;--error-border:#f2d0d6;
+  font-family:Inter,"Noto Sans KR",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--text);background:var(--bg);font-size:16px;
+}
+@media(prefers-color-scheme:dark){:root{
+  color-scheme:dark;
+  --bg:#0e151d;--surface:#151f2a;--surface-3:#1c2835;
+  --text:#dbe4ee;--text-2:#c6d1dc;--muted:#8d9cad;
+  --border:#283544;--border-strong:#344455;
+  --accent:#36b9a3;--on-accent:#0b1a17;--accent-text:#7bdcca;--accent-soft:#16352f;--focus:#4fc7b2;
+  --error-bg:#35181e;--error-text:#ff9fac;--error-border:#5a2a33;
+}}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;overflow:hidden;background:var(--bg)}
+button,input{font:inherit;color:inherit}
+button{cursor:pointer;border:0}
+button:disabled{cursor:default;opacity:.5}
+button:focus-visible,input:focus-visible,[tabindex]:focus-visible{outline:3px solid var(--focus);outline-offset:2px}
+input[type=checkbox]{accent-color:var(--accent);width:15px;height:15px;flex-shrink:0;margin:0}
+[hidden]{display:none!important}
+::selection{background:var(--accent-soft)}
+kbd{font:11px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;border:1px solid var(--border-strong);border-bottom-width:2px;border-radius:4px;padding:1px 5px;color:var(--muted);background:var(--surface)}
+.visually-hidden{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.button{border:1px solid var(--border-strong);border-radius:7px;background:var(--surface);color:var(--text-2);padding:7px 14px;font-size:13px;font-weight:600;min-height:34px;white-space:nowrap}
+.button:hover:not(:disabled){background:var(--surface-3)}
+.check-line{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--text-2);white-space:nowrap;cursor:pointer}

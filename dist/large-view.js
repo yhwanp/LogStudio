@@ -12,6 +12,7 @@ import {textSpan, writeClipboard} from './dom.js';
 import {createPopupMenu} from './menu.js';
 import {mountRecentFiles} from './recent.js';
 import {mountDevices, captureBreaks, breakLabel} from './devices.js';
+import {mountExtras} from './extras.js';
 import {mountSavedFilters, fieldsOf} from './saved-filters.js';
 import {mountConditions, conditionSummary, rowlessText} from './conditions.js';
 import {createBookmarks, MAX_BOOKMARKS} from './bookmarks.js';
@@ -78,10 +79,12 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
   const $ = id => document.getElementById(id);
   $('largeLogPanel').hidden=false;
   const ids = ['largeName','largeStatus','largeError','largeCount','largeTotal','largeRows','largeViewport','largeFirst','largeLast','largeJump','largeJumpForm','largeCancel','largeClose','largeColumns','largeRaw','largeHeaders','largeRange','largeDetail','largeDetailTitle','largeDetailText','largeDetailPrevious','largeDetailNext','largeDetailClose','levelFilters','allLevels','errorLevels','resetFilters','searchInput','tagFilter','pidFilter','tidFilter','caseSensitive','includeRaw','recognizeLineNumbers','logsCount','logsRows','logsViewport','logsHeaders','logsFirst','logsLast','logsJump','logsJumpForm','logsRange','largeSearchPane','filterBadge','activeFilters','filterRow','logsSelection','largeSelection','toast','largeDetailCopy','toggleFilters','emptyState','logContent','loadProgress','loadProgressBar','paneSplitter','idFilterError','tagFilterError','searchError','dropHint','filterPanel','largeRegex','rowMenu','largeSize','exportLogs','exportSearch','exportCancel','recentFiles','recentList','clearRecent','recentButton','timeFrom','timeTo','timeFilterError','lowerTabs','searchTab','bookmarkTab','bookmarkPane','bookmarkCount','bookmarkList','copyBookmarks','clearBookmarks','logsPending','reopenFile','errorBar','errorReopen','followFile','messageFilter','messageRegex','messageFilterError','messageLabel'];
-  for (const id of ['deviceButton','emptyDevice','captureBar','captureState','captureText','captureHint','captureApp','captureAppStatus','captureStop','captureSave','captureLeftovers','leftoverList','openFile']) ids.push(id);
+  for (const id of ['extrasButton','deviceButton','emptyDevice','captureBar','captureState','captureText','captureHint','captureApp','captureAppStatus','captureStop','captureSave','captureLeftovers','leftoverList','openFile']) ids.push(id);
   const ui = Object.fromEntries(ids.map(id => [id,$(id)]));
   // Device captures (devices.js) mount once the menu and toasts exist.
   let devices=null;
+  // App extensions (extras.js) mount with the devices; other builds have none.
+  let extras=null;
   // The layout reports its first render before the controllers exist.
   let ready=false;
   // First-use tips are offered where their feature comes into reach.
@@ -448,15 +451,15 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     }
     if(!Number.isSafeInteger(line)||line<1)return reject('행 번호는 1부터입니다.');
     if(line>state.total)return reject(state.textComplete?`마지막 행은 ${rowLabel(state.total)}입니다.`:`${rowLabel(line)}은 아직 읽지 않았습니다. 읽기가 끝난 뒤 다시 시도해 주세요.`);
-    input.removeAttribute('aria-invalid');jumpRequests.set(owner,line);
+    input.removeAttribute('aria-invalid');jumpRequests.set(owner,{line,typed:true});
     locateAndFocus(prefix,owner,line,{nearest:true});
   }
   function located(owner,{lineNumber,outcome,target}){
     // Each locate replaces the pane's previous one, so any outcome ends a jump.
     const wanted=jumpRequests.get(owner);jumpRequests.delete(owner);
-    if(wanted!==lineNumber)return;
+    if(wanted?.line!==lineNumber)return;
     const input=ui[owner===logs?'logsJump':'largeJump'],where=owner===logs?'현재 필터 결과':'검색 결과';
-    if(outcome==='found'||outcome==='nearest')input.value='';
+    if(wanted.typed&&(outcome==='found'||outcome==='nearest'))input.value='';
     if(outcome==='nearest')notify(`${rowLabel(lineNumber)}은 ${where}에 없어 다음 결과인 ${rowLabel(target)}으로 이동했습니다.`);
     else if(outcome==='hidden')notify(`${rowLabel(lineNumber)}은 ${where}에 없고 그 뒤에도 ${owner.getState().queryComplete?'결과가 없습니다':'아직 찾은 결과가 없습니다'}.`);
     else if(outcome==='incomplete')notify(`${where} 처리가 끝나지 않아 ${rowLabel(lineNumber)}의 위치를 확인할 수 없습니다.`);
@@ -587,6 +590,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     ui.errorReopen.hidden=!(SOURCE_CHANGES.has(raw)&&canReopen(upper));
   }
   function renderLogs(state){
+    extras?.selected('logs',state.datasetId,state.selectedLine);
     // CLI sources can already be indexing before the event listener attaches.
     if(!lastSourceId&&Number.isSafeInteger(state.datasetId)&&state.datasetId>0){
       lastSourceId=state.datasetId;if(!state.textComplete)pendingSourceId=state.datasetId;
@@ -660,6 +664,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     renderLogs(logs.getState());
   });
   function renderSearch(state){
+    extras?.selected('search',state.datasetId,state.selectedLine);
     const p=describeLargeProgress({...state,inputPending,inputPaused,inputInvalid:validationError},{compactSearch:true});
     // Field edits keep the lower pane closed until there is a search to show.
     const visible=!!ui.searchInput.value;updateLowerPane();
@@ -911,6 +916,11 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
   columnMenu.addEventListener('click',()=>{const box=columnMenu.getBoundingClientRect?.();menu.show(columnItems(),box?box.left:0,box?box.bottom+4:0,'열 폭');});
   for(const header of [ui.logsHeaders,ui.largeHeaders,$('bookmarkHeaders')])header.addEventListener('contextmenu',event=>{if(rawMode||disposed)return;event.preventDefault();menu.show(columnItems(),event.clientX,event.clientY,'열 폭',{onList:true});});
   devices=mountDevices({ui,document,window,native,menu,logs,isGone:()=>pageGone,report:message=>{inputError=message;errors();},unreport:message=>{if(message&&inputError===message){inputError='';errors();}},notify});
+  // A row an extension picks is selected in the upper logs, as a typed row
+  // number is, without moving focus.
+  extras=mountExtras({button:ui.extrasButton,native,menu,notify,isGone:()=>pageGone,
+    locate:(datasetId,line)=>{if(disposed||inputPending||validationError||logs.getState().datasetId!==datasetId)return;jumpRequests.set(logs,{line,typed:false});void logs.locateLine(line,{nearest:true});},
+    current:()=>{const state=logs.getState();return Number.isSafeInteger(state.selectedLine)?{datasetId:state.datasetId,line:state.selectedLine}:null;}});
   mountRecentFiles({ui,document,native,menu,isGone:()=>pageGone,onError:message=>{inputError=message;errors();},guard:()=>devices.guard(),keep:id=>devices.keep(id),shown:()=>logs.getState().datasetId});
   function repaintRows(){previousRows.clear();renderLogs(logs.getState());renderSearch(search.getState());}
   const bookmarks=createBookmarks({ui,document,window,notify,mod:MOD,logs,lineCell,jump:jumpTo,openMenu:openBookmarkMenu,isRawMode:()=>rawMode,canNavigate:()=>!disposed&&!inputPending&&!validationError,onChange:()=>{repaintRows();saver.schedule();},onCount:count=>{bookmarkCount=count;updateLowerPane();if(count)tips?.offer('bookmarks');}});

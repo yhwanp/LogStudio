@@ -9,6 +9,7 @@ repository.workspace=true
 tauri-build={version="=2.7.1",features=[]}
 [dependencies]
 logstudio-core={path="../core"}
+logstudio-extras={path="../extras",optional=true}
 serde.workspace=true
 serde_json.workspace=true
 tauri={version="=2.12.1",features=[]}
@@ -20,6 +21,8 @@ tempfile.workspace=true
 default=["custom-protocol"]
 custom-protocol=["tauri/custom-protocol"]
 qa=["dep:tauri-plugin-wdio-webdriver"]
+# App extensions (extras/), for builds that are not released.
+extras=["dep:logstudio-extras"]
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2="=0.6.4"

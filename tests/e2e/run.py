@@ -1,6 +1,6 @@
 """Runs the real-WebView scenarios against a QA build (macOS).
 
-    python3 tests/e2e/run.py <QA binary> [--out DIR] [--large] [--foreground] [scenario ...]
+    python3 tests/e2e/run.py <QA binary> [--out DIR] [--large] [--extras] [--foreground] [scenario ...]
 
 Each scenario gets its own temporary HOME and fixture folder and launches
 the app as often as it needs. Results (results.json) and screenshots (each
@@ -27,7 +27,7 @@ from harness import App  # noqa: E402
 
 # Run order: quick UI checks first, slow and window-moving ones last.
 SCENARIOS = ['basics', 'time_filter', 'bookmarks', 'field_filters', 'saved_filters', 'conditions', 'filter_place', 'formats', 'dlt', 'entries', 'tips', 'launch',
-             'multi_file', 'follow', 'devices', 'reopen', 'zoom', 'window', 'row_numbers']
+             'multi_file', 'follow', 'devices', 'reopen', 'zoom', 'window', 'row_numbers', 'extras']
 
 
 class Context:
@@ -62,6 +62,7 @@ def main():
     p.add_argument('scenarios', nargs='*', help=f'subset of: {", ".join(SCENARIOS)}')
     p.add_argument('--out', type=Path, help='keep results and screenshots in this new or empty folder (default: replace artifacts/e2e)')
     p.add_argument('--large', action='store_true', help='include scenarios that write ~400 MB fixtures')
+    p.add_argument('--extras', action='store_true', help='include scenarios of app extensions (a build with --features qa,extras)')
     p.add_argument('--foreground', action='store_true', help='let the app activate and its window come to the front (default: background)')
     a = p.parse_args()
     binary = a.binary.resolve()
@@ -84,6 +85,9 @@ def main():
         module = importlib.import_module(f'scenarios.{name}')
         if getattr(module, 'LARGE', False) and not a.large and name not in a.scenarios:
             print(f'skip {name}: needs --large', flush=True)
+            continue
+        if getattr(module, 'EXTRAS', False) and not a.extras and name not in a.scenarios:
+            print(f'skip {name}: needs --extras', flush=True)
             continue
         ctx = Context(name, binary, out, results, background=not a.foreground)
         started = time.monotonic()
