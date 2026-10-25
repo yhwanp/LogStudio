@@ -608,7 +608,18 @@ impl FieldIndex {
         Known {
             levels: c.level_bits(),
             fields,
+            tested: c.tests(),
         }
+    }
+    /// Whether the kept metadata of each `tested` field describes `block`.
+    /// A followed file's later blocks hold values its dictionary may lack,
+    /// so there a test that every known value passes, or an empty
+    /// dictionary's, says nothing. A dropped field reads its blocks anyway.
+    fn covers(&self, tested: [bool; 3], block: usize) -> bool {
+        self.fields
+            .iter()
+            .zip(tested)
+            .all(|(field, t)| !t || field.as_ref().is_none_or(|f| block < f.blocks.len()))
     }
     /// Each condition's tested fields evaluated over their dictionaries;
     /// None when the metadata cannot decide any block.
@@ -658,6 +669,9 @@ impl Probe {
         let in_levels = |slot: usize| self.known.levels & (1 << slot) != 0;
         if (0..8).all(|slot| !in_levels(slot) || rows.slots[slot] == 0) {
             return Some(false);
+        }
+        if !self.table.covers(self.known.tested, block) {
+            return None;
         }
         let mut deciding = 0;
         for (f, verdicts) in &self.known.fields {
@@ -718,6 +732,8 @@ struct Known {
     /// Each field it tests that rejects some value, with a verdict per id;
     /// None for a field without metadata.
     fields: Vec<(usize, Option<Vec<bool>>)>,
+    /// The fields it tests, PID, TID and tags (`Cond::tests`).
+    tested: [bool; 3],
 }
 impl Plan {
     /// The block's matches and its last entry's decision, when field
@@ -730,6 +746,13 @@ impl Plan {
         variant: usize,
         rows: &BlockRows,
     ) -> Option<(u64, Option<bool>)> {
+        if self
+            .conds
+            .iter()
+            .any(|c| !self.table.covers(c.tested, block))
+        {
+            return None;
+        }
         let in_levels = |levels: u16, slot: usize| levels & (1 << slot) != 0;
         // Per condition: None when no row of the block matches it, else the
         // fields that still decide it here. A field whose every value in the

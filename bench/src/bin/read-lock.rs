@@ -5,8 +5,15 @@
 // does inside its mutex cost more on Windows, and one synchronous handle
 // serializes reads even without the mutex.
 //
-//   read-lock <MiB> <dir> [runs]       generate <dir>/bench-<MiB>.log once, then measure
-//   read-lock --file <path> [runs]     measure an existing UTF-8 log
+//   read-lock <MiB> <dir> [runs] [sections]    generate <dir>/bench-<MiB>.log once, then measure
+//   read-lock --file <path> [runs] [sections]  measure an existing UTF-8 log
+//
+// `sections` is a comma-separated subset of `reads` (the block read path),
+// `engine` (queries after opening), `restore` (a field filter that starts
+// with the file, as restored work does) and `search` (searches five times
+// each); all by default. A file larger than
+// the OS file cache keeps, such as 8 GiB on a 24 GiB Mac, measures reads from
+// the disk: the cache cannot hold it between passes.
 use logstudio_core::source::{Source, BLOCK};
 use serde_json::{json, Value};
 use std::{
@@ -69,29 +76,42 @@ fn wait(mut f: impl FnMut() -> bool) {
         sleep(Duration::from_micros(500));
     }
 }
-fn run(e: &E, id: u64, qid: u64, pane: &str, f: &Value) -> (f64, u64) {
+/// Seconds to the first counted result (completion when none) and to
+/// completion, and the count.
+fn run(e: &E, id: u64, qid: u64, pane: &str, f: &Value) -> (f64, f64, u64) {
     let t = Instant::now();
     req(
         e,
         json!({"action":"query","pane":pane,"datasetId":id,"queryId":qid,"filters":f}),
     );
-    wait(|| st(e, pane)["query"]["status"] != "running");
+    let mut first = None;
+    wait(|| {
+        let q = &st(e, pane)["query"];
+        if first.is_none() && q["count"].as_u64().is_some_and(|n| n > 0) {
+            first = Some(t.elapsed().as_secs_f64());
+        }
+        q["status"] != "running"
+    });
+    let done = t.elapsed().as_secs_f64();
     let s = st(e, pane);
     assert_eq!(s["query"]["status"], "complete", "{s}");
     (
-        t.elapsed().as_secs_f64(),
+        first.unwrap_or(done),
+        done,
         s["query"]["count"].as_u64().unwrap(),
     )
 }
-/// One pass through the engine API, as the app uses it. Seconds and counts.
-fn engine(path: &Path, round: usize) {
+/// Opens `path` with the logs pane query `filters`, as a reopened file's
+/// restored work starts it, and polls the first page until indexing ends.
+/// Returns the engine, dataset id and seconds to the first row and to EOF.
+fn open(path: &Path, filters: &Value) -> (E, u64, f64, f64) {
     let e: E = Arc::new(logstudio_core::Engine::default());
     let id = e.begin_open();
     let t = Instant::now();
     e.open_file(id, path).unwrap();
     req(
         &e,
-        json!({"action":"query","pane":"logs","datasetId":id,"queryId":1,"filters":{}}),
+        json!({"action":"query","pane":"logs","datasetId":id,"queryId":1,"filters":filters}),
     );
     let mut first = None;
     while st(&e, "logs")["textComplete"] != true {
@@ -105,11 +125,17 @@ fn engine(path: &Path, round: usize) {
         sleep(Duration::from_micros(500));
     }
     let eof = t.elapsed().as_secs_f64();
+    (e, id, first.unwrap_or(eof), eof)
+}
+/// One pass through the engine API, as the app uses it. Each query line
+/// gives seconds to the first counted result, to completion, and the count.
+fn engine(path: &Path, round: usize) {
+    let (e, id, first, eof) = open(path, &json!({}));
     let rows = st(&e, "logs")["total"].as_u64().unwrap();
-    println!("engine {round}\tfirst page\t{:.3}", first.unwrap_or(eof));
+    println!("engine {round}\tfirst page\t{first:.3}");
     println!("engine {round}\tindex EOF\t{eof:.3}\trows {rows}");
-    let (s, n) = run(&e, id, 2, "logs", &json!({"levels":["E"]}));
-    println!("engine {round}\tlevel E before analysis\t{s:.3}\t{n}");
+    let (f, s, n) = run(&e, id, 2, "logs", &json!({"levels":["E"]}));
+    println!("engine {round}\tlevel E before analysis\t{f:.3}\t{s:.3}\t{n}");
     let t = Instant::now();
     wait(|| st(&e, "logs")["summaryComplete"] == true);
     println!(
@@ -127,14 +153,98 @@ fn engine(path: &Path, round: usize) {
         ("level E after analysis", "logs", json!({"levels":["E"]})),
         ("pid 123", "logs", json!({"pid":"123"})),
         ("tag gallery", "logs", json!({"tag":"gallery"})),
+        // Common queries within a field filter: only iOS rows (none of
+        // them E) have the first, E rows the second.
+        (
+            "level E + common hidden literal",
+            "search",
+            json!({"levels":["E"],"query":"한글 텍스트"}),
+        ),
+        (
+            "level E + common shown literal",
+            "search",
+            json!({"levels":["E"],"query":"some log message"}),
+        ),
+        (
+            "time 12:07:10-20",
+            "logs",
+            json!({"timeFrom":"12:07:10","timeTo":"12:07:20"}),
+        ),
     ];
     for (k, (label, pane, f)) in queries.iter().enumerate() {
-        let (s, n) = run(&e, id, 10 + k as u64, pane, f);
-        println!("engine {round}\t{label}\t{s:.3}\t{n}");
+        let (first, s, n) = run(&e, id, 10 + k as u64, pane, f);
+        println!("engine {round}\t{label}\t{first:.3}\t{s:.3}\t{n}");
     }
+    // Cancelling a search that reads every block, mid-file.
+    req(
+        &e,
+        json!({"action":"query","pane":"search","datasetId":id,"queryId":100,"filters":{"query":"rare_needle_"}}),
+    );
+    sleep(Duration::from_millis(50));
+    let t = Instant::now();
+    let c = req(
+        &e,
+        json!({"action":"cancel","pane":"search","datasetId":id,"queryId":100}),
+    );
+    println!(
+        "engine {round}\tcancel search\t{:.4}\t{}",
+        t.elapsed().as_secs_f64(),
+        c["query"]["status"]
+    );
     let t = Instant::now();
     e.close();
     println!("engine {round}\tclose\t{:.4}", t.elapsed().as_secs_f64());
+}
+/// Searches that read every block and filters that the tables decide, five
+/// times each after the analysis, to compare with less noise than single
+/// queries.
+fn searches(path: &Path, round: usize) {
+    let (e, id, _, _) = open(path, &json!({}));
+    wait(|| st(&e, "logs")["summaryComplete"] == true);
+    let mut qid = 10;
+    for (label, pane, f) in [
+        ("rare literal", "search", json!({"query":"rare_needle_"})),
+        ("literal 한글", "search", json!({"query":"한글"})),
+        (
+            "regex",
+            "search",
+            json!({"query":"value=\\d{5}7 ","searchMode":"regex"}),
+        ),
+        ("level E", "logs", json!({"levels":["E"]})),
+        ("pid 123", "logs", json!({"pid":"123"})),
+        ("tag gallery", "logs", json!({"tag":"gallery"})),
+    ] {
+        let times: Vec<String> = (0..5)
+            .map(|_| {
+                qid += 1;
+                format!("{:.3}", run(&e, id, qid, pane, &f).1)
+            })
+            .collect();
+        println!("search {round}\t{label}\t{}", times.join(" "));
+    }
+    e.close();
+}
+/// Reopening a file whose saved work restores a field filter: its logs pane
+/// query starts with the file, before the level analysis.
+fn restore(path: &Path, round: usize) {
+    for (label, filters) in [
+        ("level E", json!({"levels":["E"]})),
+        ("tag gallery", json!({"tag":"gallery"})),
+    ] {
+        let t = Instant::now();
+        let (e, _, first, eof) = open(path, &filters);
+        wait(|| st(&e, "logs")["query"]["status"] != "running");
+        let s = st(&e, "logs");
+        assert_eq!(s["query"]["status"], "complete", "{s}");
+        let counted = t.elapsed().as_secs_f64();
+        wait(|| st(&e, "logs")["summaryComplete"] == true);
+        let summarized = t.elapsed().as_secs_f64();
+        println!(
+            "restore {round}\t{label}\tfirst row {first:.3}\tindex EOF {eof:.3}\tcount {counted:.3}\tlevels {summarized:.3}\t{}",
+            s["query"]["count"]
+        );
+        e.close();
+    }
 }
 
 /// Positional read on a shared handle, the way `Source::read` reads.
@@ -282,6 +392,10 @@ fn main() {
         None => panic!("<MiB> <dir> [runs] or --file <path> [runs]"),
     };
     let runs: usize = rest.first().map_or(2, |r| r.parse().expect("runs"));
+    let sections = rest
+        .get(1)
+        .map_or("reads,engine,restore,search", String::as_str);
+    let section = |name: &str| sections.split(',').any(|s| s == name);
     let cpus = thread::available_parallelism().map_or(0, |n| n.get());
     let size = std::fs::metadata(&path).unwrap().len();
     println!(
@@ -289,9 +403,20 @@ fn main() {
         std::env::consts::OS,
         std::env::consts::ARCH
     );
-    // The first read pass also warms the OS file cache for both sections.
+    // The first read pass also warms the OS file cache for the other
+    // sections, unless the file is larger than the cache keeps.
     for round in 1..=runs {
-        reads(&path, round);
-        engine(&path, round);
+        if section("reads") {
+            reads(&path, round);
+        }
+        if section("engine") {
+            engine(&path, round);
+        }
+        if section("restore") {
+            restore(&path, round);
+        }
+        if section("search") {
+            searches(&path, round);
+        }
     }
 }

@@ -142,6 +142,11 @@ pub const RECORD_BYTES: usize = MAX_LINE;
 pub const RECORD_ROWS: usize = 10_000;
 /// Physical rows one `lines` request may name (a bookmark list is 1,000).
 pub const LINES_PER_REQUEST: usize = 200;
+/// Blocks a pass reads ahead of its workers (128 KiB blocks: ~8 MiB).
+const READ_AHEAD: usize = 64;
+/// Blocks whose analyses a scan keeps while it waits for a pass to hand
+/// over the analysis state (128 KiB blocks: ~32 MiB of rows).
+const EARLY_BLOCKS: usize = 256;
 /// The log entry each page row without fields continues: its parsed row's
 /// line and fields, so a view can show which log printed the row.
 struct Owners {
@@ -267,6 +272,9 @@ pub struct Dataset {
     pub gates: [Mutex<()>; 2],
     /// Analysis state between passes; None while a pass runs.
     analysis: Mutex<Option<Analysis>>,
+    /// Pane scans that would analyze the blocks they parse; an analysis
+    /// pass hands them its state instead of parsing the rows again.
+    wanted: AtomicUsize,
     /// Pauses every block pass while the last block is replaced.
     hold: AtomicBool,
     follower: Mutex<Option<JoinHandle<()>>>,
@@ -274,6 +282,10 @@ pub struct Dataset {
     follow_gate: Mutex<()>,
     /// `FOLLOW_POLL_MS` unless a test or measurement changes it.
     pub follow_poll_ms: AtomicU64,
+    /// Passes that started reading ahead (`read_ahead`), for tests and
+    /// measurements.
+    #[doc(hidden)]
+    pub read_aheads: AtomicU64,
     /// What checks learned of each condition's rows, by line number
     /// variant and normal form, for every query of the dataset.
     seen: Mutex<HashMap<(bool, Condition), Seen>>,
@@ -345,6 +357,9 @@ struct Scanned {
     count: u64,
     lead: u64,
     tail: Option<bool>,
+    /// The block's analysis, when the scan analyzes the blocks it parses;
+    /// boxed, as table-decided blocks pass through at under a microsecond.
+    analyzed: Option<Box<Analyzed>>,
 }
 pub struct Query {
     pub id: u64,
@@ -446,11 +461,13 @@ impl Dataset {
             panes: [Mutex::new(None), Mutex::new(None)],
             gates: [Mutex::new(()), Mutex::new(())],
             analysis: Mutex::new(Some(Analysis::default())),
+            wanted: AtomicUsize::new(0),
             hold: AtomicBool::new(false),
             follower: Mutex::new(None),
             unfollow: AtomicBool::new(false),
             follow_gate: Mutex::new(()),
             follow_poll_ms: AtomicU64::new(FOLLOW_POLL_MS),
+            read_aheads: AtomicU64::new(0),
             seen: Mutex::new(HashMap::new()),
         })
     }
@@ -694,13 +711,16 @@ impl Dataset {
     /// threads and hand the results to `deliver` strictly in block order.
     /// Workers wait for blocks that indexing has not published yet. Once
     /// `stop`, the source or `hold` stops, nothing more is delivered, so a
-    /// block cut short is never reported.
+    /// block cut short is never reported. `work` also tells whether it read
+    /// the block's bytes; once one does, a thread reads the blocks after it
+    /// ahead (`read_ahead`), skipping those `reads` tells it are not read.
     fn blocks_in_order<T: Send>(
         &self,
         from: usize,
         workers: usize,
         stop: &AtomicBool,
-        work: impl Fn(usize, Block) -> io::Result<T> + Sync,
+        reads: impl Fn(usize, &Block) -> bool + Sync,
+        work: impl Fn(usize, Block) -> io::Result<(T, bool)> + Sync,
         mut deliver: impl FnMut(usize, T),
     ) -> io::Result<()> {
         struct Shared<T> {
@@ -715,6 +735,7 @@ impl Dataset {
         });
         let (failed, ready) = (AtomicBool::new(false), Condvar::new());
         let next = AtomicUsize::new(from);
+        let (ahead, finished) = (AtomicBool::new(false), AtomicBool::new(false));
         let halted = || {
             stop.load(Ordering::Acquire)
                 || self.stop.load(Ordering::Acquire)
@@ -729,7 +750,32 @@ impl Dataset {
                         let Some(block) = self.wait_block(i, &halted)? else {
                             return Ok(());
                         };
-                        let value = work(i, block)?;
+                        let (value, read) = work(i, block)?;
+                        // A pass that tables decide reads nothing ahead.
+                        if read
+                            && !ahead.load(Ordering::Relaxed)
+                            && !ahead.swap(true, Ordering::AcqRel)
+                        {
+                            let (next, shared, ready) = (&next, &shared, &ready);
+                            let (reads, halted, finished) = (&reads, &halted, &finished);
+                            scope.spawn(move || {
+                                self.read_ahead(
+                                    i + 1,
+                                    next,
+                                    reads,
+                                    &|| halted() || finished.load(Ordering::Acquire),
+                                    &|| {
+                                        let state = shared.lock().unwrap();
+                                        if state.running > 0 {
+                                            drop(
+                                                ready
+                                                    .wait_timeout(state, Duration::from_millis(20)),
+                                            );
+                                        }
+                                    },
+                                )
+                            });
+                        }
                         // A result finished after a stop may be partial.
                         if halted() {
                             return Ok(());
@@ -743,6 +789,10 @@ impl Dataset {
                         state.error.get_or_insert(e);
                     }
                     state.running -= 1;
+                    // Reading ahead ends with the workers, not at the file's end.
+                    if state.running == 0 {
+                        finished.store(true, Ordering::Release);
+                    }
                     drop(state);
                     ready.notify_all();
                 });
@@ -769,6 +819,56 @@ impl Dataset {
                 None => Ok(()),
             }
         })
+    }
+    /// Reads the blocks from `from` that a pass `reads`, strictly in order,
+    /// at most `READ_AHEAD` blocks before the next block a worker takes
+    /// (`next`), until `done`; `wait` waits for the workers to move on.
+    /// While indexing reads the file, its new blocks are cached and a second
+    /// stream would only compete with it, so reading starts after indexing.
+    /// Skipping ahead to catch up would end the sequential stream the OS
+    /// reads ahead of; blocks the workers already read are cached and quick.
+    fn read_ahead(
+        &self,
+        from: usize,
+        next: &AtomicUsize,
+        reads: &(dyn Fn(usize, &Block) -> bool + Sync),
+        done: &dyn Fn() -> bool,
+        wait: &dyn Fn(),
+    ) {
+        let Some(mut reader) = self.source.read_ahead() else {
+            return;
+        };
+        self.read_aheads.fetch_add(1, Ordering::Relaxed);
+        // The blocks from `i` on, copied a batch per lock: workers and
+        // indexing take the index lock for every block too.
+        let (mut i, mut batch, mut at) = (from, Vec::new(), 0);
+        loop {
+            if done() {
+                return;
+            }
+            if at == batch.len() {
+                let index = self.index.lock().unwrap();
+                if !index.done && index.error.is_empty() {
+                    drop(self.changed.wait_timeout(index, Duration::from_millis(20)));
+                    continue;
+                }
+                let rest = index.blocks.get(i..).unwrap_or_default();
+                (batch, at) = (rest[..rest.len().min(READ_AHEAD)].to_vec(), 0);
+                // A followed file's later blocks get passes of their own.
+                if batch.is_empty() {
+                    return;
+                }
+            }
+            if i >= next.load(Ordering::Relaxed) + READ_AHEAD {
+                wait();
+                continue;
+            }
+            let b = batch[at];
+            if reads(i, &b) {
+                reader.read(b.file, b.start, (b.end - b.start) as usize);
+            }
+            (i, at) = (i + 1, at + 1);
+        }
     }
     fn wait_block(&self, i: usize, halted: &dyn Fn() -> bool) -> io::Result<Option<Block>> {
         let mut index = self.index.lock().unwrap();
@@ -798,127 +898,156 @@ impl Dataset {
         Ok(())
     }
     /// One analysis pass from the first block not analyzed yet. Returns true
-    /// when more blocks are waiting, false when another pass is running.
+    /// when more blocks are waiting, false when another pass is running or
+    /// a scan takes over the analysis (`wanted`).
     fn analyze_blocks(&self) -> io::Result<bool> {
-        let Some(Analysis {
-            mut stats,
-            mut prefix,
-            mut levels,
-            mut carry,
-            mut carry_file,
-            mut before,
-        }) = self.analysis.lock().unwrap().take()
-        else {
+        if self.wanted.load(Ordering::Acquire) > 0 {
+            return Ok(false);
+        }
+        let Some(mut state) = self.analysis.lock().unwrap().take() else {
             return Ok(false);
         };
-        // Field metadata comes from the first pass; a followed file's later
-        // blocks are read by field filters.
-        let mut fields = levels.is_empty().then(fields_index::Builder::default);
-        let collect = fields.is_some();
-        let never = AtomicBool::new(false);
+        let collect = state.fields.is_some();
+        let handover = AtomicBool::new(false);
         let result = self.blocks_in_order(
-            levels.len(),
+            state.levels.len(),
             block_workers(self.format),
-            &never,
+            &handover,
+            |_, _| true,
             |_, b| {
-                // Optional metadata yields while either pane scans.
+                // Optional metadata yields while either pane scans; a scan
+                // that parses every row takes it over instead.
                 while self.analysis_yields() {
                     if self.stop.load(Ordering::Acquire) {
                         return Err(error("Source closed"));
                     }
+                    // Every worker stops once one hands over, also while paused.
+                    if handover.load(Ordering::Acquire) || self.wanted.load(Ordering::Acquire) > 0 {
+                        handover.store(true, Ordering::Release);
+                        return Ok((None, false));
+                    }
                     thread::park_timeout(std::time::Duration::from_millis(10));
                 }
                 let rows = self.read_rows(&b)?;
-                let (mut stats, mut prefix) = (Summary::default(), Summary::default());
-                let mut entries = [Entries::default(), Entries::default()];
                 // Decoded once, as in `Filter::mask_from`; field values borrow it.
                 let text = encoding::decoded(&rows.text, rows.repair).text;
-                let mut values = collect.then(fields_index::Collector::default);
-                for (i, (offset, bytes)) in ByteLines::new(text.as_bytes()).enumerate() {
-                    let raw = &text[offset..offset + bytes.len()];
-                    let line = b.first + i as u64;
-                    let r = parser::parse_in(self.format, raw, line, false);
-                    stats.add(&r);
-                    let opens = entries[0].add(self.format, &r, false);
-                    let numbered = if r.parsed.is_none() {
-                        parser::parse_numbered_in(self.format, raw, line)
-                    } else {
-                        None
-                    };
-                    let r1 = numbered.as_ref().unwrap_or(&r);
-                    prefix.add(r1);
-                    let opens_numbered = entries[1].add(self.format, r1, true);
-                    if let Some(values) = values.as_mut() {
-                        values.add(&r, opens, numbered.as_ref(), opens_numbered);
-                    }
-                }
-                Ok((b.file, stats, prefix, entries, values.map(|v| v.finish())))
+                Ok((Some(self.analyze_block(&b, &text, collect, None).0), true))
             },
-            |_, (file, block_stats, block_prefix, entries, block_fields)| {
-                before = Some((stats.clone(), prefix.clone(), carry, carry_file));
-                // Leading rows continue the last entry of an earlier block.
-                if carry_file != Some(file) {
-                    carry_file = Some(file);
-                    carry = [None, None];
+            |_, block| {
+                if let Some(block) = block {
+                    state.add(block);
                 }
-                Arc::make_mut(&mut levels).push([0, 1].map(|v| {
-                    let e = &entries[v];
-                    let mut slots = e.slots;
-                    slots[carry[v].map_or(8, |(level, _)| level as usize)] += e.lead;
-                    let rows = BlockRows {
-                        slots,
-                        tail: e.tail.map(|(level, _)| level),
-                        owner: carry[v]
-                            .filter(|(level, _)| *level < 8)
-                            .map(|(_, line)| line),
-                    };
-                    carry[v] = e.tail.or(carry[v]);
-                    rows
-                }));
-                if let (Some(fields), Some(block)) = (fields.as_mut(), block_fields) {
-                    fields.push(file, block);
-                }
-                stats.merge(&block_stats);
-                prefix.merge(&block_prefix);
             },
         );
-        let (held, stopped) = (
-            self.hold.load(Ordering::Acquire),
-            self.stop.load(Ordering::Acquire),
-        );
-        let state = Analysis {
-            stats: stats.clone(),
-            prefix: prefix.clone(),
-            levels: levels.clone(),
-            carry,
-            carry_file,
-            before,
-        };
-        if result.is_err() || held || stopped {
+        let handed = handover.load(Ordering::Acquire);
+        let halted =
+            handed || self.hold.load(Ordering::Acquire) || self.stop.load(Ordering::Acquire);
+        if result.is_err() || halted {
             *self.analysis.lock().unwrap() = Some(state);
-            return result.map(|_| false);
+            // The scan that wanted the state may have ended before taking
+            // it, and its `analyze_later` found it still here; then this
+            // pass goes on. Read after putting it back: the scan gives up
+            // wanting before it looks for the state.
+            let resume = handed
+                && !self.hold.load(Ordering::Acquire)
+                && !self.stop.load(Ordering::Acquire)
+                && self.wanted.load(Ordering::Acquire) == 0;
+            return result.map(|_| resume);
         }
+        Ok(self.publish_analysis(state))
+    }
+    /// Publishes the summaries and tables of a pass over every indexed block
+    /// and keeps its state for a followed file's later blocks. Returns
+    /// whether blocks were indexed after them.
+    fn publish_analysis(&self, mut state: Analysis) -> bool {
         // Rows without fields that continue an entry, not orphans.
         let continued = |stats: &Summary, v: usize| {
-            let orphans: u64 = levels.iter().map(|l| u64::from(l[v].slots[8])).sum();
+            let orphans: u64 = state.levels.iter().map(|l| u64::from(l[v].slots[8])).sum();
             let mut json = stats.json();
             json["continuation"] = json!(stats.total - stats.parsed - orphans);
             json
         };
-        let (summary, prefix_summary) = (continued(&stats, 0), continued(&prefix, 1));
+        let (summary, prefix_summary) = (continued(&state.stats, 0), continued(&state.prefix, 1));
         let mut index = self.index.lock().unwrap();
-        let more = levels.len() < index.blocks.len();
+        let more = state.levels.len() < index.blocks.len();
         index.summary = Some(summary);
         index.prefix_summary = Some(prefix_summary);
-        index.analyzed = levels.len();
-        index.block_levels = Some(levels);
-        if let Some(fields) = fields {
+        index.analyzed = state.levels.len();
+        index.block_levels = Some(state.levels.clone());
+        if let Some(fields) = state.fields.take() {
             index.block_fields = Some(Arc::new(fields.finish()));
+            // A pass over no blocks, such as a capture's empty file, leaves
+            // the collection to the pass over its first rows.
+            if state.levels.is_empty() {
+                state.fields = Some(fields_index::Builder::default());
+            }
         }
         // Put back under the index lock: a block published after this is
         // seen by `resume_passes`, one published before by `more`.
         *self.analysis.lock().unwrap() = Some(state);
-        Ok(more)
+        more
+    }
+    /// The analysis of block `b` from its decoded rows `text`, collecting
+    /// field values with `collect`. With `filter`, a query without a search
+    /// query that decides every row by its fields, also the block's matches
+    /// as `scan` counts them from `Filter::mask_from`: (rows after the first
+    /// entry row, leading rows, last entry's decision). Its scan then reads
+    /// each row once for both.
+    fn analyze_block(
+        &self,
+        b: &Block,
+        text: &str,
+        collect: bool,
+        filter: Option<&Filter>,
+    ) -> (Analyzed, (u64, u64, Option<bool>)) {
+        let (mut stats, mut prefix) = (Summary::default(), Summary::default());
+        let mut entries = [Entries::default(), Entries::default()];
+        let mut values = collect.then(fields_index::Collector::default);
+        // `parse_in` reads a numbered prefix first when the filter
+        // recognizes them, the analysis only rows without fields.
+        let first = filter.is_some_and(|f| f.fields.recognizes_line_numbers());
+        let (mut matched, mut lead, mut owner) = (0u64, 0u64, None::<bool>);
+        for (i, (offset, bytes)) in ByteLines::new(text.as_bytes()).enumerate() {
+            let raw = &text[offset..offset + bytes.len()];
+            let line = b.first + i as u64;
+            let r = parser::parse_in(self.format, raw, line, false);
+            stats.add(&r);
+            let opens = entries[0].add(self.format, &r, false);
+            let numbered = if first || r.parsed.is_none() {
+                parser::parse_numbered_in(self.format, raw, line)
+            } else {
+                None
+            };
+            let unparsed = numbered.as_ref().filter(|_| r.parsed.is_none());
+            let r1 = unparsed.unwrap_or(&r);
+            prefix.add(r1);
+            let opens_numbered = entries[1].add(self.format, r1, true);
+            if let Some(values) = values.as_mut() {
+                values.add(&r, opens, unparsed, opens_numbered);
+            }
+            let Some(f) = filter else { continue };
+            // The row as `mask_from` reads it, and its entry's decision.
+            let row = if first {
+                numbered.as_ref().unwrap_or(&r)
+            } else {
+                &r
+            };
+            if row.parsed.is_some() || parser::starts_entry_in(self.format, raw, first) {
+                owner = Some(f.fields_match(row));
+            }
+            match owner {
+                Some(pass) => matched += u64::from(pass),
+                None => lead += 1,
+            }
+        }
+        let analyzed = Analyzed {
+            file: b.file,
+            stats,
+            prefix,
+            entries,
+            fields: values.map(|v| v.finish()),
+        };
+        (analyzed, (matched, lead, owner))
     }
     /// Optional metadata yields while either pane scans, but not to a
     /// followed file's query waiting for rows, nor during `hold`.
@@ -1225,7 +1354,7 @@ impl Dataset {
     }
     /// Scans until the query has every block. While the file is followed it
     /// then waits (idle) instead of completing; `hold` pauses it silently.
-    fn run_scan(&self, pane: usize, q: &Query) {
+    fn run_scan(self: &Arc<Self>, pane: usize, q: &Query) {
         loop {
             let res = self.scan(pane, q);
             let index = self.index.lock().unwrap();
@@ -1255,16 +1384,43 @@ impl Dataset {
             return;
         }
     }
-    fn scan(&self, pane: usize, q: &Query) -> io::Result<()> {
+    fn scan(self: &Arc<Self>, pane: usize, q: &Query) -> io::Result<()> {
         let identity = q.filter.identity();
         // The level table is published after analysis. It covers every block
         // or, while a file is followed, the blocks analyzed so far; a scan
         // parses the blocks after them. The field table covers the blocks of
         // the first pass only; `plan` reads the blocks after it.
-        let (levels, fields) = {
+        let (levels, fields, unanalyzed) = {
             let index = self.index.lock().unwrap();
-            (index.block_levels.clone(), index.block_fields.clone())
+            let unanalyzed = !index.done || index.analyzed < index.blocks.len();
+            (
+                index.block_levels.clone(),
+                index.block_fields.clone(),
+                unanalyzed,
+            )
         };
+        // A query without a search query that decides rows by their fields
+        // parses every row of the blocks the tables leave open, as the
+        // analysis does; it then analyzes them too, with the same parse, and
+        // takes the analysis state over from a pass (`wanted`). DLT blocks
+        // are decided from their headers without rendering rows.
+        let fusing = unanalyzed
+            && self.dlt.is_none()
+            && !identity
+            && q.filter.matcher.is_none()
+            && q.filter.needs_fields();
+        // Blocks from which workers analyze, and whether they collect field
+        // values: every block until the state is taken, as the state needs.
+        let fuse_from = AtomicUsize::new(if fusing { 0 } else { usize::MAX });
+        let collect = AtomicBool::new(fields.as_ref().is_none_or(|f| f.blocks() == 0));
+        let mut held: Option<Analysis> = None;
+        let mut wanting = fusing;
+        // Analyses of the blocks delivered while a pass still has the state,
+        // so that its state continues from its last block when handed over.
+        let mut early: Vec<Option<Box<Analyzed>>> = vec![];
+        if fusing {
+            self.wanted.fetch_add(1, Ordering::AcqRel);
+        }
         let plan = fields
             .filter(|_| !q.filter.only_levels())
             .and_then(|f| f.plan(&q.filter));
@@ -1278,7 +1434,27 @@ impl Dataset {
             let r = q.result.lock().unwrap();
             (r.ends.len(), r.carry, r.carry_file, r.count > 0)
         };
-        self.blocks_in_order(
+        // A block's matches without reading it: (count, tail).
+        let decided = |i: usize, b: &Block| -> Option<(u64, Option<bool>)> {
+            if identity {
+                return Some((b.rows as u64, None));
+            }
+            let table = levels.as_ref().filter(|t| i < t.len())?;
+            // The table counts leading rows in their entry's slot.
+            let rows = &table[i][variant];
+            let possible: u64 = (0..9)
+                .filter(|slot| slots & (1 << slot) != 0)
+                .map(|slot| u64::from(rows.slots[slot]))
+                .sum();
+            // No row of a selected level, or levels decide alone.
+            if possible == 0 || q.filter.only_levels() {
+                let tail = rows.tail.map(|level| slots & (1 << level) != 0);
+                return Some((possible, tail));
+            }
+            // Field metadata also counts leading rows with their entry.
+            plan.as_ref().and_then(|p| p.decide(i, variant, rows))
+        };
+        let result = self.blocks_in_order(
             from,
             if identity {
                 1
@@ -1286,6 +1462,7 @@ impl Dataset {
                 block_workers(self.format)
             },
             &q.stop,
+            |i, b| decided(i, b).is_none(),
             |i, b| {
                 let scanned = |count, lead, tail| Scanned {
                     end: b.end,
@@ -1293,28 +1470,10 @@ impl Dataset {
                     count,
                     lead,
                     tail,
+                    analyzed: None,
                 };
-                if identity {
-                    return Ok(scanned(b.rows as u64, 0, None));
-                }
-                if let Some(table) = levels.as_ref().filter(|t| i < t.len()) {
-                    // The table counts leading rows in their entry's slot.
-                    let rows = &table[i][variant];
-                    let possible: u64 = (0..9)
-                        .filter(|slot| slots & (1 << slot) != 0)
-                        .map(|slot| u64::from(rows.slots[slot]))
-                        .sum();
-                    // No row of a selected level, or levels decide alone.
-                    if possible == 0 || q.filter.only_levels() {
-                        let tail = rows.tail.map(|level| slots & (1 << level) != 0);
-                        return Ok(scanned(possible, 0, tail));
-                    }
-                    // Field metadata also counts leading rows with their entry.
-                    if let Some((count, tail)) =
-                        plan.as_ref().and_then(|p| p.decide(i, variant, rows))
-                    {
-                        return Ok(scanned(count, 0, tail));
-                    }
+                if let Some((count, tail)) = decided(i, &b) {
+                    return Ok((scanned(count, 0, tail), false));
                 }
                 // Without a search query a DLT block is decided from its
                 // messages' headers; only the query needs rendered rows.
@@ -1325,9 +1484,20 @@ impl Dataset {
                     let count = (0..b.rows)
                         .filter(|i| bits[i / 8] & (1 << (i % 8)) != 0)
                         .count();
-                    return Ok(scanned(count as u64, 0, tail));
+                    return Ok((scanned(count as u64, 0, tail), true));
                 }
                 let rows = self.read_rows(&b)?;
+                if i >= fuse_from.load(Ordering::Acquire) {
+                    let text = encoding::decoded(&rows.text, rows.repair).text;
+                    let collect = collect.load(Ordering::Acquire);
+                    let (analyzed, (count, lead, tail)) =
+                        self.analyze_block(&b, &text, collect, Some(&q.filter));
+                    let s = Scanned {
+                        analyzed: Some(Box::new(analyzed)),
+                        ..scanned(count, lead, tail)
+                    };
+                    return Ok((s, true));
+                }
                 let Mask { bits, lead, tail } =
                     q.filter
                         .mask_from(&rows.text, b.rows, &q.stop, true, rows.repair)?;
@@ -1335,9 +1505,49 @@ impl Dataset {
                     .filter(|i| bits[i / 8] & (1 << (i % 8)) != 0)
                     .count()
                     - lead;
-                Ok(scanned(count as u64, lead as u64, tail))
+                Ok((scanned(count as u64, lead as u64, tail), true))
             },
-            |_, s| {
+            |i, mut s| {
+                let mut analyzed = s.analyzed.take();
+                // Gives the state back, if held, and analyzes no more.
+                let stop_wanting = |held: &mut Option<Analysis>| {
+                    if let Some(state) = held.take() {
+                        *self.analysis.lock().unwrap() = Some(state);
+                    }
+                    fuse_from.store(usize::MAX, Ordering::Release);
+                    self.wanted.fetch_sub(1, Ordering::AcqRel);
+                };
+                if wanting && held.is_none() {
+                    let taken = self.analysis.lock().unwrap().take();
+                    match taken {
+                        // It lacks blocks before this scan's first.
+                        Some(state) if state.levels.len() < from => {
+                            stop_wanting(&mut Some(state));
+                            (wanting, early) = (false, vec![]);
+                        }
+                        Some(state) => {
+                            fuse_from.store(state.levels.len(), Ordering::Release);
+                            collect.store(state.fields.is_some(), Ordering::Release);
+                            held = Some(state);
+                            for (j, block) in std::mem::take(&mut early).into_iter().enumerate() {
+                                if !self.fuse(&mut held, from + j, block) {
+                                    stop_wanting(&mut held);
+                                    wanting = false;
+                                    break;
+                                }
+                            }
+                        }
+                        None if early.len() < EARLY_BLOCKS => early.push(analyzed.take()),
+                        None => {
+                            stop_wanting(&mut held);
+                            (wanting, early) = (false, vec![]);
+                        }
+                    }
+                }
+                if wanting && !self.fuse(&mut held, i, analyzed) {
+                    stop_wanting(&mut held);
+                    wanting = false;
+                }
                 if carry_file != Some(s.file) {
                     (carry, carry_file) = (orphan, Some(s.file));
                 }
@@ -1357,7 +1567,64 @@ impl Dataset {
                     self.publish_progress(pane);
                 }
             },
-        )
+        );
+        if wanting {
+            self.wanted.fetch_sub(1, Ordering::AcqRel);
+        }
+        // A scan that went through every indexed block publishes, as an
+        // analysis pass does; a followed file's blocks indexed meanwhile
+        // get the next pass (`analyze_later`).
+        if let Some(state) = held {
+            let stopped = result.is_err()
+                || q.stop.load(Ordering::Acquire)
+                || self.stop.load(Ordering::Acquire)
+                || self.hold.load(Ordering::Acquire);
+            if stopped {
+                *self.analysis.lock().unwrap() = Some(state);
+            } else {
+                self.publish_analysis(state);
+            }
+        }
+        if fusing {
+            self.analyze_later();
+        }
+        result
+    }
+    /// Adds block `i`'s analysis to the held state when the state needs it
+    /// next. False when the block was analyzed without the field values the
+    /// state collects, or not at all, so that the state cannot go on.
+    fn fuse(&self, held: &mut Option<Analysis>, i: usize, block: Option<Box<Analyzed>>) -> bool {
+        let Some(state) = held.as_mut().filter(|a| a.levels.len() == i) else {
+            return true;
+        };
+        match block {
+            Some(block) if block.fields.is_some() || state.fields.is_none() => {
+                state.add(*block);
+                true
+            }
+            _ => false,
+        }
+    }
+    /// Starts an analysis pass when indexed blocks wait for one and neither
+    /// a pass nor a scan has the analysis state.
+    fn analyze_later(self: &Arc<Self>) {
+        let more = {
+            let index = self.index.lock().unwrap();
+            let analysis = self.analysis.lock().unwrap();
+            index.done
+                && index.error.is_empty()
+                && analysis
+                    .as_ref()
+                    .is_some_and(|a| a.levels.len() < index.blocks.len())
+        };
+        if more && !self.stop.load(Ordering::Acquire) && !self.hold.load(Ordering::Acquire) {
+            let d = self.clone();
+            let mut workers = self.workers.lock().unwrap();
+            workers.retain(|h| !h.is_finished());
+            workers.push(thread::spawn(move || {
+                let _ = d.analyze();
+            }));
+        }
     }
     pub fn status(&self, pane: usize) -> Value {
         // Before the index lock: it waits for a block read in progress.
@@ -2397,21 +2664,7 @@ impl Dataset {
                 *checker = Some(thread::spawn(move || d.run_check(&c)));
             }
         }
-        let more = {
-            let index = self.index.lock().unwrap();
-            let analysis = self.analysis.lock().unwrap();
-            analysis
-                .as_ref()
-                .is_some_and(|a| a.levels.len() < index.blocks.len())
-        };
-        if more {
-            let d = self.clone();
-            let mut workers = self.workers.lock().unwrap();
-            workers.retain(|h| !h.is_finished());
-            workers.push(thread::spawn(move || {
-                let _ = d.analyze();
-            }));
-        }
+        self.analyze_later();
     }
 
     pub fn suspend(self: &Arc<Self>) {
@@ -2454,8 +2707,9 @@ impl Dataset {
 /// Summaries and carried entries before a block.
 type Before = (Summary, Summary, [Option<(u8, u64)>; 2], Option<usize>);
 /// The level analysis so far, kept between passes so that a followed
-/// file's new blocks extend it. Per-block data lives in `levels`.
-#[derive(Default)]
+/// file's new blocks extend it. Per-block data lives in `levels`. A pass is
+/// an analysis pass, or a pane scan that parses every row anyway and so
+/// analyzes its blocks too (`Dataset::scan`).
 struct Analysis {
     stats: Summary,
     prefix: Summary,
@@ -2464,8 +2718,68 @@ struct Analysis {
     carry_file: Option<usize>,
     /// The state before the last block, which a replaced last row drops.
     before: Option<Before>,
+    /// Field metadata of the blocks so far, until the first pass over every
+    /// block publishes it; a followed file's later blocks are read by field
+    /// filters. Kept when a pass stops, so that the next one continues it.
+    fields: Option<fields_index::Builder>,
+}
+impl Default for Analysis {
+    fn default() -> Self {
+        Self {
+            stats: Summary::default(),
+            prefix: Summary::default(),
+            levels: Arc::default(),
+            carry: [None; 2],
+            carry_file: None,
+            before: None,
+            fields: Some(fields_index::Builder::default()),
+        }
+    }
+}
+/// One block's analysis, from a pass's worker to `Analysis::add`.
+struct Analyzed {
+    file: usize,
+    stats: Summary,
+    prefix: Summary,
+    entries: [Entries; 2],
+    /// Collected when the pass collects field metadata.
+    fields: Option<fields_index::Block>,
 }
 impl Analysis {
+    /// Adds the next block in block order.
+    fn add(&mut self, block: Analyzed) {
+        self.before = Some((
+            self.stats.clone(),
+            self.prefix.clone(),
+            self.carry,
+            self.carry_file,
+        ));
+        // Leading rows continue the last entry of an earlier block.
+        if self.carry_file != Some(block.file) {
+            self.carry_file = Some(block.file);
+            self.carry = [None, None];
+        }
+        let carry = &mut self.carry;
+        Arc::make_mut(&mut self.levels).push([0, 1].map(|v| {
+            let e = &block.entries[v];
+            let mut slots = e.slots;
+            slots[carry[v].map_or(8, |(level, _)| level as usize)] += e.lead;
+            let rows = BlockRows {
+                slots,
+                tail: e.tail.map(|(level, _)| level),
+                owner: carry[v]
+                    .filter(|(level, _)| *level < 8)
+                    .map(|(_, line)| line),
+            };
+            carry[v] = e.tail.or(carry[v]);
+            rows
+        }));
+        if let (Some(fields), Some(values)) = (self.fields.as_mut(), block.fields) {
+            fields.push(block.file, values);
+        }
+        self.stats.merge(&block.stats);
+        self.prefix.merge(&block.prefix);
+    }
     fn drop_last(&mut self) {
         match self.before.take() {
             Some((stats, prefix, carry, carry_file)) => {
@@ -2473,6 +2787,8 @@ impl Analysis {
                 Arc::make_mut(&mut self.levels).truncate(n);
                 (self.stats, self.prefix, self.carry, self.carry_file) =
                     (stats, prefix, carry, carry_file);
+                // Field metadata cannot drop a block; scans read without it.
+                self.fields = None;
             }
             // Not expected: analyze again from the first block.
             None => *self = Self::default(),

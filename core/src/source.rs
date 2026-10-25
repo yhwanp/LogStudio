@@ -417,6 +417,56 @@ impl Source {
     pub fn close(&self) {
         self.files.lock().unwrap().take();
     }
+    /// A reader that warms the OS file cache ahead of a pass; None for
+    /// pasted text, which has no path and stays cached.
+    pub fn read_ahead(&self) -> Option<ReadAhead<'_>> {
+        self.parts
+            .iter()
+            .any(|p| p.path.is_some())
+            .then(|| ReadAhead {
+                source: self,
+                file: None,
+                buf: vec![0; BLOCK],
+            })
+    }
+}
+/// Reads bytes a pass is about to read, in order, on handles of its own: a
+/// pass's workers take blocks in turn, which the OS does not read ahead as
+/// it does one sequential stream (see docs/LARGE_LOG_VALIDATION.md). The
+/// bytes are dropped; only the cache keeps them. A failed read is ignored,
+/// as the pass's own reads check the files.
+pub struct ReadAhead<'a> {
+    source: &'a Source,
+    /// The file being read and its handle; None when it cannot be reopened
+    /// as the granted file.
+    file: Option<(usize, Option<File>)>,
+    buf: Vec<u8>,
+}
+impl ReadAhead<'_> {
+    /// Reads source bytes `start..start + len` of file `k` and returns how
+    /// many it read: fewer at the file's end, none when it cannot be read.
+    pub fn read(&mut self, k: usize, start: u64, len: usize) -> u64 {
+        if self.file.as_ref().is_none_or(|(open, _)| *open != k) {
+            self.file = Some((k, self.source.parts[k].reopen()));
+        }
+        let Some((_, Some(f))) = &self.file else {
+            return 0;
+        };
+        let begin = start - self.source.parts[k].offset;
+        let (mut at, end) = (begin, begin + len as u64);
+        while at < end {
+            let n = (end - at).min(self.buf.len() as u64) as usize;
+            #[cfg(unix)]
+            let read = f.read_at(&mut self.buf[..n], at);
+            #[cfg(windows)]
+            let read = f.seek_read(&mut self.buf[..n], at);
+            match read {
+                Ok(0) | Err(_) => break,
+                Ok(n) => at += n as u64,
+            }
+        }
+        at - begin
+    }
 }
 impl Part {
     fn open(path: &Path, offset: u64) -> io::Result<(File, Self)> {
@@ -467,6 +517,31 @@ impl Part {
             ios,
         };
         Ok((file, part))
+    }
+    /// Another handle on the granted file, for `ReadAhead`; None when its
+    /// path no longer names that regular file.
+    fn reopen(&self) -> Option<File> {
+        let path = self.path.as_ref()?;
+        // Checked first so that a path replaced by a FIFO is not opened.
+        let at_path = std::fs::symlink_metadata(path).ok()?;
+        if !at_path.is_file() || !same_file(&self.stamp, &at_path) {
+            return None;
+        }
+        #[cfg(not(windows))]
+        let file = File::open(path).ok()?;
+        // Shared as `open` shares it; the flag lets the cache read further
+        // ahead of this handle's sequential reads.
+        #[cfg(windows)]
+        let file = {
+            const FILE_FLAG_SEQUENTIAL_SCAN: u32 = 0x0800_0000;
+            std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(1 | 2 | 4)
+                .custom_flags(FILE_FLAG_SEQUENTIAL_SCAN)
+                .open(path)
+                .ok()?
+        };
+        same_file(&self.stamp, &file.metadata().ok()?).then_some(file)
     }
     fn is_same_file(&self, path: &Path) -> bool {
         let Some(own) = &self.path else { return false };

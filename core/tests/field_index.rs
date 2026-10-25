@@ -244,6 +244,9 @@ fn observe(d: &Arc<Dataset>, id: u64, filters: &Filters) -> Observed {
         .query(0, id, Filter::new(filters.clone()).unwrap())
         .unwrap();
     wait(|| q.json()["status"] != "running");
+    results(d, &q)
+}
+fn results(d: &Arc<Dataset>, q: &Arc<Query>) -> Observed {
     assert_eq!(q.json()["status"], "complete");
     let count = q.json()["count"].as_u64().unwrap();
     let (ends, entries) = {
@@ -252,19 +255,19 @@ fn observe(d: &Arc<Dataset>, id: u64, filters: &Filters) -> Observed {
     };
     let pages = [0, 1, count / 3, count / 2, count.saturating_sub(3)]
         .iter()
-        .map(|&start| d.page(&q, start, 200).unwrap()["rows"].to_string())
+        .map(|&start| d.page(q, start, 200).unwrap()["rows"].to_string())
         .collect();
     let total = d.status(0)["total"].as_u64().unwrap();
     let locates = [1, 2, total / 5, total / 2, total - 1, total]
         .iter()
         .map(|&line| {
-            let mut found = d.locate(&q, line).unwrap();
+            let mut found = d.locate(q, line).unwrap();
             found.as_object_mut().unwrap().remove("queryId");
             found.to_string()
         })
         .collect();
     let mut export = vec![];
-    d.export(&q, &mut export, &AtomicBool::new(false), |_, _| {})
+    d.export(q, &mut export, &AtomicBool::new(false), |_, _| {})
         .unwrap();
     Observed {
         count,
@@ -468,4 +471,227 @@ fn dropped_field_falls_back_to_reading() {
         }
     }
     d.close();
+}
+
+/// What the analysis published: summaries, the level table, and the field
+/// table's size and its decisions for every filter.
+#[derive(Debug, PartialEq)]
+struct Published {
+    summary: Value,
+    prefix: Value,
+    levels: Vec<logstudio_core::dataset::BlockLevels>,
+    values: [Option<usize>; 3],
+    bytes: [usize; 3],
+    decided: Vec<(usize, usize)>,
+}
+fn published(d: &Dataset) -> Published {
+    let index = d.index.lock().unwrap();
+    let fields = index.block_fields.clone().unwrap();
+    let published = Published {
+        summary: index.summary.clone().unwrap(),
+        prefix: index.prefix_summary.clone().unwrap(),
+        levels: index.block_levels.as_deref().unwrap().clone(),
+        values: fields.values(),
+        bytes: fields.bytes(),
+        decided: vec![],
+    };
+    drop(index);
+    Published {
+        decided: filters().iter().map(|f| decided(d, f)).collect(),
+        ..published
+    }
+}
+/// A dataset of `files` whose logs pane query of `filters` starts before
+/// the file is read, as a reopened file's restored filter does.
+fn open_with(
+    files: &[Vec<u8>],
+    filters: &Filters,
+) -> (tempfile::TempDir, Arc<Dataset>, Arc<Query>) {
+    let dir = tempfile::tempdir().unwrap();
+    let paths: Vec<PathBuf> = files
+        .iter()
+        .enumerate()
+        .map(|(i, bytes)| {
+            let path = dir.path().join(format!("{i}.log"));
+            std::fs::write(&path, bytes).unwrap();
+            path
+        })
+        .collect();
+    let d = Dataset::new(1, Source::granted_files(&paths).unwrap());
+    let q = d
+        .query(0, 1, Filter::new(filters.clone()).unwrap())
+        .unwrap();
+    d.start(|_| {});
+    (dir, d, q)
+}
+/// Whether a query parses every row it scans, so that its scan analyzes
+/// the blocks too.
+fn parses_every_row(filters: &Filters) -> bool {
+    let filter = Filter::new(filters.clone()).unwrap();
+    filter.matcher.is_none() && filter.needs_fields()
+}
+
+#[test]
+fn filter_at_open_analyzes_what_it_reads() {
+    let data = workload(26_000);
+    let at = data.len() / 3
+        + data[data.len() / 3..]
+            .iter()
+            .position(|&b| b == b'\n')
+            .unwrap()
+        + 1;
+    // Every filter over one file, every third over two.
+    for (files, every) in [
+        (vec![data.clone()], 1),
+        (vec![data[..at].to_vec(), data[at..].to_vec()], 3),
+    ] {
+        let (_dir, reference) = open(&files);
+        wait(|| reference.status(0)["summaryComplete"] == true);
+        let expected = published(&reference);
+        for (k, filters) in filters().iter().enumerate().step_by(every) {
+            let (_dir, d, q) = open_with(&files, filters);
+            wait(|| q.json()["status"] != "running");
+            let label = format!("{filters:?}");
+            // The scan published the analysis before it completed.
+            if parses_every_row(filters) {
+                assert_eq!(d.status(0)["summaryComplete"], true, "{label}");
+            }
+            let got = results(&d, &q);
+            let want = observe(&reference, 100 + k as u64, filters);
+            assert_eq!(got.count, want.count, "{label}");
+            assert_eq!(got.ends, want.ends, "{label}");
+            assert_eq!(got.entries, want.entries, "{label}");
+            assert_eq!(got.pages, want.pages, "{label}");
+            assert_eq!(got.locates, want.locates, "{label}");
+            assert_eq!(got.export, want.export, "{label}");
+            wait(|| d.status(0)["summaryComplete"] == true);
+            // Every tables comparison runs all filters; a few bound the time.
+            if k % 7 == 0 {
+                assert_eq!(published(&d), expected, "{label}");
+            }
+            d.close();
+        }
+        reference.close();
+    }
+}
+
+#[test]
+fn analysis_hands_over_and_resumes() {
+    let files = vec![workload(26_000)];
+    let (_dir, reference) = open(&files);
+    wait(|| reference.status(0)["summaryComplete"] == true);
+    let expected = published(&reference);
+    let tag: Filters = serde_json::from_value(serde_json::json!({"tag":"wifi"})).unwrap();
+    // A pass hands its state to a scan that parses every row, before its
+    // first block or after the scan delivered some, or the scan ends first;
+    // either way the analysis completes, also once a pause ends.
+    for (paused, delay) in [(true, 0), (true, 50), (false, 0), (false, 2), (false, 10)] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("0.log");
+        std::fs::write(&path, &files[0]).unwrap();
+        let d = Dataset::new(1, Source::granted(&path).unwrap());
+        d.pause_analysis
+            .store(paused, std::sync::atomic::Ordering::Release);
+        d.start(|_| {});
+        wait(|| d.status(0)["textComplete"] == true);
+        thread::sleep(Duration::from_millis(delay));
+        let q = d.query(0, 1, Filter::new(tag.clone()).unwrap()).unwrap();
+        wait(|| q.json()["status"] != "running");
+        d.resume();
+        wait(|| d.status(0)["summaryComplete"] == true);
+        assert_eq!(published(&d), expected, "{paused} {delay}");
+        assert_eq!(results(&d, &q).count, oracle(&files, &tag).len() as u64);
+        d.close();
+    }
+    // A scan replaced midway leaves its blocks to the analysis, also when a
+    // search query replaces it, and to a scan that parses every row again.
+    for next in [
+        serde_json::json!({"query":"message"}),
+        serde_json::json!({"levels":["E"]}),
+        serde_json::json!({}),
+    ] {
+        let (_dir, d, q) = open_with(&files, &tag);
+        wait(|| q.result.lock().unwrap().ends.len() >= 3);
+        let next: Filters = serde_json::from_value(next).unwrap();
+        let replaced = d.query(0, 2, Filter::new(next.clone()).unwrap()).unwrap();
+        wait(|| replaced.json()["status"] != "running");
+        wait(|| d.status(0)["summaryComplete"] == true);
+        assert_eq!(published(&d), expected, "{next:?}");
+        assert_eq!(
+            results(&d, &replaced).count,
+            oracle(&files, &next).len() as u64,
+            "{next:?}"
+        );
+        d.close();
+    }
+}
+
+/// A followed file whose rows arrive after the first analysis pass: a
+/// capture's file is empty when it opens, and later rows may hold values
+/// the first pass's dictionary lacks. Field filters then match the rows as
+/// one parsed row at a time decides them.
+#[test]
+fn followed_rows_outside_the_dictionary() {
+    let row = |i: usize, tag: &str| {
+        format!(
+            "10-24 13:57:{:02}.000  4321  4321 I {tag}: row {i}\n",
+            i % 60
+        )
+    };
+    for (first, later) in [
+        (vec![], vec!["NotesUi", "InputDispatcher"]),
+        (vec!["WifiA"], vec!["WifiB", "Other"]),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("0.log");
+        let head: String = first.iter().enumerate().map(|(i, t)| row(i, t)).collect();
+        std::fs::write(&path, &head).unwrap();
+        let d = Dataset::new(1, Source::granted(&path).unwrap());
+        d.follow_poll_ms
+            .store(2, std::sync::atomic::Ordering::Relaxed);
+        d.start(|_| {});
+        wait(|| d.status(0)["summaryComplete"] == true);
+        d.follow(true).unwrap();
+        let mut log = head.into_bytes();
+        for k in 0..12 {
+            let more = row(first.len() + k, later[k % later.len()]);
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .unwrap();
+            std::io::Write::write_all(&mut f, more.as_bytes()).unwrap();
+            log.extend(more.into_bytes());
+            let rows = (first.len() + k + 1) as u64;
+            wait(|| d.index.lock().unwrap().total == rows);
+        }
+        wait(|| {
+            let index = d.index.lock().unwrap();
+            index.analyzed == index.blocks.len()
+        });
+        let files = vec![log];
+        for (id, json) in [
+            serde_json::json!({"exclude":[{"tag":"InputDispatcher"}]}),
+            serde_json::json!({"include":[{"tag":"wifi"}]}),
+            serde_json::json!({"tag":"wifi"}),
+            serde_json::json!({"excludeTags":"other"}),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let filters: Filters = serde_json::from_value(json).unwrap();
+            let q = d
+                .query(0, 1 + id as u64, Filter::new(filters.clone()).unwrap())
+                .unwrap();
+            wait(|| {
+                q.json()["caughtUp"] == true
+                    && q.result.lock().unwrap().ends.len() == d.index.lock().unwrap().blocks.len()
+            });
+            assert_eq!(
+                q.json()["count"].as_u64().unwrap(),
+                oracle(&files, &filters).len() as u64,
+                "{first:?} {filters:?}"
+            );
+        }
+        d.close();
+    }
 }

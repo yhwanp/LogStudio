@@ -42,7 +42,7 @@ target/release/field-filters /tmp/a-512.log current 2
 | `follow-race` | `<path> <writer ms> <attempts>` | 다른 스레드가 파일 끝에 기록하는 중 열기를 시도할 때의 실패 횟수 |
 | `follow-reopen` | `<path>` | 동일한 로그를 다시 열 때의 인덱싱·쿼리·레벨 분석 완료 시간 |
 | `zero-conditions` | `<path> [methods] [rounds]` | 일치하는 줄이 없는 조건(0건 조건) 탐지 성능 측정. 조건 1·8·32개 조합에 대해 `table`(레벨·필드 표 판정), `first`(조건별 첫 일치 중단 스캔), `joint`(표로 미확정된 조건 일괄 스캔), `count`(조건별 카운트 쿼리, 최대 8개) 비교 및 결과 일치 검증. `rows`(단일 스레드 행 판정 ns), `beside`(일반 쿼리와의 동시 실행·양보·취소), `engine`(상단 pane 쿼리에서의 조건 확정·재실행·단일 조건 변경·교체 시간), `overhead`(조건 확인 유무에 따른 상·하단 쿼리 완료 시간 비교) 지원 |
-| `read-lock` | `<MiB> <dir> [runs]` 또는 `--file <path> [runs]` | 블록 읽기 경로의 메타데이터 검사 비용과 1·2·4·8 스레드 처리량 및 엔진 소요 시간 측정. 입력은 `<dir>/bench-<MiB>.log`에 생성(이미 있으면 재사용) |
+| `read-lock` | `<MiB> <dir> [runs] [sections]` 또는 `--file <path> [runs] [sections]` | `sections`(쉼표 구분, 기본 전체): `reads`는 블록 읽기 경로의 메타데이터 검사 비용과 1·2·4·8 스레드 처리량, `engine`은 열기·인덱싱·집계 전 레벨 필터·집계, 검색 3종, 표로 판정되는 필터, 흔한 검색어 + 레벨 필터(Error 행에 없는·있는 검색어), 시간 범위 필터의 첫 결과·완료 시간과 실행 중인 검색 취소 시간, `restore`는 작업 복원처럼 파일과 함께 시작한 필드 필터의 첫 행·건수 확정·레벨 집계 완료 시간, `search`는 집계 뒤 검색 3종과 표로 판정되는 필터 3종을 각각 5회씩 반복한 완료 시간. OS 파일 캐시보다 큰 파일(24 GiB Mac의 8 GiB 등)은 매번 디스크에서 읽은 값. 입력은 `<dir>/bench-<MiB>.log`에 생성(이미 있으면 재사용) |
 
 ## 보조 스크립트 (`scripts/`)
 
