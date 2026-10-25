@@ -1,5 +1,5 @@
 // User-facing text for progress, native errors and active filters.
-import {LEVELS, tagList, idList, isActiveCondition} from './filter-model.js';
+import {LEVELS, tagList, idList, isActiveCondition, MESSAGE_PATTERN_ERROR} from './filter-model.js';
 import {BUSY} from './controller.js';
 
 import {levelNames} from './columns.js';
@@ -44,7 +44,8 @@ export function rowSource(entry, files) {
 
 // Translate known native errors at the presentation boundary. Controller
 // errors stay intact for retry decisions and bounded diagnostic detail.
-export function describeLogError(value) {
+// A DLT log's messages are payloads, and its errors call them so.
+export function describeLogError(value, format='text') {
   const text = String(value ?? '').slice(0, 500);
   const messages = {
     'Opening cancelled':'파일 읽기가 취소되었습니다.',
@@ -167,6 +168,7 @@ export function describeLogError(value) {
   // devicectl's own reason, in English as Xcode gives it.
   if (text.startsWith('Could not start the app: ')) return `앱을 실행하지 못했습니다: ${text.slice('Could not start the app: '.length)}`;
   if (text.startsWith('Invalid or unsupported search pattern: ')) return `정규식을 확인해 주세요: ${text.slice('Invalid or unsupported search pattern: '.length)}`;
+  if (text.startsWith(MESSAGE_PATTERN_ERROR)) return `${format === 'dlt' ? '페이로드' : '메시지'} 정규식을 확인해 주세요: ${text.slice(MESSAGE_PATTERN_ERROR.length)}`;
   // Engine text without a translation keeps its detail behind Korean context.
   return messages[text] ?? (text && !/[가-힣]/.test(text) ? `작업을 완료하지 못했습니다. (${text})` : text);
 }
@@ -206,6 +208,12 @@ export function describeCondition(c={}, format='text') {
   }
   const from=String(c.timeFrom ?? '').trim(), to=String(c.timeTo ?? '').trim();
   if (from || to) chips.push({key:'time', label:`시간: ${from||'처음'} ~ ${to||'끝'}`});
+  // A message keeps its spaces, so quotes show where it starts and ends.
+  const message=String(c.message ?? '');
+  if (message) {
+    const name=`${format==='dlt'?'페이로드':'메시지'}${c.messageRegex===true?' 정규식':''}`, shown=message.length>40?`${message.slice(0,40)}…`:message;
+    chips.push({key:'message', label:`${name}: “${shown}”`, full:`${name}: “${message}”`});
+  }
   return chips;
 }
 // Applied criteria as chips, each naming its condition (`list`, `index`):

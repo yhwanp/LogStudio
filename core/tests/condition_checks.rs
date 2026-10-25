@@ -153,8 +153,22 @@ fn condition(r: &mut Rng) -> Condition {
     if r.chance(25) {
         c.time_to = TIMES[r.below(TIMES.len())].into();
     }
+    if r.chance(25) {
+        let (message, regex) = MESSAGES[r.below(MESSAGES.len())];
+        (c.message, c.message_regex) = (message.into(), regex);
+    }
     c
 }
+/// Message texts, some only in rare rows, in other cases or never.
+const MESSAGES: [(&str, bool); 7] = [
+    ("CRASH", false),
+    ("rare", false),
+    ("message 1", false),
+    ("numbered", false),
+    ("broken", false),
+    (r"^m \d+7$", true),
+    ("zzz", false),
+];
 /// A filter of one showing condition, None for one without criteria.
 fn alone(c: &Condition, recognize: Option<bool>) -> Option<Filter> {
     let f = Filter::new(Filters {
@@ -418,6 +432,15 @@ fn dlt_checks_agree_with_rendered_rows() {
             if r.chance(30) {
                 c.time_to = times[r.below(times.len())].into();
             }
+            if r.chance(25) {
+                let (message, regex) = [
+                    ("VALUE 3", false),
+                    ("경로", false),
+                    (r"value \d{5}", true),
+                    ("none", false),
+                ][r.below(4)];
+                (c.message, c.message_regex) = (message.into(), regex);
+            }
             c
         };
         let filters = Filters {
@@ -425,6 +448,15 @@ fn dlt_checks_agree_with_rendered_rows() {
             exclude: (0..r.below(3)).map(|_| c(&mut r)).collect(),
             ..Filters::default()
         };
+        // Without a condition of criteria there is nothing to check.
+        if !filters
+            .include
+            .iter()
+            .chain(&filters.exclude)
+            .any(|c| alone(c, None).is_some())
+        {
+            continue;
+        }
         id += 1;
         let q = d
             .query(0, id, Filter::new(filters.clone()).unwrap())

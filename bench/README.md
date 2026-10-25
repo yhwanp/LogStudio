@@ -36,6 +36,7 @@ target/release/field-filters /tmp/a-512.log current 2
 | `multi-value-mask` | `<path> [single\|all]` | 다중 값 필터의 블록별 필드 판정 시간 |
 | `multi-value-predicate` | `<path> [single\|all]` | `Filter::fields_match` 단독 실행 시 행당 소요 시간(ns) |
 | `time-predicate` | `<path>` | 첫 64 MiB 대상 단일 스레드에서 시간 조건 1–32개(포함·제외) 및 비교용 태그 조건의 `Filter::fields_match` 행당 소요 시간(ns) |
+| `message-filter` | `<path> [runs]` | `field-filters-gen` 로그를 엔진 API로 열어 집계까지 마친 뒤, 상단 pane의 메시지 조건(보기·제외, 고정 문자열·정규식, 복합 조건) 쿼리 및 0건 조건 확인 완료 시간을 레벨·1분 시간 필터·필드 없는 검색과 비교 |
 | `multi-file` | `[--each] <path>...` | 여러 파일을 병합해 열었을 때의 첫 행 표시·인덱싱·검색·내보내기·취소·닫기 시간 |
 | `file-order` | `<빈 임시 폴더>` | 다중 파일 선택 시 `order::arrange` 정렬에 추가되는 시간과 첫 행 표시 시간 |
 | `follow` | `grow\|idle\|poll …` | 파일 증가분 이어 읽기(따라가기)와 전체 다시 열기 비교, 유휴 상태 CPU 사용량, 폴링 1회 비용(소스 상단 주석 참고) |

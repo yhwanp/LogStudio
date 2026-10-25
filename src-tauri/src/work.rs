@@ -14,8 +14,9 @@ use std::{
 
 /// File sets remembered, most recently used first.
 const LIMIT: usize = 50;
-/// One state's serialized size; 1,000 bookmarks and 32 full conditions fit.
-const STATE_BYTES: usize = 192 * 1024;
+/// One state's serialized size; 1,000 bookmarks and 32 full conditions,
+/// messages included, fit.
+const STATE_BYTES: usize = 256 * 1024;
 /// Nesting a state uses: state, filters, condition list, condition, levels.
 const DEPTH: usize = 5;
 const TEXT_CHARS: usize = 1000;
@@ -389,7 +390,7 @@ mod tests {
         let works = store(dir.path());
         let file = stamps(vec![grant(&dir.path().join("a.log"), 1, 1)]);
         works.lookup(1, file.clone());
-        let condition = json!({"levels":["V","D","I","W","E","F","A","U"],"tag":"가".repeat(1000),"pid":"1".repeat(400),"tid":"2".repeat(400),"timeFrom":"06-18 19:24:00.000","timeTo":"06-18 19:25:00.000","enabled":true});
+        let condition = json!({"levels":["V","D","I","W","E","F","A","U"],"tag":"가".repeat(1000),"pid":"1".repeat(400),"tid":"2".repeat(400),"timeFrom":"06-18 19:24:00.000","timeTo":"06-18 19:25:00.000","message":"가".repeat(1000),"messageRegex":true,"enabled":true});
         let state = json!({"v":1,"filters":{"include":vec![condition.clone(); 16],"exclude":vec![condition; 16],"query":"q".repeat(1000)},"bookmarks":(1..=1000).collect::<Vec<u64>>()});
         assert_eq!(works.save(1, state.clone()), Ok(true));
         assert_eq!(works.lookup(2, file)["state"], state);

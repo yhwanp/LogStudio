@@ -4,15 +4,15 @@
 // reading options are not part of a filter.
 //
 // A filter is stored as its showing and hiding conditions and the unparsed
-// rows option. A condition stores the fields it sets, and `enabled: false`
-// when it is switched off.
+// rows option. A condition stores the fields it sets, `messageRegex: true`
+// for a message pattern, and `enabled: false` when it is switched off.
 import {LEVELS, tagList, idList, validateFilters, readCondition, emptyCondition, isEmptyCondition, MAX_CONDITIONS} from './filter-model.js';
 import {describeFilter, describeLogError} from './describe.js';
 import {textSpan} from './dom.js';
 
 export const SAVED_VERSION = 1;
 export const MAX_NAME = 60;
-const KEYS = ['levels', 'tag', 'pid', 'tid', 'timeFrom', 'timeTo', 'enabled'];
+const KEYS = ['levels', 'tag', 'pid', 'tid', 'timeFrom', 'timeTo', 'message', 'messageRegex', 'enabled'];
 const isObject = value => !!value && typeof value === 'object' && !Array.isArray(value);
 
 export const defaultFields = () => ({include:[emptyCondition()], exclude:[], includeRaw:true});
@@ -24,9 +24,10 @@ export function fieldsOf(filters={}) {
 }
 // Compared as the core reads them, with each condition's switch: conditions
 // without criteria left out, list items trimmed and deduplicated, levels in
-// the core order, time bounds trimmed.
+// the core order, time bounds trimmed, a message as typed and its mode only
+// with one.
 const normal = f => JSON.stringify([...['include', 'exclude'].map(list => (f[list] ?? []).filter(c => !isEmptyCondition(c)).map(c =>
-  [c.enabled !== false, LEVELS.filter(level => (c.levels ?? LEVELS).includes(level)), tagList(c.tag), idList(c.pid), idList(c.tid), String(c.timeFrom ?? '').trim(), String(c.timeTo ?? '').trim()])), f.includeRaw !== false]);
+  [c.enabled !== false, LEVELS.filter(level => (c.levels ?? LEVELS).includes(level)), tagList(c.tag), idList(c.pid), idList(c.tid), String(c.timeFrom ?? '').trim(), String(c.timeTo ?? '').trim(), String(c.message ?? ''), !!c.message && c.messageRegex === true])), f.includeRaw !== false]);
 export const sameFields = (a, b) => normal(a) === normal(b);
 export const isDefaultFields = fields => sameFields(fields, defaultFields());
 
@@ -36,6 +37,7 @@ export function toStored(filters) {
     const out = {};
     if (c.levels.length !== LEVELS.length) out.levels = c.levels;
     for (const key of ['tag', 'pid', 'tid', 'timeFrom', 'timeTo']) if (String(c[key]).trim()) out[key] = c[key];
+    if (c.message) {out.message = c.message; if (c.messageRegex) out.messageRegex = true;}
     if (!c.enabled) out.enabled = false;
     return out;
   };

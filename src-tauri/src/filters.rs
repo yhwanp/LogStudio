@@ -15,8 +15,8 @@ use std::{
 /// Filters kept at most.
 pub const LIMIT: usize = 100;
 const NAME_CHARS: usize = 60;
-/// One filter's serialized size; 32 full conditions fit.
-const FILTER_BYTES: usize = 192 * 1024;
+/// One filter's serialized size; 32 full conditions fit, messages included.
+const FILTER_BYTES: usize = 256 * 1024;
 /// Nesting the page's filters use: filter, condition list, condition, levels.
 const DEPTH: usize = 4;
 /// The largest ID a page number holds exactly (2^53 - 1).
@@ -356,6 +356,16 @@ mod tests {
             saved["filters"][1]["filter"],
             json!({"include":[{"tag":"t".repeat(1000),"x":{}}]})
         );
+    }
+
+    #[test]
+    fn a_filter_of_32_full_conditions_is_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let filters = store(dir.path());
+        let condition = json!({"levels":["V","D","I","W","E","F","A","U"],"tag":"가".repeat(1000),"pid":"1".repeat(400),"tid":"2".repeat(400),"timeFrom":"06-18 19:24:00.000","timeTo":"06-18 19:25:00.000","message":"가".repeat(1000),"messageRegex":true,"enabled":false});
+        let filter = json!({"v":1,"include":vec![condition.clone(); 16],"exclude":vec![condition; 16],"includeRaw":false});
+        let saved = filters.save(None, "full", "text", filter.clone()).unwrap();
+        assert_eq!(saved["filters"][0]["filter"], filter);
     }
 
     #[test]

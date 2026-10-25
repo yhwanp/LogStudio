@@ -1,7 +1,7 @@
 import {handleLogPaste, isEditableTarget, FILE_PASTE_FALLBACK} from './clipboard.js';
 import {mountPasteConfirm, createPasteFlow, replacesLog, describeClosing} from './paste-confirm.js';
 import {makeDemo} from './demo.js';
-import {LEVELS, validateFilters, isTimeBound, isEmptyTimeRange, idListError, tagListError, tagList, idList, emptyCondition, isEmptyCondition, normalizeFilters, coreFilters, conditionsWithoutRows, MAX_CONDITIONS} from './filter-model.js';
+import {LEVELS, validateFilters, isTimeBound, isEmptyTimeRange, idListError, tagListError, tagList, idList, emptyCondition, isEmptyCondition, normalizeFilters, coreFilters, conditionsWithoutRows, MAX_CONDITIONS, MESSAGE_PATTERN_ERROR} from './filter-model.js';
 import {mountLogLayout, widestLine} from './layout.js';
 import {createContinuousViewport, ROW_HEIGHT} from './continuous-view.js';
 import {selectOne, selectAll, extendTo, toggleRow, selectedRanges, selectedCount, inRanges} from './row-selection.js';
@@ -77,7 +77,7 @@ function fieldSpan(document, entry, value, className) {
 export function mountLargeLogView(native, {transport, tips=null, document=globalThis.document, window=globalThis.window}) {
   const $ = id => document.getElementById(id);
   $('largeLogPanel').hidden=false;
-  const ids = ['largeName','largeStatus','largeError','largeCount','largeTotal','largeRows','largeViewport','largeFirst','largeLast','largeJump','largeJumpForm','largeCancel','largeClose','largeColumns','largeRaw','largeHeaders','largeRange','largeDetail','largeDetailTitle','largeDetailText','largeDetailPrevious','largeDetailNext','largeDetailClose','levelFilters','allLevels','errorLevels','resetFilters','searchInput','tagFilter','pidFilter','tidFilter','caseSensitive','includeRaw','recognizeLineNumbers','logsCount','logsRows','logsViewport','logsHeaders','logsFirst','logsLast','logsJump','logsJumpForm','logsRange','largeSearchPane','filterBadge','activeFilters','filterRow','logsSelection','largeSelection','toast','largeDetailCopy','toggleFilters','emptyState','logContent','loadProgress','loadProgressBar','paneSplitter','idFilterError','tagFilterError','searchError','dropHint','filterPanel','largeRegex','rowMenu','largeSize','exportLogs','exportSearch','exportCancel','recentFiles','recentList','clearRecent','recentButton','timeFrom','timeTo','timeFilterError','lowerTabs','searchTab','bookmarkTab','bookmarkPane','bookmarkCount','bookmarkList','copyBookmarks','clearBookmarks','logsPending','reopenFile','errorBar','errorReopen','followFile'];
+  const ids = ['largeName','largeStatus','largeError','largeCount','largeTotal','largeRows','largeViewport','largeFirst','largeLast','largeJump','largeJumpForm','largeCancel','largeClose','largeColumns','largeRaw','largeHeaders','largeRange','largeDetail','largeDetailTitle','largeDetailText','largeDetailPrevious','largeDetailNext','largeDetailClose','levelFilters','allLevels','errorLevels','resetFilters','searchInput','tagFilter','pidFilter','tidFilter','caseSensitive','includeRaw','recognizeLineNumbers','logsCount','logsRows','logsViewport','logsHeaders','logsFirst','logsLast','logsJump','logsJumpForm','logsRange','largeSearchPane','filterBadge','activeFilters','filterRow','logsSelection','largeSelection','toast','largeDetailCopy','toggleFilters','emptyState','logContent','loadProgress','loadProgressBar','paneSplitter','idFilterError','tagFilterError','searchError','dropHint','filterPanel','largeRegex','rowMenu','largeSize','exportLogs','exportSearch','exportCancel','recentFiles','recentList','clearRecent','recentButton','timeFrom','timeTo','timeFilterError','lowerTabs','searchTab','bookmarkTab','bookmarkPane','bookmarkCount','bookmarkList','copyBookmarks','clearBookmarks','logsPending','reopenFile','errorBar','errorReopen','followFile','messageFilter','messageRegex','messageFilterError','messageLabel'];
   for (const id of ['deviceButton','emptyDevice','captureBar','captureState','captureText','captureHint','captureApp','captureAppStatus','captureStop','captureSave','captureLeftovers','leftoverList','openFile']) ids.push(id);
   const ui = Object.fromEntries(ids.map(id => [id,$(id)]));
   // Device captures (devices.js) mount once the menu and toasts exist.
@@ -110,7 +110,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
   let toastTimer=null,exporting=false,exportTotal=0;
   // A toast may offer one action, such as undoing what it reports; it then
   // stays a little longer and takes pointer input.
-  function notify(message,action=null){
+  function notify(message,action=null,{ms=action?6000:2500}={}){
     if(toastTimer!==null)window.clearTimeout(toastTimer);
     const hide=()=>{if(toastTimer!==null)window.clearTimeout(toastTimer);toastTimer=null;ui.toast.hidden=true;};
     ui.toast.replaceChildren(textSpan(document,message));
@@ -127,7 +127,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
       if(actions&&title&&actions.left-12-toast.width>=title.right+12){ui.toast.style.bottom=`${Math.round(panel.bottom-heading.bottom+(heading.height-toast.height)/2)}px`;ui.toast.style.right=`${Math.round(panel.right-actions.left+12)}px`;}
       else ui.toast.style.bottom=`${Math.round(panel.bottom-box.top)+10}px`;
     }
-    toastTimer=window.setTimeout(hide,action?6000:2500);
+    toastTimer=window.setTimeout(hide,ms);
   }
   // A pane's row selection (row-selection.js) is kept only while its focus
   // row stays the pane's selected row in the same query. Any other selection,
@@ -180,13 +180,15 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     if(after&&end)text.extend(end,end.childNodes.length);else text.extend(row,0);
   });
   const activeCondition=()=>conds[active.list][active.index];
-  function syncEditor(){const c=activeCondition();if(!c)return;c.levels=LEVELS.filter(level=>selectedLevels.has(level));c.tag=ui.tagFilter.value;c.pid=ui.pidFilter.value;c.tid=ui.tidFilter.value;c.timeFrom=ui.timeFrom.value;c.timeTo=ui.timeTo.value;}
-  function loadEditor(){const c=activeCondition();selectedLevels=new Set(c.levels);ui.tagFilter.value=c.tag;ui.pidFilter.value=c.pid;ui.tidFilter.value=c.tid;ui.timeFrom.value=c.timeFrom;ui.timeTo.value=c.timeTo;updateLevels();showOptionalFields();}
-  // PID·TID and the time range show for a condition that uses them; otherwise
-  // a + button opens them. Once shown they stay while that condition is
-  // edited, so clearing a field never moves the editor under the cursor.
-  // A DLT log has no PID or TID.
-  const optionalFields=[{group:$('idFields'),opener:$('openIds'),inputs:[ui.pidFilter,ui.tidFilter],available:()=>shownFormat!=='dlt'},{group:$('timeFields'),opener:$('openTime'),inputs:[ui.timeFrom,ui.timeTo],available:()=>true}];
+  // Whether the editor's message is a pattern (its .* switch).
+  let messageRegex=false;
+  function syncEditor(){const c=activeCondition();if(!c)return;c.levels=LEVELS.filter(level=>selectedLevels.has(level));c.tag=ui.tagFilter.value;c.pid=ui.pidFilter.value;c.tid=ui.tidFilter.value;c.timeFrom=ui.timeFrom.value;c.timeTo=ui.timeTo.value;c.message=ui.messageFilter.value;c.messageRegex=messageRegex;}
+  function loadEditor(){const c=activeCondition();selectedLevels=new Set(c.levels);ui.tagFilter.value=c.tag;ui.pidFilter.value=c.pid;ui.tidFilter.value=c.tid;ui.timeFrom.value=c.timeFrom;ui.timeTo.value=c.timeTo;ui.messageFilter.value=c.message??'';messageRegex=c.messageRegex===true;ui.messageRegex.setAttribute('aria-pressed',String(messageRegex));updateLevels();showOptionalFields();}
+  // The message, PID·TID and the time range show for a condition that uses
+  // them; otherwise a + button opens them. Once shown they stay while that
+  // condition is edited, so clearing a field never moves the editor under the
+  // cursor. A DLT log has no PID or TID.
+  const optionalFields=[{group:$('messageFields'),opener:$('openMessage'),inputs:[ui.messageFilter],available:()=>true},{group:$('idFields'),opener:$('openIds'),inputs:[ui.pidFilter,ui.tidFilter],available:()=>shownFormat!=='dlt'},{group:$('timeFields'),opener:$('openTime'),inputs:[ui.timeFrom,ui.timeTo],available:()=>true}];
   let openedFields=null;
   const openedGroups=()=>{const c=activeCondition();if(openedFields?.condition!==c)openedFields={condition:c,groups:new Set()};return openedFields.groups;};
   function showOptionalFields(){
@@ -241,11 +243,11 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
         drag:index=>{if(dragFrom)applySelection(prefix,extendTo(dragFrom,index,owner.getState().count,{keep:true}),{repeat:true});}});
       const toggleKey=event=>!!(MOD==='⌘'?event.metaKey:event.ctrlKey);
       view=createContinuousViewport({viewport:realViewport,rowsElement:ui[prefix+'Rows'],document,window,
-        fetchRows:start=>owner.fetchRows(start),onError:owner.reportError,
+        fetchRows:start=>owner.fetchRows(start),onError:owner.reportError,onUserMove:()=>stoppedFinding(owner),
         onSelect:(entry,index,{repeat=false,extend=false}={})=>{const current=owner.getState();setSelection(prefix,current,extend?.focus===index?extend:extend===true?extendTo(selectionOf(prefix,current),index,current.count):selectOne(index),entry.lineNumber);detailOwner=owner;if(isSearch)followUpper(entry.lineNumber,repeat);owner.selectLine(entry.lineNumber);void owner.loadDetail(entry.lineNumber,0,{delay:repeat?DETAIL_SETTLE_MS:0});saver.schedule();if(!isSearch)tips?.offer('rows');},
         onVisible:(first,last,total)=>{
           owner.rememberPosition(first);saver.schedule();
-          if(total)showRange(ui[prefix+'Range'],`${formatNumber(first+1)}–${formatNumber(last)} / ${formatNumber(total)}건`,false);
+          if(total)showRange(prefix,owner,`${formatNumber(first+1)}–${formatNumber(last)} / ${formatNumber(total)}건`,false);
           ui[prefix+'First'].disabled=!total||first===0;ui[prefix+'Last'].disabled=!total||last>=total;
         },
         paint:(entries,current)=>{
@@ -343,9 +345,6 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     const marks=captureBreaks(state.capture).map(b=>`${b.kind}:${b.row}`).join(',');
     view.update(state,{force:!previousRows.has(prefix)||previousRows.get(prefix)!==rawMode||paintedSelection.get(prefix)!==selectionRevision||paintedMarks.get(prefix)!==marks,stick:!isSearch&&!!state.following});previousRows.set(prefix,rawMode);paintedSelection.set(prefix,selectionRevision);paintedMarks.set(prefix,marks);updateSelectionInfo(prefix,state);
   }
-  // A range text is a live status for what a query is doing, not for the
-  // rows a scroll or a followed result happens to show.
-  function showRange(node,text,announce){node.setAttribute('aria-live',announce?'polite':'off');node.textContent=text;}
   // Focuses a pane's newly selected row when the pane had focus, or when a
   // jump asked for it and focus has not moved since the jump.
   function focusSelected(prefix,current,hadFocus=false){
@@ -364,6 +363,54 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     void owner.locateLine(line,options).then(()=>{if(!disposed)focusSelected(prefix,owner.getState());});
   }
   function jumpTo(line){if(!inputPending&&!validationError&&!disposed)locateAndFocus('logs',logs,line);}
+  // Where a pane's list is, to keep across a new query of the same search:
+  // its anchor (the row the user chose, see controller.js) where its
+  // selection is on screen when in view, or else its top row unless the list
+  // is at its start. A place still being found again stays as it was.
+  function placeOf(prefix,owner){
+    const kept=owner.relocating();if(kept)return kept;
+    const state=owner.getState(),view=viewports.get(prefix);
+    if(!view||state.closed||!state.queryId)return null;
+    const shown=view.metrics(),at=shown.selectionIndex,line=state.anchor??state.selectedLine;
+    if(line)return {line,select:true,offset:state.selectedLine&&Number.isSafeInteger(at)&&at>=shown.first&&at<shown.last?at-shown.first:state.anchorOffset};
+    const top=shown.first>0?view.cachedRows(shown.first,shown.first)?.[0]?.lineNumber:null;
+    return Number.isSafeInteger(top)?{line:top,select:false,offset:0}:null;
+  }
+  // A pane looking for its kept place says so where it shows its range once
+  // that takes a moment, with how far the scan is toward the row when its
+  // detail gives the row's place in the file; the brief hold before shows no
+  // count, which would be the new results' first rows.
+  function findingText(owner){
+    const kept=owner.relocating();if(!kept)return '';if(!kept.shown)return ' ';
+    const state=owner.getState(),d=state.detail,target=d?.lineNumber===kept.line&&Number.isSafeInteger(d.sourceStartByte)&&d.sourceStartByte>0?d.sourceStartByte:state.size;
+    const scanned=target>0&&state.scannedBytes>0?` ${Math.min(99,Math.floor(state.scannedBytes/target*100))}%`:'';
+    return `${rowLabel(kept.line)} 찾는 중…${scanned}`;
+  }
+  // A range text is a live status for what a query is doing, not for the
+  // rows a scroll or a followed result happens to show; a pane finding its
+  // kept place shows that instead.
+  function showRange(prefix,owner,text,announce){
+    const finding=findingText(owner),node=ui[prefix+'Range'];
+    node.setAttribute('aria-live',announce?'polite':'off');
+    node.textContent=finding||text;node.classList?.toggle('finding',finding.trim()!=='');
+  }
+  // The user moved a list whose anchor was still being found: the list stays,
+  // and a toast offers to move there for a moment.
+  function stoppedFinding(owner){
+    const given=owner.stopRelocating();
+    if(!given?.select||!given.shown||disposed)return;
+    notify(`${rowLabel(given.line)} 찾기를 멈췄습니다.`,{label:'이동',run:()=>{if(!disposed)locateAndFocus(owner===logs?'logs':'large',owner,given.line);}});
+  }
+  // A selected row the new results leave out gave its place to the one
+  // after it (or before it, at the end); the pane showing its detail says so,
+  // unless a toast offers to undo the change that hid it. Upper logs that
+  // showed the same row take the row the search chose, as they show every
+  // selected search result.
+  function relocated(owner,{lineNumber,target}){
+    if(owner===search&&logs.getState().anchor===lineNumber)void logs.locateLine(target,{keepAnchor:true});
+    if(owner!==(detailOwner??logs)||(!ui.toast.hidden&&ui.toast.classList.contains?.('has-action')))return;
+    notify(`${rowLabel(lineNumber)}은 ${owner===logs?'새 필터 결과':'새 검색 결과'}에 없어 ${target>lineNumber?'다음':'마지막'} 결과인 ${rowLabel(target)}을 선택했습니다.`,null,{ms:4000});
+  }
   // Selecting a search result reveals its row in the upper logs without
   // moving focus, as a bookmark does; a held arrow key follows only where
   // the selection settles.
@@ -470,7 +517,9 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
   function renderDetailTitle(d=detailOwner?.getState().detail,owner=detailOwner){
     if(!d||!owner)return;
     const source=rowSource(d,logs.getState().files),other=(owner===logs?search:logs).getState().selectedLine;
-    const text=`${other&&other!==d.lineNumber?owner===logs?'로그 · ':'검색 결과 · ':''}${source?`${source.name} · `:''}${recordTitle(d,source?source.line:d.first??d.lineNumber)}${d.encodingDamage?.bytes ? ' · 손상 바이트 표시' : ''}${d.encodingRepaired ? ' · 깨진 문자 복원' : ''}`;
+    // With no results the anchor's detail stays, named as out of them.
+    const state=owner.getState(),missing=state.selectedLine!==d.lineNumber&&state.anchor===d.lineNumber;
+    const text=`${other&&other!==d.lineNumber?owner===logs?'로그 · ':'검색 결과 · ':''}${source?`${source.name} · `:''}${recordTitle(d,source?source.line:d.first??d.lineNumber)}${missing?' · 현재 결과에 없음':''}${d.encodingDamage?.bytes ? ' · 손상 바이트 표시' : ''}${d.encodingRepaired ? ' · 깨진 문자 복원' : ''}`;
     if(ui.largeDetailTitle.textContent!==text)ui.largeDetailTitle.textContent=text;
     const hint=d.encodingRepaired?'Mac OS Roman으로 잘못 읽혀 깨진 UTF-8 문자(예: ÏïàÎÖï → 안녕)를 복원해 표시했습니다. 원본 파일과 내보내기 결과는 바뀌지 않습니다.':'';
     if(ui.largeDetailTitle.title!==hint)ui.largeDetailTitle.title=hint;
@@ -500,6 +549,9 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
   // Field problems are shown beside their field; the banner keeps file and
   // engine errors, plus field errors the closed filter panel would hide.
   const REGEX_ERROR='Invalid or unsupported search pattern: ';
+  // How long a typed message rests before a pattern the engine rejected is
+  // explained; `patternHeld` while it has not.
+  const PATTERN_PAUSE_MS=600;let patternHeld=false,patternTimer=null;
   const SOURCE_CHANGES=new Set(['Source changed; reopen the file','Source truncated']);
   function errors(){
     const lower=search.getState(),upper=logs.getState();
@@ -508,8 +560,17 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     const idMessage=pidMessage||tidMessage,listMessage=tagMessage;
     // A well-formed but inverted dated range is applied; it just matches nothing.
     const timeMessage=fromBad||toBad?'시간은 06-18 19:24:05.123처럼 로그와 같은 형식으로, 앞에서부터 입력해 주세요.':isEmptyTimeRange(ui.timeFrom.value,ui.timeTo.value)?'끝 시각이 시작 시각보다 앞서 일치하는 행이 없습니다. 연도 없는 날짜 범위는 해를 넘기지 않습니다.':'';
+    // A message pattern only the engine can check: the upper logs keep the
+    // last conditions it accepted. The editor shows why while it edits a
+    // condition with a pattern; otherwise the banner does.
+    const patternOf=value=>String(value??'').startsWith(MESSAGE_PATTERN_ERROR)?value:'';
+    const pattern=upper.rejected||patternOf(!upper.closed&&upper.error)||patternOf(!lower.closed&&lower.error);
+    const editing=activeCondition(),inField=!!pattern&&ui.filterPanel.inert!==true&&(upper.rejected?badPattern(editing):!!editing?.message&&editing.messageRegex===true);
+    // A pattern is explained once typing pauses, not at its first "(".
+    const patternMessage=inField&&!patternHeld?describeLogError(pattern,shownFormat):'';
+    ui.messageFilterError.textContent=patternMessage;ui.messageFilterError.hidden=!patternMessage;ui.messageFilter.setAttribute('aria-invalid',String(!!patternMessage));
     // Invalid field input leaves the upper logs on the last applied conditions.
-    const stale=validationError&&!disposed;ui.logsPending.hidden=!stale;ui.logsPending.textContent=stale?'입력한 조건 미적용 · 이전 조건 결과':'';syncFilterRow();
+    const stale=(validationError||!!upper.rejected)&&!disposed;ui.logsPending.hidden=!stale;ui.logsPending.textContent=stale?'입력한 조건 미적용 · 이전 조건 결과':'';syncFilterRow();
     ui.idFilterError.textContent=idMessage;ui.idFilterError.hidden=!idMessage;
     ui.tagFilterError.textContent=listMessage;ui.tagFilterError.hidden=!listMessage;
     ui.timeFilterError.textContent=timeMessage;ui.timeFilterError.hidden=!timeMessage;
@@ -520,7 +581,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     const followMessage=!upper.closed&&upper.followError?describeFollowError(upper.followError):'';
     // The capture bar only says a capture stopped; the bar here says why.
     const captureMessage=!upper.closed&&upper.capture?.state==='failed'?upper.capture.error:'';
-    const raw=inputError||(fieldMessage&&ui.filterPanel.inert===true?fieldMessage:'')||(regexError?'':lowerError)||(!upper.closed&&upper.error)||followMessage||captureMessage||'';
+    const raw=inputError||(fieldMessage&&ui.filterPanel.inert===true?fieldMessage:'')||(pattern&&!inField?describeLogError(pattern,shownFormat):'')||(regexError||patternOf(lowerError)?'':lowerError)||(!upper.closed&&!patternOf(upper.error)&&upper.error)||followMessage||captureMessage||'';
     const message=describeLogError(raw);ui.largeError.textContent=message;ui.largeError.hidden=!message;ui.errorBar.hidden=!message;
     // A changed file is one action away from being read again with its work.
     ui.errorReopen.hidden=!(SOURCE_CHANGES.has(raw)&&canReopen(upper));
@@ -544,7 +605,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     const files=hasFile&&state.files?.length>1?state.files:null;layout.setMultiFile(!!files);if(hasFile){applyLevelNames(state.ios===true||state.capture?.platform==='ios');applyFormat(state.format);}if(hasFile)layout.fitLines(widestLine(state));
     ui.largeName.title=!hasFile?'':files?`${files.length}개 파일을 이 순서로 합쳤습니다\n${files.map((file,i)=>`${i+1}. ${file.name} · ${formatSize(file.size)}`).join('\n')}\n합계 ${formatSize(state.size)}`:`${state.name}\n${formatSize(state.size)}`;ui.largeSize.textContent=hasFile&&state.size>0?formatSize(state.size):'';
     const p=describeLargeProgress(state,{omitDuplicateFileCount:true});ui.logsCount.textContent=`로그 · ${p.count}`;
-    showRange(ui.logsRange,p.range.replaceAll('검색 결과','필터 결과'),true);
+    showRange('logs',logs,p.range.replaceAll('검색 결과','필터 결과'),true);
     ui.logsLast.textContent=p.exact?'끝':'현재 끝';ui.largeStatus.textContent=p.status;updateLevels(state.summary,state.summaryComplete);
     const empty=state.closed||!state.count;ui.logsFirst.disabled=empty||state.viewportStart===0;ui.logsLast.disabled=empty||state.viewportStart>=state.count-1;
     ui.logsJump.disabled=!state.count||state.closed;ui.logsJump.title=jumpTitle('현재 필터 결과',state);
@@ -553,8 +614,9 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     // The empty state lists capture files an earlier run left.
     if(hasFile!==shownFile){shownFile=hasFile;if(!hasFile)void devices?.loadLeftovers();}
     table(state,'logs',logs,false);detail(state,logs);errors();markSelections();resolveMarks(state);
-    // Cards and chips say when the engine finds no row for a condition.
-    const marks=rowless(state),seen=JSON.stringify([[...marks.include],[...marks.exclude],marks.following]);
+    // Cards and chips say when the engine finds no row for a condition, and
+    // chips show the conditions kept when it rejects a message pattern.
+    const marks=rowless(state),seen=JSON.stringify([[...marks.include],[...marks.exclude],marks.following,state.rejected]);
     if(seen!==rowlessShown){rowlessShown=seen;renderFilterSummary();}
     if(hasFile&&state.count)tips?.offer('help');
   }
@@ -608,7 +670,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     const queryText=p.query?` · ${p.query}${scanning?` ${Math.min(99,Math.floor(state.scannedBytes/state.size*100))}%`:''}`:'';
     if(ui.largeCount.textContent!==p.count)ui.largeCount.textContent=p.count;
     if(ui.largeTotal.textContent!==queryText)ui.largeTotal.textContent=queryText;
-    if(ui.largeRange.textContent!==p.range)showRange(ui.largeRange,p.range,true);
+    if(ui.largeRange.textContent!==(findingText(search)||p.range))showRange('large',search,p.range,true);
     ui.largeSearchPane.setAttribute('aria-busy',String(visible&&p.query==='검색 중'));
     if(inputPending)ui.largeRows.setAttribute('data-search-pending','true');else ui.largeRows.removeAttribute('data-search-pending');
     // An emptied search leaves an idle identity: there is nothing to cancel.
@@ -641,16 +703,23 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     if(ui.largeCancel.hidden)return;
     const focused=document.activeElement===ui.largeCancel;ui.largeCancel.hidden=true;if(focused)ui.searchInput.focus();
   }
-  const logs=createLargeLogController({transport,onChange:renderLogs,onLocate:result=>located(logs,result),pane:'logs'});
-  const search=createLargeLogController({transport,onChange:renderSearch,onLocate:result=>located(search,result),pane:'search'});
+  const logs=createLargeLogController({transport,onChange:renderLogs,onLocate:result=>located(logs,result),onRelocate:result=>relocated(logs,result),pane:'logs'});
+  const search=createLargeLogController({transport,onChange:renderSearch,onLocate:result=>located(search,result),onRelocate:result=>relocated(search,result),pane:'search'});
+  // The search the lower pane last started; another filter keeps its place.
+  let searchKey=null;
+  const searchOf=f=>JSON.stringify([f.query,!!f.caseSensitive,f.searchMode==='regex']);
   function apply(){
     if(debounce!==null)window.clearTimeout(debounce);debounce=null;if(disposed)return;
     try{
       const filters=readFilters();validateFilters(filters);validationError=false;inputPending=false;inputPaused=false;appliedFilters=filters;saver.schedule();
       const upper={...filters,query:'',caseSensitive:false,searchMode:'literal'}, fingerprint=JSON.stringify(coreFilters(upper));
-      if(fingerprint!==upperFingerprint){upperFingerprint=fingerprint;void logs.setFilters(upper);}
+      // Both lists keep their place across a new filter; a new search starts
+      // at its first result.
+      if(fingerprint!==upperFingerprint){upperFingerprint=fingerprint;void logs.setFilters(upper,{place:placeOf('logs',logs)});}
       renderFilterSummary(filters);
-      if(filters.query)void search.setFilters(filters);else {search.invalidateQuery();renderSearch(search.getState());}
+      const key=filters.query?searchOf(filters):null;
+      if(key)void search.setFilters(filters,{place:key===searchKey?placeOf('large',search):null});else {search.invalidateQuery();renderSearch(search.getState());}
+      searchKey=key;
     }catch{validationError=true;inputPending=true;conditionView?.refresh(conds,active,shownFormat);renderSearch(search.getState());}
   }
   const MAX_COPY_ROWS=10000;
@@ -731,6 +800,17 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
       syncEditor();const i=conds.exclude.indexOf(c);if(i>=0)removeCondition('exclude',i);
     });
   }
+  // A hidden message is a hiding condition of its own; the toast undoes it.
+  function addExcludedMessage(message){
+    syncEditor();
+    if(conds.exclude.some(c=>c.enabled!==false&&c.message===message&&!c.messageRegex&&isEmptyCondition({...c,message:''})))return;
+    if(!addCondition('exclude',{message},{select:false}))return;
+    const c=conds.exclude.at(-1);
+    loadEditor();buildConditions();apply();
+    offerUndo(`제외 조건을 추가했습니다 · ${conditionSummary(c,shownFormat)}`,()=>{
+      syncEditor();const i=conds.exclude.indexOf(c);if(i>=0)removeCondition('exclude',i);
+    });
+  }
   function copyFromPane(prefix){
     const plan=copyPlan(prefix);if(!plan)return;
     if(plan.error)return notify(plan.error);
@@ -738,7 +818,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
   }
   function openRowMenu(entry,index,prefix,owner,isSearch,x,y){
     if(disposed)return;
-    const items=[...textItems(ui[prefix+'Rows'],entry.lineNumber),...conditionItems(entry)],state=owner.getState(),size=selectedCount(selectionOf(prefix,state),state.count)||1;
+    const items=[...textItems(ui[prefix+'Rows'],entry.lineNumber),...conditionItems(entry,pickedText(ui[prefix+'Rows'],entry.lineNumber))],state=owner.getState(),size=selectedCount(selectionOf(prefix,state),state.count)||1;
     items.push([size>1?`선택한 ${formatNumber(size)}행 복사`:'행 원문 복사',()=>copyFromPane(prefix)]);
     // A row of a multi-line log entry also copies the whole entry.
     const next=Number.isSafeInteger(index)?viewports.get(prefix)?.cachedRows(index+1,index+1)?.[0]:null;
@@ -751,7 +831,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
   // and unmark.
   function openBookmarkMenu(mark,size,x,y){
     if(disposed)return;
-    const items=[...textItems(ui.bookmarkList,mark.lineNumber),...conditionItems(mark)];
+    const items=[...textItems(ui.bookmarkList,mark.lineNumber),...conditionItems(mark,pickedText(ui.bookmarkList,mark.lineNumber))];
     items.push([size>1?`선택한 ${formatNumber(size)}행 복사`:'행 원문 복사',()=>copyFromPane('bookmarks')]);
     items.push([size>1?`선택한 북마크 ${formatNumber(size)}개 해제`:'북마크 해제',()=>bookmarks.removeSelected()]);
     menu.show(items,x,y,'북마크 작업',{onList:true});
@@ -759,38 +839,39 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
   // Text selected inside the row (the one selected row of its list) is
   // copied from the menu too, since the menu replaces the browser's own.
   function textItems(rows,line){
-    const text=window.getSelection?.(),value=text&&!text.isCollapsed?String(text):'',row=value?rowOf(text.anchorNode):null;
-    if(!row||!rows?.contains?.(row)||row.dataset.lineNumber!==String(line))return [];
+    const value=pickedText(rows,line);if(!value)return [];
     return [['선택한 텍스트 복사',()=>{writeClipboard(window,value).then(()=>notify('선택한 텍스트를 복사했습니다.'),()=>notify(copyFailed));}],null];
   }
+  // Text selected inside the row of `line` in `rows`, or ''.
+  function pickedText(rows,line){
+    const text=window.getSelection?.(),value=text&&!text.isCollapsed?String(text):'',row=value?rowOf(text.anchorNode):null;
+    return row&&rows?.contains?.(row)&&row.dataset.lineNumber===String(line)?value:'';
+  }
   // Conditions a row's values make, then a separator; none for an
-  // unrecognized row.
-  function conditionItems(entry){
-    const items=[];
-    if(entry.kind==='parsed'){
-      // A DLT row's tags are its ECU, APID and CTID, named as such.
-      const tags=entry.dlt?DLT_IDS.map(([key,label])=>[label,entry.dlt[key]]):(Array.isArray(entry.tags)&&entry.tags.length?entry.tags:[entry.tag]).map(tag=>['태그',tag]);
-      const named=tags.filter(([,tag])=>typeof tag==='string'&&tag.trim()).slice(0,3);
-      // Showing conditions combine with 또는, so with another one in use an
-      // added condition shows more rows, not fewer.
-      syncEditor();
-      const note=conds.include.some(c=>c.enabled!==false&&!isEmptyCondition(c))?'지금 보기 조건에 더해, 이 값에 맞는 줄도 보입니다':'이 값에 맞는 줄만 보입니다';
-      for(const [label,tag] of named){
-        items.push([`${label} '${quote(tag)}' 보기 조건 추가`,()=>addShowing({tag}),note]);
-        items.push([`${label} '${quote(tag)}' 제외`,()=>addExcludedTag(tag),'이 값에 맞는 줄을 숨깁니다']);
-      }
-      for(const [key,label] of [['pid','PID'],['tid','TID']])
-        if(/^\d+$/.test(String(entry[key]??'')))items.push([`${label} ${entry[key]} 보기 조건 추가`,()=>addShowing({[key]:String(entry[key])}),note]);
-      const stamp=[entry.date,entry.time].filter(Boolean).join(' ');
-      if(isTimeBound(stamp)&&stamp){
-        items.push([`${stamp}부터 보기 조건 추가`,()=>addShowing({timeFrom:stamp}),note]);
-        items.push([`${stamp}까지 보기 조건 추가`,()=>addShowing({timeTo:stamp}),note]);
-      }
-      const names=levelNames(shownFormat);
-      if(names[entry.level])items.push([`${names[entry.level]} 레벨 보기 조건 추가`,()=>addShowing({levels:[entry.level]}),note]);
-      items.push(null);
-    }
-    return items;
+  // unrecognized row. The message conditions take `picked`, text selected in
+  // the row's message, or else the whole message.
+  function conditionItems(entry,picked=''){
+    if(entry.kind!=='parsed')return [];
+    // A DLT row's tags are its ECU, APID and CTID, named as such.
+    const tags=entry.dlt?DLT_IDS.map(([key,label])=>[label,entry.dlt[key]]):(Array.isArray(entry.tags)&&entry.tags.length?entry.tags:[entry.tag]).map(tag=>['태그',tag]);
+    const named=tags.filter(([,tag])=>typeof tag==='string'&&tag.trim()).slice(0,3);
+    // Showing conditions combine with 또는, so with another one in use an
+    // added condition shows more rows, not fewer.
+    syncEditor();
+    const note=conds.include.some(c=>c.enabled!==false&&!isEmptyCondition(c))?'지금 보기 조건에 더해, 이 값에 맞는 줄도 보입니다':'이 값에 맞는 줄만 보입니다';
+    // One group per field, separated, so the menu reads by field.
+    const groups=[named.flatMap(([label,tag])=>[[`${label} '${quote(tag)}' 보기 조건 추가`,()=>addShowing({tag}),note],[`${label} '${quote(tag)}' 제외`,()=>addExcludedTag(tag),'이 값에 맞는 줄을 숨깁니다']])];
+    const whole=String(entry.message??''),part=picked.trim(),chosen=part&&whole.includes(part),message=(chosen?part:whole.trim()).slice(0,1000),field=entry.dlt?'페이로드':'메시지';
+    // Without text selected in the row the whole message is taken; the
+    // tooltip says how to take part of it.
+    const partly=chosen?'':' · 일부만 쓰려면 텍스트를 선택해 우클릭';
+    if(message)groups.push([[`${field} '${quote(message)}' 보기 조건 추가`,()=>addShowing({message}),note+partly],[`${field} '${quote(message)}' 제외`,()=>addExcludedMessage(message),`이 내용이 들어 있는 줄을 숨깁니다${partly}`]]);
+    groups.push([['pid','PID'],['tid','TID']].filter(([key])=>/^\d+$/.test(String(entry[key]??''))).map(([key,label])=>[`${label} ${entry[key]} 보기 조건 추가`,()=>addShowing({[key]:String(entry[key])}),note]));
+    const stamp=[entry.date,entry.time].filter(Boolean).join(' ');
+    if(isTimeBound(stamp)&&stamp)groups.push([[`${stamp}부터 보기 조건 추가`,()=>addShowing({timeFrom:stamp}),note],[`${stamp}까지 보기 조건 추가`,()=>addShowing({timeTo:stamp}),note]]);
+    const names=levelNames(shownFormat);
+    if(names[entry.level])groups.push([[`${names[entry.level]} 레벨 보기 조건 추가`,()=>addShowing({levels:[entry.level]}),note]]);
+    return groups.filter(group=>group.length).flatMap(group=>[...group,null]);
   }
   // Export writes original bytes natively; the page only starts, follows and
   // cancels it. Only completed results can be exported.
@@ -835,7 +916,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
   const bookmarks=createBookmarks({ui,document,window,notify,mod:MOD,logs,lineCell,jump:jumpTo,openMenu:openBookmarkMenu,isRawMode:()=>rawMode,canNavigate:()=>!disposed&&!inputPending&&!validationError,onChange:()=>{repaintRows();saver.schedule();},onCount:count=>{bookmarkCount=count;updateLowerPane();if(count)tips?.offer('bookmarks');}});
   const saver=createWorkSaver({invoke:(command,args)=>native.core.invoke(command,args),capture:captureWork,setTimer:(fn,ms)=>window.setTimeout(fn,ms),clearTimer:id=>window.clearTimeout(id)});
   saved=mountSavedFilters({native,menu,notify,document,read:()=>fieldsOf(currentFilters()),write:writeFields,changed:()=>saver.schedule(),format:()=>shownFormat,isGone:()=>pageGone});
-  conditionView=mountConditions({document,lists:{include:$('showList'),exclude:$('hideList')},hints:{include:$('showHint'),exclude:$('hideHint')},adders:{include:$('addShow'),exclude:$('addHide')},editor:$('condEditor'),rowless:()=>rowless(),
+  conditionView=mountConditions({document,lists:{include:$('showList'),exclude:$('hideList')},hints:{include:$('showHint'),exclude:$('hideHint')},adders:{include:$('addShow'),exclude:$('addHide')},editor:$('condEditor'),rowless:()=>rowless(),problem:rejectedProblem,
     onSelect:(list,index)=>{selectCondition(list,index);ui.tagFilter.focus();},onToggle:toggleCondition,onRemove:dropCondition,
     onAdd:list=>{if(addCondition(list)){ui.tagFilter.focus();apply();}}});
   buildConditions();showOptionalFields();
@@ -899,6 +980,10 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     shownFormat=format;const dlt=format==='dlt',names=levelNames(format);
     layout.setProfile(profileOf(format));
     $('tagLabel').textContent=dlt?'ECU · APID · CTID':'태그';
+    // A DLT row's message is its payload, named as DLT tools name it.
+    ui.messageLabel.textContent=dlt?'페이로드':'메시지';
+    $('openMessage').textContent=dlt?'+ 페이로드':'+ 메시지';$('openMessage').title=dlt?'이 조건의 페이로드 입력란을 엽니다':'이 조건의 메시지 입력란을 엽니다';
+    ui.messageFilter.title=dlt?'페이로드에 입력한 문자열이 들어 있으면 조건에 맞습니다 · 대소문자 무시 · 쉼표도 그대로 검색':'메시지에 입력한 문자열이 들어 있으면 조건에 맞습니다 · 대소문자 무시 · 쉼표도 그대로 검색';
     ui.tagFilter.placeholder=dlt?'쉼표로 구분 · 예: NAV, ECU1':'쉼표로 구분 · 예: MyApp';
     ui.tagFilter.title=dlt?'ECU·APID·CTID 중 하나에 쉼표로 구분한 값 중 하나라도 들어 있으면 이 조건에 맞습니다 · 예: NAV, ECU1':'태그에 쉼표로 구분한 값 중 하나라도 들어 있으면 이 조건에 맞습니다 · 예: ActivityManager, MyApp';
     $('readingOptions').hidden=dlt;showOptionalFields();
@@ -913,7 +998,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     if(ids){for(const c of all){c.pid='';c.tid='';}loadEditor();apply();}
     else renderFilterSummary();
   }
-  function renderFilterSummary(filters=readFilters()){
+  function renderFilterSummary(filters=logs.getState().rejected?keptFilters():readFilters()){
     const chips=describeActiveFilters(filters,shownFormat);
     ui.filterBadge.textContent=chips.length?String(chips.length):'';ui.filterBadge.hidden=!chips.length;
     ui.toggleFilters.setAttribute('aria-label',chips.length?`필터 · ${chips.length}개 조건 적용 중`:'필터');
@@ -951,7 +1036,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     else{
       const c=conds[chip.list]?.[chip.index];if(!c)return;
       const before={...c,levels:[...c.levels]};
-      if(chip.key==='levels')c.levels=[...LEVELS];else if(chip.key==='time'){c.timeFrom='';c.timeTo='';}else c[chip.key]='';
+      if(chip.key==='levels')c.levels=[...LEVELS];else if(chip.key==='time'){c.timeFrom='';c.timeTo='';}else if(chip.key==='message'){c.message='';c.messageRegex=false;}else c[chip.key]='';
       // Clearing its last field takes the condition away, with an undo.
       if(isEmptyCondition(c)&&(chip.list==='exclude'||conds.include.length>1)){Object.assign(c,before);dropCondition(chip.list,chip.index);return;}
       if(c===activeCondition())openedFields=null;
@@ -960,6 +1045,16 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     apply();
   }
   function buildConditions(){conditionView?.build(conds,active,shownFormat);}
+  // Whether a condition's message pattern may be the one the engine
+  // rejected: the engine names no condition, and every pattern among the
+  // conditions it kept compiled.
+  function badPattern(c){
+    if(!logs.getState().rejected||!c?.message||c.messageRegex!==true)return false;
+    const kept=logs.filters();
+    return ![...kept.include,...kept.exclude].some(k=>k.messageRegex===true&&k.message===c.message);
+  }
+  // Such a condition's card says it needs checking.
+  function rejectedProblem(list,index){return badPattern(conds[list]?.[index])?describeLogError(logs.getState().rejected,shownFormat):'';}
   function setConditions(filters){
     const f=normalizeFilters(filters);
     conds={include:f.include.length?f.include:[emptyCondition()],exclude:f.exclude};active={list:'include',index:0};
@@ -1031,8 +1126,20 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
   }
   for(const level of LEVELS){const b=document.createElement('button');b.className='level-chip';b.dataset.level=level;b.append(textSpan(document,LEVEL_NAMES[level],'letter'),textSpan(document,'0','count'));b.title=`${LEVEL_NAMES[level]} · Alt+클릭: 이 레벨만`;b.addEventListener('click',event=>{if(event.altKey)selectedLevels=new Set([level]);else selectedLevels.has(level)?selectedLevels.delete(level):selectedLevels.add(level);updateLevels();apply();});ui.levelFilters.append(b);}
   ui.allLevels.addEventListener('click',()=>{selectedLevels=new Set(LEVELS);updateLevels();apply();});ui.errorLevels.addEventListener('click',()=>{selectedLevels=new Set(['W','E','F','A']);updateLevels();apply();});ui.resetFilters.addEventListener('click',reset);
-  for(const input of [ui.searchInput,ui.tagFilter,ui.timeFrom,ui.timeTo,ui.pidFilter,ui.tidFilter]){
-    input.addEventListener('input',()=>{if(disposed)return;if(input===ui.searchInput)lowerTab='search';if(debounce!==null)window.clearTimeout(debounce);inputPending=!!ui.searchInput.value||input!==ui.searchInput;inputPaused=false;validationError=false;search.invalidateQuery();renderSearch(search.getState());debounce=window.setTimeout(apply,150);});
+  // Typing waits for a pause before it applies; a field other than the
+  // search keeps the search results' place.
+  function edited(input){if(disposed)return;if(input===ui.searchInput)lowerTab='search';if(debounce!==null)window.clearTimeout(debounce);inputPending=!!ui.searchInput.value||input!==ui.searchInput;inputPaused=false;validationError=false;search.invalidateQuery({place:input===ui.searchInput?null:placeOf('large',search)});renderSearch(search.getState());debounce=window.setTimeout(apply,150);}
+  // The message's .* switch reads it as a pattern; without a message it only
+  // waits for one.
+  ui.messageRegex.addEventListener('click',()=>{messageRegex=!messageRegex;ui.messageRegex.setAttribute('aria-pressed',String(messageRegex));syncEditor();if(ui.messageFilter.value)edited(ui.messageFilter);else conditionView?.refresh(conds,active,shownFormat);});
+  // Alt+R switches the message between a string and a pattern.
+  ui.messageFilter.addEventListener('keydown',event=>{if(event.altKey&&event.code==='KeyR'&&!event.metaKey&&!event.ctrlKey&&!event.isComposing){event.preventDefault();ui.messageRegex.click();}});
+  ui.messageFilter.addEventListener('input',()=>{
+    patternHeld=true;if(patternTimer!==null)window.clearTimeout(patternTimer);
+    patternTimer=window.setTimeout(()=>{patternTimer=null;patternHeld=false;if(!disposed)errors();},PATTERN_PAUSE_MS);
+  });
+  for(const input of [ui.searchInput,ui.tagFilter,ui.messageFilter,ui.timeFrom,ui.timeTo,ui.pidFilter,ui.tidFilter]){
+    input.addEventListener('input',()=>edited(input));
     input.addEventListener('keydown',event=>{
       if(event.key!=='Enter'||event.isComposing||disposed)return;
       if(inputPending||['cancelled','error'].includes(search.getState().queryStatus)){event.preventDefault();apply();}
@@ -1062,7 +1169,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     // Marks restored by line number are read again once the file is read.
     bookmarks.restore(snapshot?.bookmarks);
     pendingMarks=snapshot?.marks?{...snapshot.marks,datasetId:null,busy:false,failures:0}:null;restoreTargets=null;appliedFilters=filters;
-    const upper={...filters,query:'',caseSensitive:false,searchMode:'literal'};upperFingerprint=JSON.stringify(coreFilters(upper));
+    const upper={...filters,query:'',caseSensitive:false,searchMode:'literal'};upperFingerprint=JSON.stringify(coreFilters(upper));searchKey=filters.query?searchOf(filters):null;
     await Promise.all([logs.reopen(upper),search.reopen(filters.query?filters:DEFAULT_FILTERS)]);
     if(!valid()||disposed)return;
     if(pendingMarks)pendingMarks.datasetId=logs.getState().datasetId;
@@ -1077,12 +1184,17 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     resolveMarks(logs.getState());
   }
   // The filters to keep: what is typed when valid, else what was applied.
-  function currentFilters(){const typed=readFilters();try{validateFilters(typed);return typed;}catch{return appliedFilters??defaultFilters();}}
+  function currentFilters(){const typed=readFilters();try{validateFilters(typed);return logs.getState().rejected?keptFilters(typed):typed;}catch{return appliedFilters??defaultFilters();}}
+  // The typed search and options with the conditions the upper logs kept
+  // when the engine rejected a message pattern.
+  function keptFilters(typed=readFilters()){const kept=logs.filters();return {...typed,include:kept.include,exclude:kept.exclude,includeRaw:kept.includeRaw};}
   function topLine(prefix,state){const i=state.viewportStart;return i>0?viewports.get(prefix)?.cachedRows(i,i)?.[0]?.lineNumber??null:null;}
   // A place still being located is kept as it was saved.
   function positionOf(prefix,owner){
     const state=owner.getState(),target=restoreTargets?.[prefix];
     if(target?.top&&state.locationPending===target.top)return target;
+    // So is a place kept across a new filter.
+    const kept=owner.relocating();if(kept)return {top:kept.line,selected:kept.select?kept.line:null};
     return {top:topLine(prefix,state),selected:state.selectedLine??null};
   }
   function captureWork(){

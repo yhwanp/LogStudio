@@ -17,8 +17,9 @@ use std::{
 };
 /// One condition of a filter: a row matches when it has one of the levels
 /// and every listed field: a tag containing one of the tag items, one of the
-/// PIDs, one of the TIDs, and a timestamp in the range. A row without the
-/// field a condition tests never matches it.
+/// PIDs, one of the TIDs, a timestamp in the range and a message containing
+/// the message text. A row without the field a condition tests never
+/// matches it.
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq, Hash)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct Condition {
@@ -28,6 +29,12 @@ pub struct Condition {
     pub tid: String,
     pub time_from: String,
     pub time_to: String,
+    /// Text the row's message contains, ignoring case as the search does: a
+    /// string, or with `message_regex` a pattern of the search's grammar. A
+    /// DLT row's message is its payload; continuation rows take their
+    /// entry's decision, so only an entry's first row is read.
+    pub message: String,
+    pub message_regex: bool,
 }
 impl Default for Condition {
     fn default() -> Self {
@@ -38,6 +45,8 @@ impl Default for Condition {
             tid: String::new(),
             time_from: String::new(),
             time_to: String::new(),
+            message: String::new(),
+            message_regex: false,
         }
     }
 }
@@ -134,6 +143,7 @@ pub struct Cond {
     pids: Vec<String>,
     tids: Vec<String>,
     time: Option<TimeRange>,
+    message: Option<RegexMatcher>,
     source: Condition,
 }
 impl Cond {
@@ -144,6 +154,7 @@ impl Cond {
             || c.time_to.len() > 64
             || c.pid.len() > 1000
             || c.tid.len() > 1000
+            || c.message.len() > 4000
             || c.levels.len() > 8
         {
             return Err(error("Filter budget exceeded"));
@@ -161,15 +172,15 @@ impl Cond {
     fn valid_levels(c: &Condition) -> bool {
         c.levels.iter().all(|l| LEVELS.contains(&l.as_str()))
     }
-    /// The levels, tags and time. `keep_tag` drops tag items that can change
-    /// nothing.
+    /// The levels, tags, time and message. `keep_tag` drops tag items that
+    /// can change nothing.
     fn finish(
         (mut c, pids, tids): (Condition, Vec<String>, Vec<String>),
         keep_tag: impl Fn(&str) -> bool,
     ) -> io::Result<Self> {
         c.levels.sort();
         c.levels.dedup();
-        let (tag, matcher) = tag_list(&c.tag, keep_tag)?;
+        let (tag, tags) = tag_list(&c.tag, keep_tag)?;
         c.tag = tag;
         let (from, to) = (
             parse_bound(&c.time_from, false)?,
@@ -177,12 +188,26 @@ impl Cond {
         );
         c.time_from = parser::trim(&c.time_from).to_owned();
         c.time_to = parser::trim(&c.time_to).to_owned();
+        // A message is used as typed; without one the mode means nothing.
+        c.message_regex &= !c.message.is_empty();
+        let message = (!c.message.is_empty())
+            .then(|| {
+                let mode = if c.message_regex { "regex" } else { "literal" };
+                matcher(&c.message, mode, false).map_err(|e| {
+                    error(
+                        e.to_string()
+                            .replacen("search pattern", "message pattern", 1),
+                    )
+                })
+            })
+            .transpose()?;
         Ok(Self {
             levels: c.levels.iter().fold(0, |bits, l| bits | level_bit(l)),
-            tag: matcher,
+            tag: tags,
             pids,
             tids,
             time: TimeRange::new(from, to),
+            message,
             source: c,
         })
     }
@@ -192,7 +217,7 @@ impl Cond {
     }
     /// Whether only the level decides the condition.
     pub fn levels_only(&self) -> bool {
-        self.tag.is_none() && self.pids.is_empty() && self.tids.is_empty() && self.time.is_none()
+        self.tag.is_none() && self.pids.is_empty() && self.tids.is_empty() && !self.reads_rows()
     }
     /// Bits over `LEVELS` of the levels the condition matches.
     pub fn level_bits(&self) -> u16 {
@@ -206,8 +231,19 @@ impl Cond {
             self.tag.is_some(),
         ]
     }
-    pub(crate) fn has_time(&self) -> bool {
-        self.time.is_some()
+    /// Whether only a row's text decides the condition: its time range or
+    /// message. Field metadata cannot.
+    pub(crate) fn reads_rows(&self) -> bool {
+        self.time.is_some() || self.message.is_some()
+    }
+    /// Whether the condition tests the message.
+    fn has_message(&self) -> bool {
+        self.message.is_some()
+    }
+    /// The message as a string: a row whose message contains it contains
+    /// it too, which a pattern's anchors would not promise.
+    fn literal_message(&self) -> Option<&RegexMatcher> {
+        self.message.as_ref().filter(|_| !self.source.message_regex)
     }
     /// The condition's normal form: conditions of the same normal form
     /// match the same rows.
@@ -240,6 +276,12 @@ impl Cond {
             .as_ref()
             .is_none_or(|range| stamp().is_some_and(|stamp| range.contains(&stamp)))
     }
+    /// Whether a message contains the message text; true without one.
+    pub fn accepts_message(&self, message: &str) -> bool {
+        self.message
+            .as_ref()
+            .is_none_or(|m| m.is_match(message.as_bytes()).unwrap_or(false))
+    }
     /// Whether a parsed row matches the condition.
     pub fn matches(&self, p: &parser::Parsed) -> bool {
         self.matches_at(p, &OnceCell::new())
@@ -252,6 +294,7 @@ impl Cond {
             && self.accepts_tid(p.tid)
             && self.tags_match(p.tag_list())
             && self.accepts_time(|| *stamp.get_or_init(|| row_stamp(p.date, p.time)))
+            && self.accepts_message(p.message)
     }
 }
 /// A row or bound timestamp. Year and date are optional on bounds; the year
@@ -572,6 +615,7 @@ impl Filter {
             tid: std::mem::take(&mut fields.tid),
             time_from: std::mem::take(&mut fields.time_from),
             time_to: std::mem::take(&mut fields.time_to),
+            ..Condition::default()
         };
         let own_hide = Condition {
             tag: std::mem::take(&mut fields.exclude_tags),
@@ -728,10 +772,15 @@ impl Filter {
     pub fn admits_unparsed(&self) -> bool {
         self.fields.include_raw && self.shows.is_empty()
     }
-    /// True when levels, IDs and tags decide every row: no time range and no
-    /// search query, so per-block field metadata can count rows unread.
+    /// True when levels, IDs and tags decide every row: no time range,
+    /// message or search query, so per-block field metadata can count rows
+    /// unread.
     pub fn only_fields(&self) -> bool {
-        self.matcher.is_none() && !self.conditions().any(Cond::has_time)
+        self.matcher.is_none() && !self.conditions().any(Cond::reads_rows)
+    }
+    /// Whether a condition tests messages, which DLT message headers lack.
+    fn reads_messages(&self) -> bool {
+        self.conditions().any(Cond::has_message)
     }
     /// Whether a condition tests the PID, TID or tags, in that order.
     pub fn tested_fields(&self) -> [bool; 3] {
@@ -854,30 +903,9 @@ impl Filter {
         let display =
             (self.matcher.is_some() || fields).then(|| encoding::decoded(data, repair).text);
         if let (Some(matcher), Some(display)) = (&self.matcher, &display) {
-            let data = display.as_bytes();
-            let normalized: Cow<[u8]> = if memchr::memchr(b'\r', data).is_some() {
-                // CR and CRLF become one LF; copy the runs between CRs.
-                let mut d = Vec::with_capacity(data.len());
-                let mut at = 0;
-                for i in memchr::memchr_iter(b'\r', data) {
-                    d.extend_from_slice(&data[at..i]);
-                    d.push(b'\n');
-                    at = i + 1 + usize::from(data.get(i + 1) == Some(&b'\n'));
-                }
-                d.extend_from_slice(&data[at..]);
-                Cow::Owned(d)
-            } else {
-                Cow::Borrowed(data)
-            };
-            let mut sink = Bits {
-                mask: &mut mask,
-                stop,
-            };
-            SearcherBuilder::new()
-                .line_number(true)
-                .multi_line(false)
-                .build()
-                .search_slice(matcher, &normalized, &mut sink)?;
+            mark_rows(&[matcher], display, &mut mask, stop)?;
+        } else if let (Some((texts, others)), Some(display)) = (self.message_rows(), &display) {
+            return self.mask_by_messages(display, rows, stop, entry, &texts, others);
         } else {
             mask.fill(255);
         }
@@ -948,6 +976,79 @@ impl Filter {
         })
     }
 }
+impl Filter {
+    /// Literal message texts that decide every row a block does not
+    /// contain, and the decision of the others: every showing condition has
+    /// one (the others match no showing condition), or with no showing
+    /// condition and unparsed rows shown, every hiding condition has one
+    /// (the others match no hiding condition). None otherwise, and with a
+    /// search query, which decides rows first.
+    fn message_rows(&self) -> Option<(Vec<&RegexMatcher>, bool)> {
+        if self.matcher.is_some() {
+            None
+        } else if !self.shows.is_empty() {
+            self.shows
+                .iter()
+                .map(Cond::literal_message)
+                .collect::<Option<_>>()
+                .map(|m| (m, false))
+        } else if self.fields.include_raw && !self.hides.is_empty() {
+            self.hides
+                .iter()
+                .map(Cond::literal_message)
+                .collect::<Option<_>>()
+                .map(|m| (m, true))
+        } else {
+            None
+        }
+    }
+    /// `mask_from` by `message_rows`: a row without one of the texts that
+    /// opens an entry is decided `others`, and a row that continues an entry
+    /// takes its decision, so only rows with a text, the rows before the
+    /// block's first entry row and the rows after an entry decided otherwise
+    /// are parsed.
+    fn mask_by_messages(
+        &self,
+        display: &str,
+        rows: usize,
+        stop: &AtomicBool,
+        entry: bool,
+        texts: &[&RegexMatcher],
+        others: bool,
+    ) -> io::Result<Mask> {
+        let mut found = vec![0; rows.div_ceil(8)];
+        mark_rows(texts, display, &mut found, stop)?;
+        let mut mask = vec![0; rows.div_ceil(8)];
+        let recognize = self.fields.recognizes_line_numbers();
+        // The decision of the entry the rows belong to; before the block's
+        // first entry row, that of the entry before the block.
+        let (mut lead, mut started, mut current) = (0, false, entry);
+        for (i, (offset, bytes)) in ByteLines::new(display.as_bytes()).enumerate().take(rows) {
+            if i % 256 == 0 && stop.load(Ordering::Acquire) {
+                break;
+            }
+            let text = found[i / 8] & (1 << (i % 8)) != 0;
+            if text || !started || current != others {
+                let raw = &display[offset..offset + bytes.len()];
+                let r = parser::parse_in(self.format, raw, i as u64 + 1, recognize);
+                if r.parsed.is_some() || parser::starts_entry_in(self.format, raw, recognize) {
+                    started = true;
+                    current = if text { self.fields_match(&r) } else { others };
+                } else if !started {
+                    lead += 1;
+                }
+            }
+            if current {
+                mask[i / 8] |= 1 << (i % 8);
+            }
+        }
+        Ok(Mask {
+            bits: mask,
+            lead,
+            tail: started.then_some(current),
+        })
+    }
+}
 /// Hashes a 4-byte ID read as one integer.
 #[derive(Default)]
 struct IdHasher(u64);
@@ -991,6 +1092,13 @@ impl Filter {
         stop: &AtomicBool,
     ) -> io::Result<Mask> {
         debug_assert!(self.matcher.is_none(), "a search query needs the rows");
+        if self.reads_messages() {
+            // A message condition reads the payloads: decide the rendered
+            // rows. Every DLT row starts its entry, so `lead` stays 0.
+            let mut text = Vec::with_capacity(raw.len() * 2);
+            decoder.render(raw, 0, &mut text);
+            return self.mask_from(&text, rows, stop, self.admits_unparsed(), false);
+        }
         let mut bits = vec![0; rows.div_ceil(8)];
         let (mut row, mut tail) = (0, None);
         if !self.needs_fields() {
@@ -1089,10 +1197,40 @@ impl Filter {
         let conds: Vec<&Cond> = self.conditions().collect();
         let text = encoding::decoded(data, repair).text;
         let recognize = self.fields.recognizes_line_numbers();
+        // A condition whose message text the block lacks matches none of its
+        // rows. When each one left has such a text, only rows with one are
+        // read.
+        let (mut wanted, mut texts, mut literal) = (wanted, vec![], true);
+        let mut left = wanted;
+        while left != 0 {
+            let k = left.trailing_zeros() as usize;
+            left &= left - 1;
+            match conds[k].literal_message() {
+                Some(m) if !m.is_match(text.as_bytes()).unwrap_or(true) => wanted &= !(1 << k),
+                Some(m) => texts.push(m),
+                None => literal = false,
+            }
+        }
+        if wanted == 0 {
+            return 0;
+        }
+        let read = if literal {
+            let rows = memchr::memchr2_iter(b'\n', b'\r', text.as_bytes()).count() + 1;
+            let mut read = vec![0; rows.div_ceil(8)];
+            mark_rows(&texts, &text, &mut read, stop).ok().map(|_| read)
+        } else {
+            None
+        };
         let mut found = 0;
         for (i, (offset, bytes)) in ByteLines::new(text.as_bytes()).enumerate() {
             if found == wanted || (i % 256 == 0 && stop.load(Ordering::Acquire)) {
                 break;
+            }
+            if read
+                .as_ref()
+                .is_some_and(|r| r[i / 8] & (1 << (i % 8)) == 0)
+            {
+                continue;
             }
             let r = parser::parse_in(
                 self.format,
@@ -1116,6 +1254,11 @@ impl Filter {
         wanted: u64,
         stop: &AtomicBool,
     ) -> u64 {
+        if self.reads_messages() {
+            let mut text = Vec::with_capacity(raw.len() * 2);
+            decoder.render(raw, 0, &mut text);
+            return self.row_hits(&text, wanted, stop, false);
+        }
         let conds: Vec<&Cond> = self.conditions().collect();
         let ids_ok: u64 = conds
             .iter()
@@ -1193,6 +1336,39 @@ pub struct Mask {
 struct Bits<'a> {
     mask: &'a mut [u8],
     stop: &'a AtomicBool,
+}
+/// Sets the bit of each physical row of `text` that one of `matchers`
+/// matches. CR and CRLF end rows as LF does.
+fn mark_rows(
+    matchers: &[&RegexMatcher],
+    text: &str,
+    mask: &mut [u8],
+    stop: &AtomicBool,
+) -> io::Result<()> {
+    let data = text.as_bytes();
+    let normalized: Cow<[u8]> = if memchr::memchr(b'\r', data).is_some() {
+        // CR and CRLF become one LF; copy the runs between CRs.
+        let mut d = Vec::with_capacity(data.len());
+        let mut at = 0;
+        for i in memchr::memchr_iter(b'\r', data) {
+            d.extend_from_slice(&data[at..i]);
+            d.push(b'\n');
+            at = i + 1 + usize::from(data.get(i + 1) == Some(&b'\n'));
+        }
+        d.extend_from_slice(&data[at..]);
+        Cow::Owned(d)
+    } else {
+        Cow::Borrowed(data)
+    };
+    for matcher in matchers {
+        let mut sink = Bits { mask, stop };
+        SearcherBuilder::new()
+            .line_number(true)
+            .multi_line(false)
+            .build()
+            .search_slice(*matcher, &normalized, &mut sink)?;
+    }
+    Ok(())
 }
 impl Sink for &mut Bits<'_> {
     type Error = io::Error;
