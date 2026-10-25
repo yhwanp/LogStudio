@@ -13,18 +13,22 @@ export const MAX_BOOKMARKS=1000;
 // The fields a bookmark keeps of its page row.
 export const markOf=row=>({lineNumber:row.lineNumber,file:row.file,fileLine:row.fileLine,raw:row.raw??'',truncated:!!row.truncated,kind:row.kind,date:row.date,time:row.time,process:row.process,pid:row.pid,tid:row.tid,level:row.level,tag:row.tag,message:row.message,owner:ownerSnapshot(row),...(row.dlt?{dlt:{...row.dlt}}:{})});
 
-// `logs` is the upper pane controller; `canNavigate` says whether its current
-// result may be navigated; `jump(line)` moves focus to a row there;
-// `onChange` repaints rows after a mark changes;
+// `logs` is the upper pane controller; `onReveal(line,{repeat,focus})` shows a
+// bookmark's row there and in the raw detail, moving focus to it with
+// `focus`; `onChange` repaints rows after a mark changes;
+// `offerUndo(message,undo)` reports a removal with a way back;
 // `openMenu(mark,size,x,y)` opens a row's menu for a selection of `size`.
 // The list is a lower-region tab: `onCount` lets the view show or hide that
 // tab before the list renders, and the list renders only while it is shown.
-export function createBookmarks({ui, document, window, notify, mod, logs, lineCell, jump=()=>{}, openMenu=()=>{}, isRawMode, canNavigate, onChange, onCount}) {
+export function createBookmarks({ui, document, window, notify, mod, logs, lineCell, onReveal=()=>{}, offerUndo=message=>notify(message), openMenu=()=>{}, isRawMode, onChange, onCount}) {
   const bookmarks=new Map();
   // The list selects rows as the other lists do (row-selection.js), by
   // position in line order. `cursor` is the line of its focus row, the row
   // revealed in the upper logs; a changed set of marks keeps only the cursor.
   let cursor=null,selection=null,version=0,order=null,dragFrom=null;
+  // Counts replacements of every mark (a reload reading them again, another
+  // file); an undo offered before one does nothing.
+  let resets=0;
   const sorted=()=>order??=[...bookmarks.keys()].sort((a,b)=>a-b);
   const changed=()=>{order=null;version++;};
   const rowNodes=()=>[...(ui.bookmarkList.children??[])];
@@ -42,14 +46,28 @@ export function createBookmarks({ui, document, window, notify, mod, logs, lineCe
   }
   // Adds the rows, or removes them when every row is already marked.
   function toggle(rows){
-    const remove=rows.every(row=>bookmarks.has(row.lineNumber));
-    if(!remove&&bookmarks.size+rows.filter(row=>!bookmarks.has(row.lineNumber)).length>MAX_BOOKMARKS)return notify(`북마크는 최대 ${formatNumber(MAX_BOOKMARKS)}개까지입니다.`);
-    for(const row of rows){
-      if(remove)bookmarks.delete(row.lineNumber);
-      else bookmarks.set(row.lineNumber,markOf(row));
-    }
+    if(rows.every(row=>bookmarks.has(row.lineNumber)))return unmarkLines(rows.map(row=>row.lineNumber));
+    if(bookmarks.size+rows.filter(row=>!bookmarks.has(row.lineNumber)).length>MAX_BOOKMARKS)return notify(`북마크는 최대 ${formatNumber(MAX_BOOKMARKS)}개까지입니다.`);
+    for(const row of rows)bookmarks.set(row.lineNumber,markOf(row));
     changed();
-    notify(remove?`북마크 ${formatNumber(rows.length)}개를 해제했습니다.`:`북마크 ${formatNumber(rows.length)}개를 추가했습니다.`);
+    notify(`북마크 ${formatNumber(rows.length)}개를 추가했습니다.`);
+    render();onChange();
+  }
+  // Unmarks `lines`; `next` takes the cursor. The toast offers the marks
+  // back with the cursor, and focus in the list, where they were; marks added
+  // meanwhile stay.
+  function unmarkLines(lines,{next=lines.includes(cursor)?null:cursor,message=`북마크 ${formatNumber(lines.length)}개를 해제했습니다.`}={}){
+    const kept=lines.map(line=>[line,bookmarks.get(line)]),was=cursor,at=resets;
+    for(const line of lines)bookmarks.delete(line);
+    changed();cursor=next;selection=null;
+    offerUndo(message,()=>{
+      if(at!==resets)return;
+      const back=kept.filter(([line])=>!bookmarks.has(line));
+      if(bookmarks.size+back.length>MAX_BOOKMARKS)return notify(`북마크는 최대 ${formatNumber(MAX_BOOKMARKS)}개까지입니다.`);
+      for(const [line,mark] of back)bookmarks.set(line,mark);
+      const focused=ui.bookmarkList.contains(document.activeElement);
+      changed();cursor=was;selection=null;render();if(focused)focusCursor();onChange();
+    });
     render();onChange();
   }
   // A marked continuation row reads like a search hit: its entry's fields
@@ -101,7 +119,7 @@ export function createBookmarks({ui, document, window, notify, mod, logs, lineCe
       if(target===undefined&&!remove&&event.key!=='Enter'&&event.key!==' ')return;
       event.preventDefault();
       if(!inRanges(selectedRanges(current(),rows.length),at))select(selectOne(at));
-      if(target!==undefined){const index=Math.max(0,Math.min(last,target));select(event.shiftKey?extendTo(current(),index,rows.length):selectOne(index));reveal(cursor);}
+      if(target!==undefined){const index=Math.max(0,Math.min(last,target));select(event.shiftKey?extendTo(current(),index,rows.length):selectOne(index));reveal(cursor,{repeat:event.repeat===true});}
       else if(remove)removeSelected();
       else moveTo(line);
     });
@@ -133,10 +151,8 @@ export function createBookmarks({ui, document, window, notify, mod, logs, lineCe
     showCount(size);
   }
   // Shows a new selection; its focus row becomes the cursor and takes focus.
-  function select(next){
-    selection={...next,version};cursor=sorted()[next.focus]??null;paint();
-    rowNodes().find(row=>Number(row.dataset.lineNumber)===cursor)?.focus?.({preventScroll:true});
-  }
+  function select(next){selection={...next,version};cursor=sorted()[next.focus]??null;paint();focusCursor();}
+  const focusCursor=()=>rowNodes().find(row=>Number(row.dataset.lineNumber)===cursor)?.focus?.({preventScroll:true});
   // Shift extends from the anchor, ⌘/Ctrl toggles one row, a plain press
   // selects the row alone; a drag extends from a row the press selected.
   function press(index,{shift=false,toggle=false}={}){
@@ -157,17 +173,15 @@ export function createBookmarks({ui, document, window, notify, mod, logs, lineCe
     grab:index=>{dragFrom=selectOne(index);return true;},
     drag:index=>{if(dragFrom)select(extendTo(dragFrom,index,sorted().length,{keep:true}));},
     release:()=>{if(cursor!==null)reveal(cursor);}});
-  function unmark(line){bookmarks.delete(line);changed();if(cursor===line)cursor=null;render();onChange();}
+  const unmark=line=>unmarkLines([line]);
   // Delete, Backspace and ⌘/Ctrl+B in the list unmark the selected rows; the
   // row now in the place of the first of them takes the cursor.
   function removeSelected(){
     const lines=sorted(),s=chosen();
     if(!s)return;
-    const gone=[...selectedPositions(s,lines.length)].map(i=>lines[i]),first=selectedRanges(s,lines.length)[0][0];
-    for(const line of gone)bookmarks.delete(line);
-    changed();const rest=sorted();cursor=rest[Math.min(first,rest.length-1)]??null;selection=null;
-    notify(`북마크 ${formatNumber(gone.length)}개를 해제했습니다.`);
-    render();if(rest.length)focusList();onChange();
+    const gone=new Set([...selectedPositions(s,lines.length)].map(i=>lines[i])),first=selectedRanges(s,lines.length)[0][0],rest=lines.filter(line=>!gone.has(line));
+    unmarkLines([...gone],{next:rest[Math.min(first,rest.length-1)]??null});
+    if(rest.length)focusList();
   }
   function selectEvery(){const count=sorted().length;if(count)select(selectAll(chosen()?.focus??0));}
   // A selection of several bookmarks becomes its focus row alone.
@@ -178,21 +192,20 @@ export function createBookmarks({ui, document, window, notify, mod, logs, lineCe
   }
   // Reveals a bookmark in the upper logs; a row hidden by the filter is
   // reported by the locate error, and the cursor still advances past it.
-  function reveal(line){
-    cursor=line;paint();
-    if(canNavigate())void logs.locateLine(line);
-  }
+  function reveal(line,{repeat=false}={}){cursor=line;paint();onReveal(line,{repeat});}
   // Enter moves focus to a bookmark's row above, as on a search result.
-  function moveTo(line){
-    cursor=line;paint();
-    if(canNavigate())jump(line);
-  }
-  function step(direction){
+  function moveTo(line){cursor=line;paint();onReveal(line,{focus:true});}
+  // Shows the next or previous bookmark above. While the list has focus, its
+  // focus moves with the cursor, so that Enter, Delete and the menu act on
+  // the bookmark shown. `repeat` marks a held F2.
+  function step(direction,{repeat=false}={}){
     const lines=sorted();
     if(!lines.length)return notify(`북마크가 없습니다. 행을 선택하고 ${mod}B로 추가하세요.`);
     const current=cursor??logs.getState().selectedLine??(direction>0?0:Infinity);
     const next=direction>0?lines.find(line=>line>current)??lines[0]:[...lines].reverse().find(line=>line<current)??lines.at(-1);
-    selection=null;reveal(next);
+    const focused=ui.bookmarkList.contains(document.activeElement);
+    selection=null;reveal(next,{repeat});
+    if(focused)focusCursor();
   }
   // The marks' raw rows in line order; a row too long for its mark is read again.
   async function text(marks=sorted().map(line=>bookmarks.get(line))){
@@ -207,7 +220,7 @@ export function createBookmarks({ui, document, window, notify, mod, logs, lineCe
     return {count:marks.length,text:marks.some(mark=>mark.truncated)?null:marks.map(mark=>mark.raw).join('\n'),load:()=>text(marks)};
   }
   // Replaces every mark without repainting rows; the caller repaints.
-  function restore(entries=[]){bookmarks.clear();cursor=null;selection=null;for(const [line,mark] of entries)bookmarks.set(line,mark);changed();render();}
+  function restore(entries=[]){bookmarks.clear();cursor=null;selection=null;resets++;for(const [line,mark] of entries)bookmarks.set(line,mark);changed();render();}
   // A list that shrinks (the raw detail opening under it) keeps its cursor
   // row in view when that row was in view.
   let listHeight=0;
@@ -222,6 +235,6 @@ export function createBookmarks({ui, document, window, notify, mod, logs, lineCe
     const count=bookmarks.size;
     writeClipboard(window,text()).then(()=>notify(`북마크 ${formatNumber(count)}행을 복사했습니다.`),()=>notify('복사하지 못했습니다. 다시 시도해 주세요.'));
   });
-  ui.clearBookmarks.addEventListener('click',()=>{restore();onChange();notify('북마크를 모두 해제했습니다.');});
+  ui.clearBookmarks.addEventListener('click',()=>{if(bookmarks.size)unmarkLines(sorted(),{message:'북마크를 모두 해제했습니다.'});});
   return {has:line=>bookmarks.has(line), size:()=>bookmarks.size, toggle, step, restore, render, focusList, copyPlan, removeSelected, selectAll:selectEvery, collapse, snapshot:()=>new Map(bookmarks)};
 }

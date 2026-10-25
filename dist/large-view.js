@@ -78,7 +78,7 @@ function fieldSpan(document, entry, value, className) {
 export function mountLargeLogView(native, {transport, tips=null, document=globalThis.document, window=globalThis.window}) {
   const $ = id => document.getElementById(id);
   $('largeLogPanel').hidden=false;
-  const ids = ['largeName','largeStatus','largeError','largeCount','largeTotal','largeRows','largeViewport','largeFirst','largeLast','largeJump','largeJumpForm','largeCancel','largeClose','largeColumns','largeRaw','largeHeaders','largeRange','largeDetail','largeDetailTitle','largeDetailText','largeDetailPrevious','largeDetailNext','largeDetailClose','levelFilters','allLevels','errorLevels','resetFilters','searchInput','tagFilter','pidFilter','tidFilter','caseSensitive','includeRaw','recognizeLineNumbers','logsCount','logsRows','logsViewport','logsHeaders','logsFirst','logsLast','logsJump','logsJumpForm','logsRange','largeSearchPane','filterBadge','activeFilters','filterRow','logsSelection','largeSelection','toast','largeDetailCopy','toggleFilters','emptyState','logContent','loadProgress','loadProgressBar','paneSplitter','idFilterError','tagFilterError','searchError','dropHint','filterPanel','largeRegex','rowMenu','largeSize','exportLogs','exportSearch','exportCancel','recentFiles','recentList','clearRecent','recentButton','timeFrom','timeTo','timeFilterError','lowerTabs','searchTab','bookmarkTab','bookmarkPane','bookmarkCount','bookmarkList','copyBookmarks','clearBookmarks','logsPending','reopenFile','errorBar','errorReopen','followFile','messageFilter','messageRegex','messageFilterError','messageLabel'];
+  const ids = ['largeName','largeStatus','largeError','largeCount','largeTotal','largeRows','largeViewport','largeFirst','largeLast','largeJump','largeJumpForm','largeCancel','largeClose','largeColumns','largeRaw','largeHeaders','largeRange','largeDetail','largeDetailTitle','largeDetailText','largeDetailPrevious','largeDetailNext','largeDetailClose','levelFilters','allLevels','errorLevels','resetFilters','searchInput','tagFilter','pidFilter','tidFilter','caseSensitive','includeRaw','recognizeLineNumbers','logsCount','logsRows','logsViewport','logsHeaders','logsFirst','logsLast','logsJump','logsJumpForm','logsRange','largeSearchPane','filterBadge','activeFilters','filterRow','logsSelection','largeSelection','toast','largeDetailCopy','toggleFilters','emptyState','logContent','loadProgress','loadProgressBar','paneSplitter','idFilterError','tagFilterError','searchError','dropHint','filterPanel','largeRegex','rowMenu','largeSize','exportLogs','exportSearch','exportCancel','recentFiles','recentList','clearRecent','recentButton','timeFrom','timeTo','timeFilterError','lowerTabs','searchTab','bookmarkTab','bookmarkPane','bookmarkCount','bookmarkList','copyBookmarks','clearBookmarks','searchPosition','logsPending','reopenFile','errorBar','errorReopen','followFile','messageFilter','messageRegex','messageFilterError','messageLabel'];
   for (const id of ['extrasButton','deviceButton','emptyDevice','captureBar','captureState','captureText','captureHint','captureApp','captureAppStatus','captureStop','captureSave','captureLeftovers','leftoverList','openFile']) ids.push(id);
   const ui = Object.fromEntries(ids.map(id => [id,$(id)]));
   // Device captures (devices.js) mount once the menu and toasts exist.
@@ -423,6 +423,16 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     const go=()=>{followTimer=null;if(!inputPending&&!validationError&&!disposed)void logs.locateLine(line);};
     if(repeat)followTimer=window.setTimeout(go,DETAIL_SETTLE_MS);else go();
   }
+  // A bookmark shown above becomes the upper logs' selected row and the raw
+  // detail's row, as a selected search result does; `focus` also moves
+  // focus there.
+  function showBookmark(line,{repeat=false,focus=false}={}){
+    if(inputPending||validationError||disposed)return;
+    detailOwner=logs;
+    if(focus){if(followTimer!==null)window.clearTimeout(followTimer);followTimer=null;locateAndFocus('logs',logs,line);}
+    else followUpper(line,repeat);
+    void logs.loadDetail(line,0,{delay:repeat?DETAIL_SETTLE_MS:0});markSelections();
+  }
   // The jump box takes the physical row number of the row column; a combined
   // log also takes file:row. A row outside the pane's results selects the
   // next result after it, and the outcome is reported briefly.
@@ -494,6 +504,18 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     ui.bookmarkTab.setAttribute('aria-selected',String(marks));ui.bookmarkTab.tabIndex=marks?0:-1;
     ui.largeSearchPane.hidden=marks||!ui.searchInput.value;ui.bookmarkPane.hidden=!marks;
     const expanded=!ui.largeSearchPane.hidden||marks||!ui.largeDetail.hidden;lowerPane.classList.toggle('expanded',expanded);ui.paneSplitter.hidden=!expanded;
+    if(ready)renderPosition();
+  }
+  // The selected result's place among the results shows in the search box
+  // while the results tab is shown. A step from the box is announced once,
+  // and says when it went around the end of the results.
+  let stepNote=null;
+  function renderPosition(state=search.getState()){
+    const index=lowerTab==='search'&&!inputPending&&!state.closed&&state.selectedLine?viewports.get('large')?.metrics().selectionIndex??null:null;
+    if(stepNote&&(stepNote.queryId!==state.queryId||lowerTab!=='search'||(index!==null&&stepNote.index!==index)))stepNote=null;
+    const note=index===null?null:stepNote,text=index===null?'':`${note?.wrap?`${note.wrap} · `:''}${formatNumber(index+1)}번째 / ${formatNumber(state.count)}${state.queryComplete?'':'+'}건`;
+    if(ui.searchPosition.textContent!==text){ui.searchPosition.setAttribute('aria-live',note?.announce?'polite':'off');ui.searchPosition.textContent=text;}
+    if(note)note.announce=false;
   }
   function selectLowerTab(tab,{focus=false}={}){
     if(tab==='bookmarks'&&!bookmarkCount)return;
@@ -527,13 +549,18 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     const hint=d.encodingRepaired?'Mac OS Roman으로 잘못 읽혀 깨진 UTF-8 문자(예: ÏïàÎÖï → 안녕)를 복원해 표시했습니다. 원본 파일과 내보내기 결과는 바뀌지 않습니다.':'';
     if(ui.largeDetailTitle.title!==hint)ui.largeDetailTitle.title=hint;
   }
-  // Both panes keep a selected row. The pane whose row the detail does not
-  // show draws its selection as secondary unless both select the same row.
-  function markSelections(){
-    const owner=detailOwner,line=owner?.getState().selectedLine;
-    for(const [prefix,pane] of [['logs',logs],['large',search]])ui[prefix+'Rows'].classList.toggle('secondary-selection',!!owner&&owner!==pane&&!!pane.getState().selectedLine&&pane.getState().selectedLine!==line);
+  // Every list keeps its selected row, but one draws it as primary: the list
+  // with keyboard focus (a row menu counts as the list it was opened from),
+  // or else the pane whose row the raw detail shows. The others draw theirs
+  // as secondary, even on the same row, so the keys' target is always clear.
+  // `focused` is the element taking focus, when a list is losing it.
+  function markSelections(focused=document.activeElement){
+    const primary=paneOf(ready&&ui.rowMenu.contains(focused)?menu.opener():focused)??(detailOwner===logs?'logs':detailOwner===search?'large':null);
+    for(const [prefix,rows] of [['logs',ui.logsRows],['large',ui.largeRows],['bookmarks',ui.bookmarkList]])rows.classList.toggle('secondary-selection',primary!==null&&primary!==prefix);
     renderDetailTitle();
   }
+  // Focus leaving with the window keeps the marks until it comes back.
+  for(const list of [ui.logsViewport,ui.largeViewport,ui.bookmarkList]){list.addEventListener('focusin',()=>markSelections());list.addEventListener('focusout',event=>{if(event.relatedTarget||document.hasFocus?.()!==false)markSelections(event.relatedTarget);});}
   function clearDetail(){detailRender=null;ui.largeDetailText.replaceChildren();ui.largeDetail.hidden=true;updateLowerPane();}
   function detail(state,owner){
     if(detailOwner!==owner)return;
@@ -684,7 +711,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     ui.largeLast.textContent='끝';ui.largeJump.title=jumpTitle('검색 결과',logs.getState());ui.largeJump.disabled=inputPending||!state.count||state.closed;
     const empty=inputPending||!state.count||state.closed;ui.largeFirst.disabled=empty||state.viewportStart===0;ui.largeLast.disabled=empty||state.viewportStart>=state.count-1;
     ui.exportSearch.disabled=exporting||inputPending||!ui.searchInput.value||state.closed||!state.queryComplete||!state.count;
-    table(inputPending?{...state,queryComplete:false}:state,'large',search,true);detail(state,search);errors();markSelections();syncUpperMarks(state);
+    table(inputPending?{...state,queryComplete:false}:state,'large',search,true);detail(state,search);errors();markSelections();syncUpperMarks(state);renderPosition(state);
     if(visible&&lowerTab==='search'&&!inputPending&&!state.closed&&state.count)tips?.offer('search');
   }
   // Upper rows mark the results of the search the engine has accepted; new
@@ -728,7 +755,8 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     }catch{validationError=true;inputPending=true;conditionView?.refresh(conds,active,shownFormat);renderSearch(search.getState());}
   }
   const MAX_COPY_ROWS=10000;
-  function activePrefix(){const active=document.activeElement;return ui.largeViewport.contains(active)?'large':ui.logsViewport.contains(active)?'logs':ui.bookmarkList.contains(active)?'bookmarks':null;}
+  function paneOf(node){return !node?null:ui.largeViewport.contains(node)?'large':ui.logsViewport.contains(node)?'logs':ui.bookmarkList.contains(node)?'bookmarks':null;}
+  function activePrefix(){return paneOf(document.activeElement);}
   // The rows at the selected positions of `state`'s query, in list order,
   // read a page at a time. The positions are that query's, so a query
   // replaced between pages rejects rather than mixing in another's rows.
@@ -923,13 +951,18 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     current:()=>{const state=logs.getState();return Number.isSafeInteger(state.selectedLine)?{datasetId:state.datasetId,line:state.selectedLine}:null;}});
   mountRecentFiles({ui,document,native,menu,isGone:()=>pageGone,onError:message=>{inputError=message;errors();},guard:()=>devices.guard(),keep:id=>devices.keep(id),shown:()=>logs.getState().datasetId});
   function repaintRows(){previousRows.clear();renderLogs(logs.getState());renderSearch(search.getState());}
-  const bookmarks=createBookmarks({ui,document,window,notify,mod:MOD,logs,lineCell,jump:jumpTo,openMenu:openBookmarkMenu,isRawMode:()=>rawMode,canNavigate:()=>!disposed&&!inputPending&&!validationError,onChange:()=>{repaintRows();saver.schedule();},onCount:count=>{bookmarkCount=count;updateLowerPane();if(count)tips?.offer('bookmarks');}});
+  const bookmarks=createBookmarks({ui,document,window,notify,mod:MOD,logs,lineCell,onReveal:showBookmark,offerUndo:undoBookmarks,openMenu:openBookmarkMenu,isRawMode:()=>rawMode,onChange:()=>{repaintRows();saver.schedule();},onCount:count=>{bookmarkCount=count;updateLowerPane();if(count)tips?.offer('bookmarks');}});
   const saver=createWorkSaver({invoke:(command,args)=>native.core.invoke(command,args),capture:captureWork,setTimer:(fn,ms)=>window.setTimeout(fn,ms),clearTimer:id=>window.clearTimeout(id)});
   saved=mountSavedFilters({native,menu,notify,document,read:()=>fieldsOf(currentFilters()),write:writeFields,changed:()=>saver.schedule(),format:()=>shownFormat,isGone:()=>pageGone});
   conditionView=mountConditions({document,lists:{include:$('showList'),exclude:$('hideList')},hints:{include:$('showHint'),exclude:$('hideHint')},adders:{include:$('addShow'),exclude:$('addHide')},editor:$('condEditor'),rowless:()=>rowless(),problem:rejectedProblem,
     onSelect:(list,index)=>{selectCondition(list,index);ui.tagFilter.focus();},onToggle:toggleCondition,onRemove:dropCondition,
     onAdd:list=>{if(addCondition(list)){ui.tagFilter.focus();apply();}}});
   buildConditions();showOptionalFields();
+  // A removal undone brings back the bookmarks tab it was made from.
+  function undoBookmarks(message,undo){
+    const shown=lowerTab==='bookmarks';
+    offerUndo(message,()=>{undo();if(shown)selectLowerTab('bookmarks');});
+  }
   // Marks the pane's selected rows, reading those not in view; rows all
   // marked already are unmarked. The bookmark list unmarks its selection.
   function toggleBookmarks(prefix=activePrefix()??(detailOwner===search?'large':'logs')){
@@ -1112,14 +1145,18 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     });
   }
   // Enter / Shift+Enter in the search box walk the found results and reveal
-  // each one in the upper logs; typing focus stays in the search box.
+  // each one in the upper logs; typing focus stays in the search box. The
+  // results tab comes forward first, so the walk is never through hidden rows.
   function stepSearchResult(step,event){
+    selectLowerTab('search');
     const state=search.getState(),view=viewports.get('large');
     if(!view||!state.count||state.closed)return;
     event.preventDefault();
     const current=state.selectedLine?view.metrics().selectionIndex:null;
     const next=current===null?(step>0?0:state.count-1):(current+step+state.count)%state.count;
-    view.selectIndex(next,{force:true});
+    const wrap=current===null||state.count<2?'':step>0&&next<=current?'다시 처음부터':step<0&&next>=current?'다시 끝부터':'';
+    stepNote={queryId:state.queryId,index:next,wrap,announce:true};
+    view.selectIndex(next,{force:true});renderPosition();
   }
   // A saved filter replaces the filter's conditions; the search and reading options stay.
   function writeFields(fields){setConditions(fields);ui.includeRaw.checked=fields.includeRaw;apply();}
@@ -1332,7 +1369,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     // In the search results and the bookmarks ⌘/Ctrl+A selects every row; in
     // the upper logs it does nothing rather than select the page's text.
     if(command&&key==='a'&&!disposed&&!isEditableTarget(event.target)&&activePrefix()){event.preventDefault();if(activePrefix()==='bookmarks')bookmarks.selectAll();else selectAllRows(activePrefix());return;}
-    if(event.key==='F2'&&!disposed&&!event.altKey&&!event.metaKey&&!event.ctrlKey){event.preventDefault();bookmarks.step(event.shiftKey?-1:1);return;}
+    if(event.key==='F2'&&!disposed&&!event.altKey&&!event.metaKey&&!event.ctrlKey){event.preventDefault();bookmarks.step(event.shiftKey?-1:1,{repeat:event.repeat===true});return;}
     if(disposed)return;if(event.key==='/'&&!['INPUT','TEXTAREA'].includes(document.activeElement?.tagName)){event.preventDefault();selectLowerTab('search');ui.searchInput.focus();}
     // The filter panel and popup menus claim Escape first; one press closes one
     // thing: the raw detail, else a pinned panel (not while editing elsewhere),

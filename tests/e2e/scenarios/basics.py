@@ -293,6 +293,15 @@ document.activeElement.dispatchEvent(event);return {before:before.defaultPrevent
         app.key('Enter', shift=True, target='searchInput')
         s3 = app.wait(lambda: (lambda v: v['search'] == s1['search'] and v['logs'] == s1['search'] and v)(js(sel)), what='previous result')
         check('Enter/Shift+Enter walk results, reveal them above and keep typing focus', s1['active'] == s2['active'] == s3['active'] == 'searchInput', [s1, s2, s3])
+        position = lambda: js("const p=document.getElementById('searchPosition');return {text:p.textContent,live:p.getAttribute('aria-live'),shown:p.getBoundingClientRect().width>0};")
+        p1 = position()
+        check('the search box shows the result it steps to, announced', p1['text'] == f"1번째 / {app.text('largeCount')}" and p1['live'] == 'polite' and p1['shown'], p1)
+        app.key('Enter', shift=True, target='searchInput')
+        p2 = app.wait(lambda: (lambda v: v['text'].startswith('다시 끝부터') and v)(position()), what='wrap to the last result')
+        app.key('Enter', target='searchInput')
+        p3 = app.wait(lambda: (lambda v: v['text'].startswith('다시 처음부터') and v)(position()), what='wrap to the first result')
+        check('a step around the end of the results says so', p2['text'] == f"다시 끝부터 · {app.text('largeCount').removesuffix('건')}번째 / {app.text('largeCount')}" and p3['text'] == f"다시 처음부터 · 1번째 / {app.text('largeCount')}", [p2, p3])
+        app.capture('06c-search-position')
         # Clicking a result always follows it above, as a bookmark does, and keeps focus in the results.
         other = js("return [...document.querySelectorAll('#largeRows .log-row')].map(r=>r.dataset.lineNumber).find(n=>n!==arguments[0]);", s1['search'])
         app.click_row(other, pane='largeRows')
@@ -300,10 +309,17 @@ document.activeElement.dispatchEvent(event);return {before:before.defaultPrevent
         s4['inResults'] = js("return document.getElementById('largeViewport').contains(document.activeElement);")
         s4['toggle'] = js("return !!document.getElementById('followSearch');")
         check('clicking a result follows it above with no toggle and keeps focus in the results', s4['inResults'] and not s4['toggle'], s4)
+        s4 = js("const c=id=>document.getElementById(id).classList.contains('secondary-selection');return {upper:c('logsRows'),lower:c('largeRows')};")
+        check('while the results have focus the same row above is secondary', s4['upper'] and not s4['lower'], s4)
         # Enter on that result moves focus to its row above, though the row is already shown.
         app.key('Enter')
         s5 = app.wait(lambda: (lambda v: v['line'] == other and v)(js("const a=document.activeElement;return {line:document.getElementById('logsViewport').contains(a)?a.dataset.lineNumber:null};")), what='focus on the row above')
         check('Enter on a followed result moves focus to its row above', s5['line'] == other, s5)
+        # The list with the keys draws its selection as primary, the other as secondary, even on the same row.
+        panes = "const c=id=>document.getElementById(id).classList.contains('secondary-selection');return {upper:c('logsRows'),lower:c('largeRows')};"
+        a = app.wait(lambda: (lambda v: not v['upper'] and v['lower'] and v)(js(panes)), what='upper pane primary')
+        check('focus moved above makes the row above primary and the result secondary', a, a)
+        app.capture('06b-upper-focused')
         # Back on the first result, so the upper logs are at their start again for the steps below.
         app.click_row(s1['search'], pane='largeRows')
         app.wait(lambda: (lambda v: v['search'] == s1['search'] and v['logs'] == s1['search'] and v)(js(sel)), what='first result again')

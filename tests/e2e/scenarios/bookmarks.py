@@ -1,9 +1,9 @@
 """Bookmarks in the lower-region tab: adding with Cmd+B, the tab and its list,
 selecting in it (click, Shift, Cmd, drag, Cmd+A) with copy, Delete and the
 row menu,
-revealing, keyboard and F2 stepping, switching with search, raw view,
-removing, copying, clearing, and restoring them with the file's saved work
-(ui.log)."""
+revealing with the raw detail, keyboard and F2 stepping, switching with
+search, raw view, removing, copying, clearing and undoing it, and restoring
+them with the file's saved work (ui.log)."""
 import time
 
 import fixtures
@@ -44,13 +44,29 @@ def run(ctx):
         check('the tab opens the list in the resizable lower region and focuses it', s['expanded'] and s['items'] == ['2', '7', '8', '9'] and s['focus'] == '2', s)
         cols = js("const g=id=>getComputedStyle(document.getElementById(id)).gridTemplateColumns;return {logs:g('logsHeaders'),marks:g('bookmarkHeaders'),row:getComputedStyle(document.querySelector('#bookmarkList .bookmark-row')).gridTemplateColumns,cells:[...document.querySelector('#bookmarkList [data-line-number=\"7\"]').children].map(e=>e.textContent)};")
         check('bookmark rows use the log columns and show every field', cols['logs'] == cols['marks'] == cols['row'] and cols['cells'][2:6] == ['2983', '4241', 'Error', 'ActivityManager'], cols)
+        tools = js("const d=document.querySelector('.bookmark-tools .tool-divider'),c=document.getElementById('clearBookmarks'),p=document.getElementById('copyBookmarks');"
+                   "return {divider:d&&getComputedStyle(d).width,between:!!d&&p.nextElementSibling===d&&d.nextElementSibling===c,clear:getComputedStyle(c).color,copy:getComputedStyle(p).color};")
+        check('모두 해제 stands apart from 모두 복사 behind a divider, in the warning colour', tools['divider'] == '1px' and tools['between'] and tools['clear'] != tools['copy'], tools)
         app.capture('02-bookmark-tab')
         js("document.querySelectorAll('#bookmarkList .bookmark-row')[2].click();return true;")
         s = app.wait(lambda: (lambda v: v['upper'] == '8' and v)(st()), what='reveal 8')
         check('clicking a bookmark reveals it above while the list stays open and focused', s['pane'] and s['current'] == '8' and s['focus'] == '8', s)
+        d = app.wait(lambda: (lambda v: v['text'] == lines[7] and v)(js("const c=id=>document.getElementById(id).classList.contains('secondary-selection');"
+                     "return {title:document.getElementById('largeDetailTitle').textContent,text:document.getElementById('largeDetailText').textContent,list:c('bookmarkList'),upper:c('logsRows'),"
+                     "shadow:getComputedStyle(document.querySelector('#logsRows .selected-log-row')).boxShadow,"
+                     "outline:(()=>{const p=document.createElement('i');p.style.color='var(--row-selected-2-border)';document.body.append(p);const c=getComputedStyle(p).color;p.remove();return c;})()};")), what='bookmark detail')
+        check('the raw detail shows the bookmark; the focused list draws it as primary and the row above as secondary',
+              d['title'] == '8행 원문' and not d['list'] and d['upper'] and d['shadow'] == f"{d['outline']} 0px 0px 0px 1px inset", d)
+        app.capture('02b-bookmark-detail')
         app.key('ArrowDown')
         s = app.wait(lambda: (lambda v: v['upper'] == '9' and v)(st()), what='reveal 9')
         check('arrow keys walk the list and reveal each bookmark', s['focus'] == '9' and s['current'] == '9', s)
+        app.key('F2')
+        s = app.wait(lambda: (lambda v: v['upper'] == '2' and v)(st()), what='F2 to 2')
+        check('F2 in the list moves its focus with the cursor', s['current'] == '2' and s['focus'] == '2', s)
+        app.key('F2', shift=True)
+        s = app.wait(lambda: (lambda v: v['upper'] == '9' and v)(st()), what='Shift+F2 to 9')
+        check('Shift+F2 in the list moves its focus back', s['current'] == '9' and s['focus'] == '9', s)
         app.key('Enter')
         e = app.wait(lambda: (lambda v: v['line'] == '9' and v)(js("const a=document.activeElement;return {line:document.getElementById('logsViewport').contains(a)?a.dataset.lineNumber:null};")), what='focus on bookmark 9 above')
         check('Enter on a bookmark moves focus to its row above', e['line'] == '9', e)
@@ -169,6 +185,12 @@ def run(ctx):
         s = st()
         check('clearing every bookmark hides the tab, shows the search again and returns focus to the logs',
               not s['tabs'] and not s['pane'] and s['search'] and js("return document.getElementById('logsViewport').contains(document.activeElement)"), s)
+        app.capture('05-clear-undo')
+        undo = js("const b=document.querySelector('#toast .toast-action');b?.click();return b?.textContent??null;")
+        s = app.wait(lambda: (lambda v: v['tabs'] and v)(st()), what='bookmarks back')
+        check('실행 취소 in the toast brings the bookmarks and their tab back', undo == '실행 취소' and s['items'] == ['2'] and s['pane'] and s['label'] == '북마크 1', s)
+        app.click('clearBookmarks')
+        app.wait(lambda: not st()['tabs'], what='bookmarks cleared again')
         app.click_row(5)
         app.key('b', meta=True)
         time.sleep(.2)

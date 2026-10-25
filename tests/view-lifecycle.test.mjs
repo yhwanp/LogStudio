@@ -1448,7 +1448,7 @@ test('the pane whose row the detail does not show keeps a secondary selection',a
   const upper=classes(r.get('logsRows')),lower=classes(r.get('largeRows'));
   r.get('searchInput').value='COMMON';await r.get('searchInput').dispatch('input');await r.get('searchInput').dispatch('keydown',{key:'Enter',preventDefault(){}});await settle();
   await r.get('largeRows').children[3].dispatch('click',{detail:1});await settle();
-  assert.equal(r.controller.logs.getState().selectedLine,4,'followed');assert.equal(upper.has('secondary-selection'),false,'the same row is not ambiguous');
+  assert.equal(r.controller.logs.getState().selectedLine,4,'followed');assert.equal(upper.has('secondary-selection'),true,'even the same row is secondary in the pane without focus');
   assert.equal(r.get('largeDetailTitle').textContent,'4행 원문');
   await r.get('logsRows').children[8].dispatch('click',{detail:1});await settle();
   assert.equal(lower.has('secondary-selection'),true);assert.equal(upper.has('secondary-selection'),false);assert.equal(r.get('largeDetailTitle').textContent,'로그 · 9행 원문');
@@ -1553,4 +1553,176 @@ test('a message condition comes from a row, the field or its .* switch, and a re
   // Its chip clears the message and its mode.
   await chipNodes(r.get('activeFilters'))[0].dispatch('click');await settle();
   assert.equal(field.value,'');assert.equal(r.get('messageRegex').attributes['aria-pressed'],'false');
+});
+
+// The lower region: bookmarks and search results with the upper logs.
+const lineDetail=b=>({text:`line ${b.lineNumber}`,startByte:0,nextByte:8,totalBytes:8,complete:true,highlights:[]});
+async function markRows(r,lines){
+  const row=line=>r.get('logsRows').children.find(n=>n.dataset.lineNumber===String(line));
+  for(const line of lines){await row(line).dispatch('click',{detail:1});await settle();r.handlers.get('keydown')({key:'b',ctrlKey:true,target:new Element(),preventDefault(){}});await settle();}
+}
+async function searchFor(r,text){r.get('searchInput').value=text;await r.get('searchInput').dispatch('input');await r.get('searchInput').dispatch('keydown',{key:'Enter',preventDefault(){}});await settle();}
+
+test('F2 in the bookmark list moves focus with the cursor, so Enter moves to the bookmark it showed',async t=>{
+  const rows=Array.from({length:30},(_,i)=>({lineNumber:i+1,kind:'raw',raw:`raw ${i+1}`}));
+  const r=await rig({rows,detail:lineDetail});t.after(()=>r.controller.close());
+  const key=event=>r.handlers.get('keydown')({preventDefault(){},target:r.document.activeElement,...event});
+  await markRows(r,[3,8,12]);
+  await r.get('bookmarkTab').dispatch('click');await settle();
+  const marks=()=>r.get('bookmarkList').children,focused=()=>r.document.activeElement?.dataset?.lineNumber;
+  await marks()[0].dispatch('keydown',{key:'ArrowDown',target:marks()[0],preventDefault(){}});await settle();
+  assert.equal(focused(),'8');
+  key({key:'F2'});await settle();
+  assert.equal(r.controller.logs.getState().selectedLine,12);assert.equal(focused(),'12','focus follows the cursor in the list');
+  const active=r.document.activeElement;await active.dispatch('keydown',{key:'Enter',target:active,preventDefault(){}});await settle();
+  assert.equal(r.get('logsViewport').contains(r.document.activeElement),true);assert.equal(focused(),'12','Enter moves to the bookmark F2 showed');
+  key({key:'F2'});await settle();
+  assert.equal(r.controller.logs.getState().selectedLine,3,'F2 outside the list wraps to the first bookmark');
+  assert.equal(r.get('logsViewport').contains(r.document.activeElement),true,'and leaves focus in the upper logs');
+  const reads=()=>r.calls.filter(c=>c.args.request?.action==='record').length,before=reads();
+  key({key:'F2',repeat:true});await settle();key({key:'F2',repeat:true});await settle();
+  assert.equal(reads(),before,'a held F2 reads the detail only where it settles');
+  for(const [id,timer] of [...r.timers])if(timer.ms===120){r.timers.delete(id);timer.fn();}
+  await new Promise(resolve=>setTimeout(resolve,200));await settle();
+  assert.equal(reads(),before+1);assert.equal(r.get('largeDetailText').textContent,'line 12');assert.equal(r.controller.logs.getState().selectedLine,12);
+});
+
+test('a bookmark shown above becomes the raw detail and the primary selection, as a search result does',async t=>{
+  const rows=Array.from({length:30},(_,i)=>({lineNumber:i+1,kind:'raw',raw:`COMMON ${i+1}`}));
+  const r=await rig({rows,total:30,detail:lineDetail});t.after(()=>r.controller.close());
+  const upper=classes(r.get('logsRows')),lower=classes(r.get('largeRows'));
+  const key=event=>r.handlers.get('keydown')({preventDefault(){},target:r.document.activeElement,...event});
+  await markRows(r,[3,8,12]);
+  await searchFor(r,'COMMON');
+  await r.get('largeRows').children[5].dispatch('click',{detail:1});await settle();
+  assert.equal(r.get('largeDetailText').textContent,'line 6');
+  r.get('searchInput').focus();
+  key({key:'F2'});await settle();
+  assert.equal(r.controller.logs.getState().selectedLine,8);
+  assert.equal(r.get('largeDetailText').textContent,'line 8','the detail shows the bookmark, not the search result');
+  assert.equal(r.get('largeDetailTitle').textContent,'로그 · 8행 원문');
+  assert.equal(upper.has('secondary-selection'),false,'the bookmark row above is the primary selection');assert.equal(lower.has('secondary-selection'),true);
+  await r.get('bookmarkTab').dispatch('click');await settle();
+  const marks=()=>r.get('bookmarkList').children;
+  await marks()[2].dispatch('click',{detail:1});await settle();
+  assert.equal(r.controller.logs.getState().selectedLine,12);assert.equal(r.get('largeDetailText').textContent,'line 12','a click shows it too');
+  // A held arrow key reads the detail only where the selection settles.
+  const reads=()=>r.calls.filter(c=>c.args.request?.action==='record').length,before=reads();
+  await marks()[2].dispatch('keydown',{key:'ArrowUp',repeat:true,target:marks()[2],preventDefault(){}});await settle();
+  assert.equal(reads(),before);
+  for(const [id,timer] of [...r.timers])if(timer.ms===120){r.timers.delete(id);timer.fn();}
+  await new Promise(resolve=>setTimeout(resolve,200));await settle();
+  assert.equal(r.get('largeDetailText').textContent,'line 8');assert.equal(r.controller.logs.getState().selectedLine,8);
+});
+
+test('the list with keyboard focus draws its selection as primary and the other panes as secondary',async t=>{
+  const rows=Array.from({length:30},(_,i)=>({lineNumber:i+1,kind:'raw',raw:`COMMON ${i+1}`}));
+  const r=await rig({rows,total:30,detail:lineDetail});t.after(()=>r.controller.close());
+  const upper=classes(r.get('logsRows')),lower=classes(r.get('largeRows')),marked=classes(r.get('bookmarkList'));
+  await searchFor(r,'COMMON');
+  const result=r.get('largeRows').children[3];await result.dispatch('click',{detail:1});await settle();
+  assert.equal(r.get('largeViewport').contains(r.document.activeElement),true);
+  assert.equal(r.controller.logs.getState().selectedLine,4,'the same row is shown above');
+  assert.equal(upper.has('secondary-selection'),true,'the row above is secondary while the results have focus');assert.equal(lower.has('secondary-selection'),false);
+  await result.dispatch('keydown',{key:'Enter',preventDefault(){}});await settle();
+  assert.equal(r.get('logsViewport').contains(r.document.activeElement),true);
+  await r.get('largeViewport').dispatch('focusout',{relatedTarget:r.document.activeElement});await r.get('logsViewport').dispatch('focusin',{});
+  assert.equal(upper.has('secondary-selection'),false,'focus moved above, so the row above is primary');assert.equal(lower.has('secondary-selection'),true);
+  await r.get('logsViewport').dispatch('focusout',{relatedTarget:r.get('searchInput')});r.get('searchInput').focus();
+  assert.equal(upper.has('secondary-selection'),true,'outside the lists the pane whose row the detail shows is primary');assert.equal(lower.has('secondary-selection'),false);
+  r.handlers.get('keydown')({key:'b',ctrlKey:true,target:new Element(),preventDefault(){}});await settle();
+  await r.get('bookmarkTab').dispatch('click');await settle();
+  await r.get('bookmarkList').children[0].dispatch('click',{detail:1});await settle();
+  assert.equal(r.get('bookmarkList').contains(r.document.activeElement),true);
+  assert.equal(marked.has('secondary-selection'),false,'the focused bookmark list is primary');assert.equal(upper.has('secondary-selection'),true);
+  const first=r.get('bookmarkList').children[0];r.get('rowMenu').hidden=true;
+  await first.dispatch('contextmenu',{preventDefault(){},clientX:0,clientY:0});
+  assert.equal(r.get('rowMenu').contains(r.document.activeElement),true,'the menu takes focus');
+  await r.get('bookmarkList').dispatch('focusout',{relatedTarget:r.document.activeElement});
+  assert.equal(marked.has('secondary-selection'),false,'the list a menu was opened from stays primary');assert.equal(upper.has('secondary-selection'),true);
+  first.focus();await r.get('bookmarkList').dispatch('focusin',{});
+  r.document.hasFocus=()=>false;await r.get('bookmarkList').dispatch('focusout',{relatedTarget:null});
+  assert.equal(marked.has('secondary-selection'),false,'the window going inactive changes nothing');
+  r.document.hasFocus=()=>true;await r.get('bookmarkList').dispatch('focusout',{relatedTarget:null});
+  assert.equal(marked.has('secondary-selection'),true,'focus leaving for no element falls back to the detail');
+});
+
+test('Enter in the search box brings the results tab forward and says which result it shows and when it wraps',async t=>{
+  const rows=Array.from({length:30},(_,i)=>({lineNumber:i+1,kind:'raw',raw:`COMMON ${i+1}`}));
+  const r=await rig({rows,total:30,detail:lineDetail});t.after(()=>r.controller.close());
+  await markRows(r,[3]);
+  await searchFor(r,'COMMON');
+  const input=r.get('searchInput'),position=r.get('searchPosition'),enter=async(shiftKey=false)=>{await input.dispatch('keydown',{key:'Enter',shiftKey,preventDefault(){}});await settle();};
+  await r.get('bookmarkTab').dispatch('click');await settle();
+  assert.equal(r.get('largeSearchPane').hidden,true);
+  input.focus();await enter();
+  assert.equal(r.get('largeSearchPane').hidden,false,'the results tab comes forward');assert.equal(r.get('bookmarkPane').hidden,true);
+  assert.equal(r.get('searchTab').attributes['aria-selected'],'true');assert.equal(r.document.activeElement,input,'typing focus stays');
+  assert.equal(r.controller.getState().selectedLine,1);
+  assert.equal(position.textContent,'1번째 / 30건');assert.equal(position.attributes['aria-live'],'polite','a step is announced');
+  await enter(true);
+  assert.equal(r.controller.getState().selectedLine,30);assert.equal(position.textContent,'다시 끝부터 · 30번째 / 30건');
+  await r.get('bookmarkTab').dispatch('click');await settle();await r.get('searchTab').dispatch('click');await settle();
+  assert.equal(position.textContent,'30번째 / 30건','a wrap note is said once');
+  await enter();
+  assert.equal(r.controller.getState().selectedLine,1);assert.equal(position.textContent,'다시 처음부터 · 1번째 / 30건');
+  await enter();assert.equal(position.textContent,'2번째 / 30건');
+  await r.get('largeRows').children[5].dispatch('click',{detail:1});await settle();
+  assert.equal(position.textContent,'6번째 / 30건','a click shows its place too');assert.equal(position.attributes['aria-live'],'off','without announcing it');
+  await r.get('bookmarkTab').dispatch('click');await settle();
+  assert.equal(position.textContent,'','nothing is said of results the bookmarks tab hides');
+  await r.get('searchTab').dispatch('click');await settle();assert.equal(position.textContent,'6번째 / 30건');
+  input.value='COMMONX';await input.dispatch('input');
+  assert.equal(position.textContent,'','a new search clears it');
+});
+
+test('removed bookmarks come back from the toast, and 모두 해제 stands apart from 모두 복사',async t=>{
+  const rows=Array.from({length:30},(_,i)=>({lineNumber:i+1,kind:'raw',raw:`raw ${i+1}`}));
+  const r=await rig({rows,detail:lineDetail});t.after(()=>r.controller.close());
+  const listed=()=>r.get('bookmarkList').children.map(n=>Number(n.dataset.lineNumber)),count=()=>r.get('bookmarkTab').textContent;
+  const undoButton=()=>r.get('toast').children.find(n=>n.className==='toast-action');
+  const undo=async()=>{const button=undoButton();assert.equal(button?.textContent,'실행 취소');await button.dispatch('click');await settle();};
+  await markRows(r,[3,8,12,20]);
+  assert.equal(undoButton(),undefined,'adding offers no undo');
+  await markRows(r,[8]);
+  assert.match(r.get('toast').textContent,/북마크 1개를 해제했습니다/);assert.equal(count(),'북마크 3');
+  await undo();assert.equal(count(),'북마크 4','Ctrl+B on a marked row is undone');
+  await r.get('bookmarkTab').dispatch('click');await settle();
+  const g=gestures(r,r.get('bookmarkList'),()=>r.get('bookmarkList').children);
+  await g.press(8);await g.up(g.y(8));await g.press(12,{shiftKey:true});await g.up(g.y(12));
+  await r.document.activeElement.dispatch('keydown',{key:'Delete',target:r.document.activeElement,preventDefault(){}});await settle();
+  assert.deepEqual(listed(),[3,20]);
+  assert.equal(r.document.activeElement?.dataset?.lineNumber,'20');
+  await undo();assert.deepEqual(listed(),[3,8,12,20],'Delete is undone');
+  assert.match(r.get('bookmarkList').children[2].className,/selected-log-row/,'with the cursor where it was');
+  assert.equal(r.document.activeElement?.dataset?.lineNumber,'12','and focus with it');
+  await g.node(20).children.at(-1).dispatch('click');await settle();
+  assert.deepEqual(listed(),[3,8,12]);assert.match(r.get('toast').textContent,/북마크 1개를 해제했습니다/,'the × button says so too');
+  await undo();assert.deepEqual(listed(),[3,8,12,20]);
+  await r.get('clearBookmarks').dispatch('click');await settle();
+  assert.equal(r.get('lowerTabs').hidden,true);assert.match(r.get('toast').textContent,/북마크를 모두 해제했습니다/);
+  await undo();
+  assert.equal(count(),'북마크 4');assert.equal(r.get('bookmarkPane').hidden,false,'the bookmarks tab comes back');assert.deepEqual(listed(),[3,8,12,20]);
+  await r.get('clearBookmarks').dispatch('click');await settle();
+  const late=undoButton();r.source(2,true);await r.emit({status:'opened',datasetId:2});await settle();
+  await late.dispatch('click');await settle();
+  assert.equal(r.get('lowerTabs').hidden,true,'an undo never brings marks into another log');
+  const html=await readFile(new URL('../dist/index.html',import.meta.url),'utf8');
+  assert.match(html,/>모두 복사<\/button><span class="tool-divider" aria-hidden="true"><\/span><button id="clearBookmarks" class="text-button danger-text"/,'a divider and a warning colour set 모두 해제 apart');
+});
+
+test('an undo leaves a row marked again meanwhile alone, so a full list takes it back',async t=>{
+  const rows=Array.from({length:1000},(_,i)=>({lineNumber:i+1,kind:'raw',raw:`raw ${i+1}`}));
+  const r=await rig({rows,total:1000,detail:lineDetail});t.after(()=>r.controller.close());
+  const row=line=>r.get('logsRows').children.find(n=>n.dataset.lineNumber===String(line)),key=event=>r.handlers.get('keydown')({preventDefault(){},target:new Element(),...event});
+  await row(1).dispatch('click',{detail:1});await settle();
+  await r.get('logsViewport').dispatch('keydown',{key:'End',shiftKey:true,target:r.document.activeElement,preventDefault(){}});await settle();
+  key({key:'b',ctrlKey:true});await settle();
+  assert.equal(r.get('bookmarkTab').textContent,'북마크 1,000');
+  await r.get('logsViewport').dispatch('keydown',{key:'Home',target:r.document.activeElement,preventDefault(){}});await settle();
+  await row(5).dispatch('click',{detail:1});await settle();key({key:'b',ctrlKey:true});await settle();
+  const undo=r.get('toast').children.find(n=>n.className==='toast-action');assert.equal(r.get('bookmarkTab').textContent,'북마크 999');
+  key({key:'b',ctrlKey:true});await settle();assert.equal(r.get('bookmarkTab').textContent,'북마크 1,000','marked again');
+  await undo.dispatch('click');await settle();
+  assert.equal(r.get('bookmarkTab').textContent,'북마크 1,000');assert.doesNotMatch(r.get('toast').textContent,/최대/,'the row already back is not counted twice');
 });
