@@ -25,7 +25,7 @@ target/release/field-filters /tmp/a-512.log current 2
 
 | 바이너리 | 인자 | 측정 항목 |
 | --- | --- | --- |
-| `field-filters` | `<path> <label> [reps]` | 인덱싱, 분석, 레벨·태그·PID·TID·제외·시간 필터 쿼리 완료 시간 및 중간 페이지 조회. 필드 메타데이터 표 사용 여부별 교차 측정 및 결과 일치 검증. `PERF_FILTERS=wide`는 `wide` 입력용 필터, `conditions`는 다중 포함·제외 조건, `times`는 시간 조건 1–32개 측정(힙 통계는 macOS 전용) |
+| `field-filters` | `<path> <label> [reps]` | 인덱싱, 분석, 레벨·태그·PID·TID·제외·시간 필터, 빈출 검색어 + 레벨 E 복합 필터(검색에 일치한 행마다 파싱)의 쿼리 완료 시간 및 중간 페이지 조회. 필드 메타데이터 표 사용 여부별 교차 측정 및 결과 일치 검증. `PERF_FILTERS=wide`는 `wide` 입력용 필터, `conditions`는 다중 포함·제외 조건, `times`는 시간 조건 1–32개 측정(힙 통계는 macOS 전용) |
 | `dlt` | `<path> [label]` | DLT 파일 또는 동일 내용 텍스트 로그(`dlt-gen --twin`)를 엔진 API로 열어 첫 페이지·인덱싱·분석, 레벨·APID·ECU 제외·1분 시간 필터, 희귀 문자열·빈출 단어·정규식 검색(첫 결과 및 완료, 각 3회), 중간 페이지, `locate`, 검색 취소 시간 측정 |
 | `dlt-render` | `<path.dlt> [rounds]` | 첫 256 MiB를 128 KiB 이하 블록으로 나누어 단일 스레드에서 단위 분할·행 렌더링(시스템 시간대)·필드 파싱 속도 측정(입력 MB/s, 행/s, 블록당 렌더링 p50·p99, 텍스트/원본 크기 비율) |
 | `field-collect` | `<path> [rounds]` | 첫 256 MiB 대상 단일 스레드 분석 패스의 행당 처리 비용(필드 수집 유무 비교) |

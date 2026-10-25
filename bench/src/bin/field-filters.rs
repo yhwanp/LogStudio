@@ -149,6 +149,17 @@ fn filters() -> Vec<(&'static str, Value)> {
             "tag rare + query",
             json!({"tag":"RareFieldTag","query":"field row"}),
         ),
+        // A common query parses each row it finds: none of the iOS rows with
+        // `한글 텍스트` is an E row, while E rows are a fifth of those with
+        // `some log message`.
+        (
+            "level E + query of I rows (reads)",
+            json!({"levels":["E"],"query":"한글 텍스트"}),
+        ),
+        (
+            "level E + query of E rows (reads)",
+            json!({"levels":["E"],"query":"some log message"}),
+        ),
         (
             "pid rare + time",
             json!({"pid":"4242","timeFrom":"12:07:00","timeTo":"12:07:59"}),

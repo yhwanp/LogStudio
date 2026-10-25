@@ -76,6 +76,22 @@ const TOKENS: &[&str] = &[
     "e",
     "\u{85}",
     "\u{200b}",
+    "\x1b[38;5;196m",
+    "\x1b[0m",
+    "\x1b[",
+    "\x1b",
+    "m",
+    "+0900",
+    "1718709841.123",
+    "] <",
+    "<Notice>:",
+    "<Error>",
+    ">:",
+    "App(Lib)[12]",
+    "Oct",
+    "Oct 24 09:00:00",
+    "2983: 4241",
+    " ]",
 ];
 
 struct Rng(u64);
@@ -95,10 +111,14 @@ impl Rng {
 fn row(rng: &mut Rng) -> String {
     let mut s = String::new();
     // Mostly plausible rows: start with a stamp or a number half the time.
-    match rng.below(6) {
+    match rng.below(11) {
         0 => s.push_str("09-21 12:07:30.386 "),
         1 => s.push_str("2024-09-21 12:07:30.386 "),
         2 => s.push_str("12 09-21 12:07:30.386 "),
+        3 => s.push_str("\x1b[38;5;40m09-21 12:07:30.386 "),
+        4 => s.push_str("1718709841.123 "),
+        5 => s.push_str("[ 06-18 19:24:01.123 "),
+        6 => s.push_str("Oct 24 09:00:00 iPhone "),
         _ => {}
     }
     for _ in 0..rng.below(14) {
@@ -129,6 +149,43 @@ fn random_rows_never_panic() {
         let raw = row(&mut rng);
         exercise(&raw, i);
     }
+}
+
+/// Each thread searches with its own regex caches and capture slots, so
+/// rows parsed on several threads at once, in any order, keep the fields
+/// they have on one thread.
+#[test]
+fn threads_parse_rows_as_one_thread_does() {
+    let mut rng = Rng(0x2545_F491_4F6C_DD1D);
+    let mut rows: Vec<String> = (0..20_000).map(|_| row(&mut rng)).collect();
+    rows.extend(
+        [
+            "09-21 12:07:30.386  1234  5678 I Tag: message",
+            "2026-09-30 21:55:53.776261 Runner[7:9] [INFO] [SDK_UI] [Gallery] body",
+            "2026-09-30 21:55:53.776 R[1:2] [demo][Render][INFO] [View] v",
+            "0001 09-21 12:07:30.386 007 009 I Tag: numbered",
+            "06-18 19:24:01.123 D/Tag(10123: 2983): uid time",
+            "09-21 12:07:30.386 u0_a12: 1234 5678 I Tag: uid",
+            "2026-06-18 19:24:01.123  2983-4241  Tag  com.example.app  D  msg",
+            "\x1b[38;5;196m09-21 12:07:30.386 +0900  1  2 E Tag: color zone\x1b[0m",
+            "         1718709841.123  2983  4241 E Tag: epoch",
+            "[ 06-18 19:24:01.123  1000: 2983: 4241 D/Tag      ]",
+            "Oct 24 09:00:00 iPhone MyApp(Foundation)[123] <Notice>: syslog",
+        ]
+        .map(String::from),
+    );
+    let fields = |raw: &str| [false, true].map(|r| parse_line(raw, 1, r).json(usize::MAX));
+    let want: Vec<_> = rows.iter().map(|raw| fields(raw)).collect();
+    std::thread::scope(|s| {
+        for k in 0..4 {
+            let (rows, want) = (&rows, &want);
+            s.spawn(move || {
+                for i in (0..rows.len()).map(|i| (i * 7 + k * 1009) % rows.len()) {
+                    assert_eq!(fields(&rows[i]), want[i], "{:?}", rows[i]);
+                }
+            });
+        }
+    });
 }
 
 #[test]

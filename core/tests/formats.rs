@@ -1,7 +1,9 @@
-//! Android formats tried after `threadtime` and iOS: `-v time` (with the
-//! year, fraction and `uid` options), `threadtime` with `uid`, Android
-//! Studio's Logcat window and `brief`. Rows the earlier formats parse keep
-//! their fields; see also `parser.rs` and the golden fixtures.
+//! Formats tried after `threadtime` and iOS: `-v time` (with the year,
+//! fraction and `uid` options), `threadtime` with `uid`, Android Studio's
+//! Logcat window, `brief`, the zone, epoch and monotonic stamps, `-v long`
+//! headers and iPhone syslog rows, and the color codes of `-v color` around
+//! any of them. Rows the earlier formats parse keep their fields; see also
+//! `parser.rs` and the golden fixtures.
 use logstudio_core::{
     dataset::{Dataset, Query},
     encoding,
@@ -284,7 +286,6 @@ fn near_misses_stay_raw() {
         "06-18 19:24:01.1234567 D/Tag( 1): seven fraction digits",
         "06-18 19:24:01.12345678 D/Tag( 1): eight fraction digits",
         "06-18 19:24:01 D/Tag( 1): no fraction",
-        "06-18 19:24:01.123 +0900 D/Tag( 1): zone",
         "6-18 19:24:01.123 D/Tag( 1): short date",
         "D/Tag(1)",
         "Done/Tag( 1): word",
@@ -312,6 +313,49 @@ fn near_misses_stay_raw() {
         "2026-06-18 19:24:01.123  2983-4241  Tag  pkg",
         "19:24:01.123  2983-4241  Tag  com.example.app  D  time only",
         "1718709841.123  2983-4241  Tag  com.example.app  D  epoch",
+        "2026-06-18 19:24:01.123 +0900  2983-4241  Tag  pkg  D  zone",
+        // Zones are `+HHMM` or `-HHMM` with whitespace after them; epoch and
+        // monotonic seconds take a 3, 6 or 9 digit fraction and no date.
+        "06-18 19:24:01.123 +09:00  1  2 I Tag: colon in the zone",
+        "06-18 19:24:01.123 +090  1  2 I Tag: short zone",
+        "06-18 19:24:01.123 +0900:  1  2 I Tag: no space after the zone",
+        "1718709841.1234567  1  2 I Tag: seven fraction digits",
+        "1718709841  1  2 I Tag: no fraction",
+        "1718709841.123 x 2 I Tag: letters",
+        "1718709841.123  1  2 I Tag without colon",
+        "06-18 1718709841.123  1  2 I Tag: date and seconds",
+        "-1.123  1  2 I Tag: sign",
+        // After zone, epoch and monotonic stamps a UID needs logcat's `:`.
+        "  1.500 s  2 3 E x: y",
+        "1718709841.123 10123  1234  5678 I Tag: UID without colon",
+        "06-18 19:24:01.123 +0900  1000  2983  4241 I Tag: UID without colon",
+        // `-v long` headers need `[ `, the IDs as `PID:TID`, `L/` and ` ]`.
+        "[ 06-18 19:24:01.123  2983  4241 D/Tag ]",
+        "[ 06-18 19:24:01.123  2983:4241:1:2 D/Tag ]",
+        "[ 06-18 19:24:01.123  29a3: 4241 D/Tag ]",
+        "[ 06-18 19:24:01.123  2983: 4241 X/Tag ]",
+        "[ 06-18 19:24:01.123  2983: 4241 D Tag ]",
+        "[ 06-18 19:24:01.123  2983: 4241 D/Tag",
+        "[ 06-18 19:24:01.123  2983: 4241 D/Tag ] trailing",
+        "[06-18 19:24:01.123  2983: 4241 D/Tag ]",
+        "[ 06-18 19:24:01.123  2983: 4241D/Tag ]",
+        "[  root:    1:    1 I/init     ]",
+        // Syslog rows need `Mmm dd HH:MM:SS`, a device, `process[PID]`, a
+        // known `<Level>` and the colon.
+        "Oct 24 09:00:00 iPhone App[123] <Notice> no colon",
+        "Oct 24 09:00:00 iPhone App[123] <Verbose>: unknown level",
+        "Oct 24 09:00:00 iPhone App[12a] <Notice>: letters",
+        "Oct 24 09:00:00 iPhone App[] <Notice>: empty PID",
+        "Oct 24 09:00:00 App[123] <Notice>: no device",
+        "Oct 24 09:00:00 iPhone [123] <Notice>: no process",
+        "Oct 24 09:00:00 iPhone (Lib)[123] <Notice>: library only",
+        "Oct 24 09:00:00 iPhone App (Lib)[123] <Notice>: space before the library",
+        "Oct 24 09:00:00 iPhone App(Lib)) [123] <Notice>: space before the PID",
+        "Oct 24 09:00:00 iPhone App[1:2] <Notice>: thread",
+        "Oct 24 9:00:00 iPhone App[123] <Notice>: short hour",
+        "Oct 24 09:00:00.123 iPhone App[123] <Notice>: fraction",
+        "oct 24 09:00:00 iPhone App[123] <Notice>: lowercase month",
+        "Okt 24 09:00:00 iPhone App[123] <Notice>: other language",
         // Other logs that start with a stamp.
         "2026-06-18 19:24:01.123  INFO 1234 --- [main] o.s.b.App  : Started",
         "2026-06-18 19:24:01.123 [main] INFO c.e.App - message",
@@ -414,10 +458,565 @@ fn malformed_rows_start_entries_as_before() {
         ("2026-06-18 19:24:01.123  2983-4241  Tag  D  m", true),
         ("X/Tag( 1): m", false),
         ("D/Tag(1)", false),
+        // A malformed `-v long` header or syslog row opens one too; rows
+        // that start with seconds only continue, as numbers often do.
+        ("[ 06-18 19:24:01.123  2983: 4241 X/Tag ]", true),
+        ("[\t2026-06-18 19:24:01 broken", true),
+        ("Oct 24 09:00:00 iPhone App[123] <Verbose>: m", true),
+        ("Oct  4 09:00:00 iPhone App", true),
+        ("[06-18 19:24:01.123 no space", false),
+        ("[ ok ]", false),
+        ("Oct 24 9:00 later", false),
+        ("October 24 09:00:00 iPhone App[1] <Notice>: m", false),
+        ("1718709841.123  1  2 X Tag: m", false),
+        ("  12.500 ms elapsed", false),
     ] {
         assert!(parse_line(raw, 1, true).parsed.is_none());
         assert_eq!(parser::starts_entry(raw, true), starts, "{raw:?}");
     }
+}
+
+#[test]
+fn zone_epoch_and_monotonic_rows() {
+    for (raw, want) in [
+        // `-v zone` puts the offset after the time; it stays in the raw row.
+        (
+            "06-18 19:24:01.123 +0900  2983  4241 D AlertsService: zone",
+            [
+                "06-18",
+                "19:24:01.123",
+                "2983",
+                "4241",
+                "D",
+                "AlertsService",
+                "zone",
+                "-",
+            ],
+        ),
+        (
+            "2026-06-18 19:24:01.123456 -0130 W/Tag     (  417): time zone",
+            [
+                "2026-06-18",
+                "19:24:01.123456",
+                "417",
+                "",
+                "W",
+                "Tag",
+                "time zone",
+                "-",
+            ],
+        ),
+        (
+            "06-18 19:24:01.123 +0000  1000: 2983  4241 I Tag: uid zone",
+            [
+                "06-18",
+                "19:24:01.123",
+                "2983",
+                "4241",
+                "I",
+                "Tag",
+                "uid zone",
+                "-",
+            ],
+        ),
+        // `-v epoch` pads the seconds to 19 columns, `-v monotonic` to 6;
+        // they fill the time field and leave the date empty.
+        (
+            "         1718709841.123  2983  4241 E Tag: epoch",
+            [
+                "",
+                "1718709841.123",
+                "2983",
+                "4241",
+                "E",
+                "Tag",
+                "epoch",
+                "-",
+            ],
+        ),
+        (
+            "  1234.567890  2983  4241 V Tag: monotonic usec",
+            [
+                "",
+                "1234.567890",
+                "2983",
+                "4241",
+                "V",
+                "Tag",
+                "monotonic usec",
+                "-",
+            ],
+        ),
+        (
+            "     0.123456789 u0_a57:  4567  4568 F chromium: uid nsec",
+            [
+                "",
+                "0.123456789",
+                "4567",
+                "4568",
+                "F",
+                "chromium",
+                "uid nsec",
+                "-",
+            ],
+        ),
+        (
+            "1718709841.123 E/Foo(bar)(10123: 2983): time epoch",
+            [
+                "",
+                "1718709841.123",
+                "2983",
+                "",
+                "E",
+                "Foo(bar)",
+                "time epoch",
+                "-",
+            ],
+        ),
+        (
+            "\x1b[38;5;196m1718709841.123  2983  4241 E Tag: color epoch\x1b[0m",
+            [
+                "",
+                "1718709841.123",
+                "2983",
+                "4241",
+                "E",
+                "Tag",
+                "color epoch",
+                "-",
+            ],
+        ),
+    ] {
+        expect(raw, want);
+    }
+    let numbered = "0042 1718709841.123  2983  4241 E Tag: numbered";
+    assert_eq!(parse_line(numbered, 1, true).source_number, Some("0042"));
+    assert!(fields(numbered, false).is_none());
+}
+
+#[test]
+fn long_headers() {
+    for (raw, want) in [
+        (
+            "[ 06-18 19:24:01.123  2983: 4241 D/AlertsService ]",
+            [
+                "06-18",
+                "19:24:01.123",
+                "2983",
+                "4241",
+                "D",
+                "AlertsService",
+                "",
+                "-",
+            ],
+        ),
+        // `%-8s` pads the tag; tags may hold spaces and `]`.
+        (
+            "[ 2026-06-18 19:24:01.123456789   417:  418 W/My [Tag]  ]",
+            [
+                "2026-06-18",
+                "19:24:01.123456789",
+                "417",
+                "418",
+                "W",
+                "My [Tag]",
+                "",
+                "-",
+            ],
+        ),
+        (
+            "[ 06-18 19:24:01.123 +0900  1000: 2983: 4241 I/uid      ]",
+            ["06-18", "19:24:01.123", "2983", "4241", "I", "uid", "", "-"],
+        ),
+        (
+            "[     1718709841.123  2983: 4241 E/epoch ]",
+            ["", "1718709841.123", "2983", "4241", "E", "epoch", "", "-"],
+        ),
+        (
+            "\x1b[38;5;40m[ 06-18 19:24:01.123  2983: 4241 I/color ]",
+            [
+                "06-18",
+                "19:24:01.123",
+                "2983",
+                "4241",
+                "I",
+                "color",
+                "",
+                "-",
+            ],
+        ),
+    ] {
+        expect(raw, want);
+    }
+}
+
+#[test]
+fn iphone_syslog_rows() {
+    for (raw, want, level_text) in [
+        (
+            "Oct 24 09:00:00 iPhone MyApp(Foundation)[123] <Notice>: Sending update",
+            [
+                "Oct 24",
+                "09:00:00",
+                "123",
+                "",
+                "U",
+                "Foundation",
+                "Sending update",
+                "MyApp",
+            ],
+            "Notice",
+        ),
+        // Device names may hold spaces; the day is padded with a space.
+        (
+            "Jan  4 23:59:59 Kim's iPad SpringBoard[60] <Error>: 한글 🙂 [x] <y>: z",
+            [
+                "Jan  4",
+                "23:59:59",
+                "60",
+                "",
+                "E",
+                "",
+                "한글 🙂 [x] <y>: z",
+                "SpringBoard",
+            ],
+            "Error",
+        ),
+        (
+            "Dec 31 00:00:01 iPhone kernel(AppleMobileFileIntegrity)[0] <Fault>:",
+            [
+                "Dec 31",
+                "00:00:01",
+                "0",
+                "",
+                "F",
+                "AppleMobileFileIntegrity",
+                "",
+                "kernel",
+            ],
+            "Fault",
+        ),
+        (
+            "Mar 13 10:15:44 iPhone-de-Juan com.apple.WebKit.WebContent(WebKit)[4567] <Debug>: d",
+            [
+                "Mar 13",
+                "10:15:44",
+                "4567",
+                "",
+                "D",
+                "WebKit",
+                "d",
+                "com.apple.WebKit.WebContent",
+            ],
+            "Debug",
+        ),
+        // The library may hold spaces.
+        (
+            "Jun 30 12:00:00 iPhone App(Core Data)[1] <Notice>: m",
+            ["Jun 30", "12:00:00", "1", "", "U", "Core Data", "m", "App"],
+            "Notice",
+        ),
+        (
+            "Sep  9 08:07:06 iPhone App[1] <Warning>: w",
+            ["Sep  9", "08:07:06", "1", "", "W", "", "w", "App"],
+            "Warning",
+        ),
+        (
+            "Apr  1 08:07:06 iPhone App[1] <Critical>: c",
+            ["Apr  1", "08:07:06", "1", "", "F", "", "c", "App"],
+            "Critical",
+        ),
+        (
+            "May  1 08:07:06 iPhone App[1] <Info>: i",
+            ["May  1", "08:07:06", "1", "", "I", "", "i", "App"],
+            "Info",
+        ),
+    ] {
+        expect(raw, want);
+        let v = parse_line(raw, 1, false).json(usize::MAX);
+        assert_eq!(v["levelText"], level_text, "{raw:?}");
+        // No year, but the key marks an iOS row for the page's layout.
+        assert!(v["year"].is_null() && v.get("year").is_some(), "{raw:?}");
+        let tags: Vec<&str> = if want[5].is_empty() {
+            vec![]
+        } else {
+            vec![want[5]]
+        };
+        assert_eq!(v["tags"], json!(tags), "{raw:?}");
+        assert!(parse_line(raw, 1, false).parsed.unwrap().ios);
+    }
+    // A syslog file is an iOS log: Apple level names and repair apply.
+    assert!(parser::ios_log(
+        b"Oct 24 09:00:00 iPhone App[1] <Notice>: a\nOct 24 09:00:01 iPhone App[1] <Error>: b\n"
+    ));
+}
+
+#[test]
+fn long_and_syslog_logs_group_their_rows() {
+    let text = "\
+[ 06-18 19:24:01.123  2983: 4241 D/AlertsService ]\n\
+Sending update\n\
+  {\"body\": \"안내문구3\"}\n\
+\n\
+[ 06-18 19:24:02.500  2983: 4242 E/AndroidRuntime ]\n\
+FATAL EXCEPTION: main\n\
+\tat com.example.Main.run(Main.java:10)\n\
+\n\
+Oct 24 09:00:00 iPhone MyApp(Foundation)[123] <Notice>: first\n\
+second line of first\n\
+Oct 24 09:00:01 iPhone MyApp[123] <Error>: failed\n\
+         1718709841.123  2983  4241 W Tag: epoch\n\
+  1234.567 not an entry of its own\n";
+    let d = Dataset::new(1, Source::text(text, "long").unwrap());
+    d.start(|_| {});
+    wait(|| d.status(0)["complete"] == true);
+    assert_eq!(
+        d.status(0)["summary"]["counts"],
+        json!({"V":0,"D":1,"I":0,"W":1,"E":2,"F":0,"A":0,"U":1})
+    );
+    let base = Filters::default;
+    let mut id = 0;
+    for (filters, expected) in [
+        (
+            Filters {
+                levels: vec!["E".into()],
+                ..base()
+            },
+            vec![5, 6, 7, 8, 11],
+        ),
+        (
+            Filters {
+                tag: "alerts".into(),
+                ..base()
+            },
+            vec![1, 2, 3, 4],
+        ),
+        (
+            Filters {
+                tag: "foundation".into(),
+                ..base()
+            },
+            vec![9, 10],
+        ),
+        (
+            Filters {
+                pid: "123".into(),
+                ..base()
+            },
+            vec![9, 10, 11],
+        ),
+        (
+            Filters {
+                levels: vec!["W".into()],
+                ..base()
+            },
+            vec![12, 13],
+        ),
+        // Rows without a month-day date are left out by time filters.
+        (
+            Filters {
+                time_from: "00:00".into(),
+                time_to: "23:59".into(),
+                ..base()
+            },
+            vec![1, 2, 3, 4, 5, 6, 7, 8],
+        ),
+        (
+            Filters {
+                levels: vec!["E".into()],
+                query: "main".into(),
+                ..base()
+            },
+            vec![6, 7],
+        ),
+    ] {
+        id += 1;
+        let q = query(&d, id, &filters);
+        assert_eq!(lines(&all_rows(&d, &q)), expected, "{filters:?}");
+    }
+    let rows = all_rows(&d, &query(&d, 100, &Filters::default()));
+    assert_eq!(rows[1]["owner"]["lineNumber"], 1);
+    assert_eq!(rows[9]["owner"]["tag"], "Foundation");
+    assert_eq!(rows[8]["process"], "MyApp");
+    for row in rows.iter().filter(|r| r["kind"] == "parsed") {
+        let raw: Vec<u16> = row["raw"].as_str().unwrap().encode_utf16().collect();
+        for (key, at) in row["fieldOffsets"].as_object().unwrap() {
+            let text: Vec<u16> = row[key].as_str().unwrap().encode_utf16().collect();
+            let at = at.as_u64().unwrap() as usize;
+            assert_eq!(&raw[at..at + text.len()], &text[..], "{key} of {row}");
+        }
+    }
+    d.close();
+}
+
+#[test]
+fn color_codes_stay_outside_the_fields() {
+    // `logcat -v color` wraps each row in an SGR color and a reset; the
+    // fields are read inside them and the raw row keeps both.
+    for (raw, want) in [
+        (
+            "\x1b[38;5;196m09-21 12:07:30.386  1234  5678 E Tag: boom\x1b[0m",
+            [
+                "09-21",
+                "12:07:30.386",
+                "1234",
+                "5678",
+                "E",
+                "Tag",
+                "boom",
+                "-",
+            ],
+        ),
+        (
+            "\x1b[38;5;75m2026-09-21 12:07:30.386123 D/Tag     ( 417): x\x1b[0m",
+            [
+                "2026-09-21",
+                "12:07:30.386123",
+                "417",
+                "",
+                "D",
+                "Tag",
+                "x",
+                "-",
+            ],
+        ),
+        (
+            "\x1b[38;5;40mI/Tag( 7): brief\x1b[0m",
+            ["", "", "7", "", "I", "Tag", "brief", "-"],
+        ),
+        (
+            "\x1b[38;5;166m09-21 12:07:30.386 10123  1234  5678 W Tag: uid\x1b[0m",
+            [
+                "09-21",
+                "12:07:30.386",
+                "1234",
+                "5678",
+                "W",
+                "Tag",
+                "uid",
+                "-",
+            ],
+        ),
+        // Several leading codes, `ESC [ m` as the reset, a missing reset.
+        (
+            "\x1b[1m\x1b[38;5;231m09-21 12:07:30.386 1 2 V Tag: v\x1b[m",
+            ["09-21", "12:07:30.386", "1", "2", "V", "Tag", "v", "-"],
+        ),
+        (
+            "\x1b[38;5;40m09-21 12:07:30.386 1 2 I Tag: cut",
+            ["09-21", "12:07:30.386", "1", "2", "I", "Tag", "cut", "-"],
+        ),
+        // Only the row's own reset is removed; the message keeps its codes.
+        (
+            "\x1b[38;5;40m09-21 12:07:30.386 1 2 I Tag: \x1b[1mbold\x1b[0m\x1b[0m",
+            [
+                "09-21",
+                "12:07:30.386",
+                "1",
+                "2",
+                "I",
+                "Tag",
+                "\x1b[1mbold\x1b[0m",
+                "-",
+            ],
+        ),
+        // Without a leading code nothing is removed, as before.
+        (
+            "09-21 12:07:30.386 1 2 I Tag: \x1b[31mred\x1b[0m",
+            [
+                "09-21",
+                "12:07:30.386",
+                "1",
+                "2",
+                "I",
+                "Tag",
+                "\x1b[31mred\x1b[0m",
+                "-",
+            ],
+        ),
+    ] {
+        expect(raw, want);
+        assert_eq!(parse_line(raw, 1, false).raw, raw);
+    }
+    let numbered = "0042 \x1b[38;5;40m09-21 12:07:30.386 1 2 I Tag: m\x1b[0m";
+    assert_eq!(parse_line(numbered, 1, true).source_number, Some("0042"));
+    assert_eq!(fields(numbered, true).unwrap()[6], "m");
+    // Codes that are no SGR color leave the row raw.
+    for raw in [
+        "\x1b[2K09-21 12:07:30.386 1 2 I Tag: erase line",
+        "\x1b[38;5;40 09-21 12:07:30.386 1 2 I Tag: no m",
+        "\x1b09-21 12:07:30.386 1 2 I Tag: bare escape",
+    ] {
+        assert!(fields(raw, true).is_none(), "{raw:?}");
+    }
+    // A colored row without fields opens an entry when it is stamped and
+    // continues one otherwise.
+    for (raw, starts) in [
+        (
+            "\x1b[38;5;196m09-21 12:07:30.386 x y E Tag: bad ids\x1b[0m",
+            true,
+        ),
+        ("0007 \x1b[38;5;196m2026-09-21 12:07:30 body\x1b[0m", true),
+        (
+            "\x1b[38;5;196m\tat com.example.Main.run(Main.java:10)\x1b[0m",
+            false,
+        ),
+        ("\x1b[31m", false),
+    ] {
+        assert!(parse_line(raw, 1, true).parsed.is_none(), "{raw:?}");
+        assert_eq!(parser::starts_entry(raw, true), starts, "{raw:?}");
+    }
+}
+
+#[test]
+fn color_log_counts_filters_and_offsets() {
+    let color = |c: u8, row: &str| format!("\x1b[38;5;{c}m{row}\x1b[0m\n");
+    let text = [
+        color(40, "09-21 12:07:30.386  1234  5678 I Activity: start"),
+        color(196, "09-21 12:07:30.400  1234  5678 E Activity: crash"),
+        color(
+            196,
+            "09-21 12:07:30.400  1234  5678 E Activity: \tat Main.run",
+        ),
+        color(166, "09-21 12:07:31.000  4321  4321 W 알림🙂: 한글"),
+        "  plain continuation\n".to_string(),
+    ]
+    .concat();
+    let d = Dataset::new(1, Source::text(&text, "color").unwrap());
+    d.start(|_| {});
+    wait(|| d.status(0)["complete"] == true);
+    assert_eq!(
+        d.status(0)["summary"],
+        json!({"total":5,"parsed":4,"blank":0,"raw":1,"continuation":1,
+            "counts":{"V":0,"D":0,"I":1,"W":1,"E":2,"F":0,"A":0,"U":0}})
+    );
+    let errors = Filters {
+        levels: vec!["E".into()],
+        ..Filters::default()
+    };
+    assert_eq!(lines(&all_rows(&d, &query(&d, 1, &errors))), vec![2, 3]);
+    let tag = Filters {
+        tag: "알림".into(),
+        ..Filters::default()
+    };
+    assert_eq!(lines(&all_rows(&d, &query(&d, 2, &tag))), vec![4, 5]);
+    let rows = all_rows(&d, &query(&d, 3, &Filters::default()));
+    for row in rows.iter().filter(|r| r["kind"] == "parsed") {
+        let raw = row["raw"].as_str().unwrap();
+        assert!(
+            raw.starts_with("\x1b[38;5;") && raw.ends_with("\x1b[0m"),
+            "{row}"
+        );
+        let raw: Vec<u16> = raw.encode_utf16().collect();
+        for (key, at) in row["fieldOffsets"].as_object().unwrap() {
+            let text: Vec<u16> = row[key].as_str().unwrap().encode_utf16().collect();
+            let at = at.as_u64().unwrap() as usize;
+            assert_eq!(&raw[at..at + text.len()], &text[..], "{key} of {row}");
+        }
+    }
+    assert_eq!(rows[0]["fieldOffsets"]["date"], 10);
+    assert_eq!(rows[3]["message"], "한글");
+    d.close();
 }
 
 fn wait(mut done: impl FnMut() -> bool) {
@@ -673,7 +1272,7 @@ fn workload() -> String {
         let br = breaks[i % 3];
         let (tag, level) = (tags[i % 4], ["V", "D", "I", "W", "E", "F", "A"][i / 3 % 7]);
         let (pid, tid, sec) = (120 + i % 5, 2100 + i % 3, i / 100 % 60);
-        let row = match i % 8 {
+        let row = match i % 13 {
             0 => format!("09-21 12:07:{sec:02}.{i:03} {level}/{tag:<8}({pid:>5}): time {i}"),
             1 => format!("2026-09-21 12:07:{sec:02}.{i:06} {level}/{tag}(10123:{pid:>5}): year uid {i}"),
             2 => format!("09-21 12:07:{sec:02}.{i:03} {:>5}:{pid:>5} {tid:>5} {level} {tag}: uid {i}", 10000 + i % 7),
@@ -685,8 +1284,31 @@ fn workload() -> String {
             4 => format!("{level}/{tag:<8}({pid:>5}): brief rare {i}"),
             5 => format!("{i:05} 09-21 12:07:{sec:02}.{i:03} {level}/{tag}({pid:>5}): numbered {i}"),
             6 => format!("09-21 12:07:{sec:02}.386 {pid} {tid} {level} {tag}: threadtime {i}"),
-            _ => format!("09-21 12:07:{sec:02}.386 X/{tag}({pid}): malformed {i}"),
+            7 => format!("09-21 12:07:{sec:02}.386 X/{tag}({pid}): malformed {i}"),
+            8 => format!(
+                "\x1b[38;5;{}m09-21 12:07:{sec:02}.386 {pid} {tid} {level} {tag}: color {i}\x1b[0m",
+                40 + i % 200
+            ),
+            9 => format!("09-21 12:07:{sec:02}.{i:03} +0900 {pid:>5} {tid:>5} {level} {tag}: zone {i}"),
+            10 => format!(
+                "{:>19}.{:03} {pid:>5} {tid:>5} {level} {tag}: epoch {i}",
+                1_761_350_400 + i,
+                i % 1000
+            ),
+            // A `-v long` entry: its message rows continue the header.
+            11 => format!("[ 09-21 12:07:{sec:02}.{i:03} {pid:>5}:{tid:>5} {level}/{tag:<8} ]{br}long body {i}"),
+            _ => format!(
+                "Sep 21 12:07:{sec:02} Test iPad App({tag})[{pid}] <{}>: syslog {i}",
+                ["Debug", "Info", "Notice", "Warning", "Error", "Fault"][i / 13 % 6]
+            ),
         };
+        // Every kind but the malformed one is a supported row.
+        let head = row.split(br).next().unwrap();
+        assert_eq!(
+            parse_line(head, 1, true).parsed.is_some(),
+            i % 13 != 7,
+            "{head:?}"
+        );
         out += &row;
         out += br;
         for k in 0..i % 3 {
