@@ -1,8 +1,12 @@
 //! Lexical Android/iOS fields; raw physical rows are never rewritten.
 use crate::{dlt, source::Format};
-use regex::Regex;
+use regex_automata::{
+    meta::{Cache, Regex},
+    util::captures::Captures,
+    Input,
+};
 use serde_json::{json, Value};
-use std::{collections::HashSet, sync::LazyLock};
+use std::{cell::RefCell, collections::HashSet, sync::LazyLock, thread::LocalKey};
 
 pub const LEVELS: [&str; 8] = ["V", "D", "I", "W", "E", "F", "A", "U"];
 const WS: &str = "\\t\\n\\x0b\\x0c\\r \\u{a0}\\u{1680}\\u{2000}-\\u{200a}\\u{2028}\\u{2029}\\u{202f}\\u{205f}\\u{3000}\\u{feff}";
@@ -42,8 +46,8 @@ fn last_terminator(s: &str) -> Option<usize> {
 // `threadtime` rows, optionally with the year of `-v year` and the nanosecond
 // fraction of `-v nsec`. The date reads `MM-DD` or `YYYY-MM-DD` as two digits,
 // an optional `YY-MM`, then `-DD`, and the fraction takes 3-9 digits; each
-// step is decided by the next character, so captures keep the regex crate's
-// one-pass engine. `android` rejects 7 and 8 fraction digits.
+// step is decided by the next character, so captures keep the regex's
+// one-pass engine. `threadtime` rejects 7 and 8 fraction digits.
 static ANDROID: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(&format!(r"^[{WS}]*([0-9]{{2}}(?:[0-9]{{2}}-[0-9]{{2}})?-[0-9]{{2}})[{WS}]+([0-9]{{2}}:[0-9]{{2}}:[0-9]{{2}}\.[0-9]{{3,9}})[{WS}]+([0-9]+)[{WS}]+([0-9]+)[{WS}]+([VDIWEFA])([{WS}]+)")).unwrap()
 });
@@ -52,11 +56,25 @@ static ANDROID: LazyLock<Regex> = LazyLock::new(|| {
 static STAMP: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(&format!(r"^[{WS}]*([0-9]{{2}}(?:[0-9]{{2}}-[0-9]{{2}})?-[0-9]{{2}})[{WS}]+([0-9]{{2}}:[0-9]{{2}}:[0-9]{{2}}\.[0-9]{{3,9}})[{WS}]+")).unwrap()
 });
-// `threadtime` with `-v uid`: a numeric UID or short user name before the
-// PID, followed by `:` or whitespace. Groups are those of `ANDROID`; the
-// UID word ends at `:` or whitespace, so captures stay one-pass.
-static UID: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(&format!(r"^[{WS}]*([0-9]{{2}}(?:[0-9]{{2}}-[0-9]{{2}})?-[0-9]{{2}})[{WS}]+([0-9]{{2}}:[0-9]{{2}}:[0-9]{{2}}\.[0-9]{{3,9}})[{WS}]+[0-9A-Za-z_]+(?::[{WS}]*|[{WS}]+)([0-9]+)[{WS}]+([0-9]+)[{WS}]+([VDIWEFA])([{WS}]+)")).unwrap()
+// The seconds and fraction of `-v epoch` (since 1970) and `-v monotonic`
+// (since boot), which replace the date and time, and the whitespace after.
+static SECONDS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(&format!(r"^[{WS}]*([0-9]+\.[0-9]{{3,9}})[{WS}]+")).unwrap());
+// What follows a stamp in `threadtime` rows, as in `ANDROID`: PID, TID,
+// level and the whitespace after the level.
+static IDS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(
+        r"^([0-9]+)[{WS}]+([0-9]+)[{WS}]+([VDIWEFA])([{WS}]+)"
+    ))
+    .unwrap()
+});
+// `IDS` after the numeric UID or short user name of `-v uid`, followed by
+// `:` or whitespace. The UID word ends there, so captures stay one-pass.
+static UID_IDS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(
+        r"^[0-9A-Za-z_]+(?::[{WS}]*|[{WS}]+)([0-9]+)[{WS}]+([0-9]+)[{WS}]+([VDIWEFA])([{WS}]+)"
+    ))
+    .unwrap()
 });
 static IOS: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(&format!(r"^[{WS}]*([0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}})[\t ]+([0-9]{{2}}:[0-9]{{2}}:[0-9]{{2}}\.[0-9]{{3,6}})[\t ]+")).unwrap()
@@ -66,8 +84,91 @@ static PROCESS: LazyLock<Regex> =
 /// One leading `[field]`: an iOS level, primary tag or component tag.
 static BRACKET: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\[([^\[\]\r\n]+)\][\t ]*").unwrap());
-static PREFIX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(&format!(r"^([{WS}]*[0-9]+)[\t ]+")).unwrap());
+thread_local! {
+    static ANDROID_SLOTS: Slots = slots(&ANDROID);
+    static STAMP_SLOTS: Slots = slots(&STAMP);
+    static SECONDS_SLOTS: Slots = slots(&SECONDS);
+    static IDS_SLOTS: Slots = slots(&IDS);
+    static UID_IDS_SLOTS: Slots = slots(&UID_IDS);
+    static IOS_SLOTS: Slots = slots(&IOS);
+    static PROCESS_SLOTS: Slots = slots(&PROCESS);
+    static BRACKET_SLOTS: Slots = slots(&BRACKET);
+}
+/// A thread's search cache and capture slots for one regex.
+type Slots = RefCell<(Cache, Captures)>;
+fn slots(re: &Regex) -> Slots {
+    RefCell::new((re.create_cache(), re.create_captures()))
+}
+/// The end and group spans of a match whose groups all take part in it.
+#[derive(Clone, Copy)]
+struct Groups<const N: usize> {
+    end: usize,
+    spans: [(usize, usize); N],
+}
+impl<const N: usize> Groups<N> {
+    /// Group `i` (from 1) of `s`, the text the match was found in.
+    fn text<'a>(&self, s: &'a str, i: usize) -> &'a str {
+        let (start, end) = self.spans[i - 1];
+        &s[start..end]
+    }
+}
+/// Groups 1 to `N` of `re` in `s`, found with this thread's `slots` for `re`.
+/// `regex::Regex::captures` allocates captures on every call and takes its
+/// cache from a pool the scan workers share; with every row parsed, both
+/// cost scans about as much as the matching itself.
+fn read<const N: usize>(re: &Regex, slots: &'static LocalKey<Slots>, s: &str) -> Option<Groups<N>> {
+    slots.with_borrow_mut(|(cache, caps)| {
+        re.search_captures_with(cache, &Input::new(s), caps);
+        let end = caps.get_match()?.end();
+        let mut spans = [(0, 0); N];
+        for (i, span) in spans.iter_mut().enumerate() {
+            let g = caps.get_group(i + 1)?;
+            *span = (g.start, g.end);
+        }
+        Some(Groups { end, spans })
+    })
+}
+fn bracket(s: &str) -> Option<Groups<1>> {
+    read(&BRACKET, &BRACKET_SLOTS, s)
+}
+/// A numbered prefix: optional whitespace, ASCII digits, then tabs or
+/// spaces. The number with its leading whitespace, and the prefix's end.
+fn prefix(raw: &str) -> Option<(&str, usize)> {
+    let b = raw.as_bytes();
+    let lead = raw.len() - raw.trim_start_matches(is_ws).len();
+    let digits = lead + b[lead..].iter().take_while(|c| c.is_ascii_digit()).count();
+    let end = digits
+        + b[digits..]
+            .iter()
+            .take_while(|c| matches!(c, b'\t' | b' '))
+            .count();
+    (digits > lead && end > digits).then(|| (&raw[..digits], end))
+}
+/// `s` inside the SGR codes that `logcat -v color` writes around each row:
+/// one or more `ESC [ … m` at the start and a reset at the end. A row that
+/// does not start with a code is returned whole, so messages keep theirs.
+fn uncolored(s: &str) -> &str {
+    let mut start = 0;
+    while let Some(n) = sgr(&s.as_bytes()[start..]) {
+        start += n;
+    }
+    if start == 0 {
+        return s;
+    }
+    let rest = &s[start..];
+    rest.strip_suffix("\x1b[0m")
+        .or_else(|| rest.strip_suffix("\x1b[m"))
+        .unwrap_or(rest)
+}
+/// The length of the SGR code (`ESC [`, digits and `;`, `m`) that starts `b`.
+fn sgr(b: &[u8]) -> Option<usize> {
+    let params = b.strip_prefix(b"\x1b[")?;
+    let n = params
+        .iter()
+        .take_while(|c| c.is_ascii_digit() || **c == b';')
+        .count();
+    (params.get(n) == Some(&b'm')).then_some(n + 3)
+}
 fn ios_level(s: &str) -> Option<&'static str> {
     let s = trim(s);
     if s.is_ascii() {
@@ -186,16 +287,21 @@ pub struct Record<'a> {
 }
 
 fn android(s: &str) -> Option<Parsed<'_>> {
-    threadtime(s, &ANDROID.captures(s)?)
+    threadtime(s, &read(&ANDROID, &ANDROID_SLOTS, s)?)
 }
-/// A `threadtime` row whose header matched `p`, a capture of `ANDROID` or
-/// `UID`: date, time, PID, TID, level and the whitespace after the level.
-fn threadtime<'a>(s: &'a str, p: &regex::Captures<'a>) -> Option<Parsed<'a>> {
-    // `HH:MM:SS.` is nine bytes; logcat prints 3 (ms), 6 (us) or 9 (ns) digits.
-    if matches!(p.get(2)?.len() - 9, 7 | 8) {
+/// The number of fraction digits of a stamp's time. logcat prints 3 (ms),
+/// 6 (us) or 9 (ns); the regexes take 3 to 9, and rows with 7 or 8 are raw.
+fn fraction(time: &str) -> usize {
+    time.rfind('.').map_or(0, |i| time.len() - i - 1)
+}
+/// A `threadtime` row whose header matched `p`, a match of `ANDROID` or
+/// one composed by `threadtime_at`: date, time, PID, TID, level and the
+/// whitespace after the level.
+fn threadtime<'a>(s: &'a str, p: &Groups<6>) -> Option<Parsed<'a>> {
+    if matches!(fraction(p.text(s, 2)), 7 | 8) {
         return None;
     }
-    let start = p.get(0)?.end();
+    let start = p.end;
     let last = last_terminator(&s[start..]).map(|i| start + i);
     let min = last
         .and_then(|i| s[..i].char_indices().last().map(|(j, _)| j))
@@ -219,11 +325,11 @@ fn threadtime<'a>(s: &'a str, p: &regex::Captures<'a>) -> Option<Parsed<'a>> {
         }
     }
     Some(Parsed {
-        date: p.get(1)?.as_str(),
-        time: p.get(2)?.as_str(),
-        pid: p.get(3)?.as_str(),
-        tid: p.get(4)?.as_str(),
-        level: p.get(5)?.as_str(),
+        date: p.text(s, 1),
+        time: p.text(s, 2),
+        pid: p.text(s, 3),
+        tid: p.text(s, 4),
+        level: p.text(s, 5),
         tag,
         message: &s[message..],
         tags: Vec::new(),
@@ -235,16 +341,15 @@ fn threadtime<'a>(s: &'a str, p: &regex::Captures<'a>) -> Option<Parsed<'a>> {
 }
 fn fallback<'a>(
     s: &'a str,
-    p: &regex::Captures<'a>,
+    p: &Groups<6>,
     start: usize,
     last: Option<usize>,
 ) -> Option<(usize, &'a str)> {
     if s.as_bytes().get(start) != Some(&b':') || last.is_some_and(|i| i > start + 1) {
         return None;
     }
-    let sep = p.get(6)?;
-    let first = sep.as_str().chars().next()?.len_utf8();
-    if !s[sep.start() + first..start]
+    let first = p.text(s, 6).chars().next()?.len_utf8();
+    if !s[p.spans[5].0 + first..start]
         .chars()
         .any(|c| !terminator(c))
     {
@@ -253,9 +358,8 @@ fn fallback<'a>(
     Some((start, ""))
 }
 fn ios(s: &str) -> Option<Parsed<'_>> {
-    let stamp = IOS.captures(s)?;
-    let end = stamp.get(0)?.end();
-    let mut body = &s[end..];
+    let stamp = read::<2>(&IOS, &IOS_SLOTS, s)?;
+    let mut body = &s[stamp.end..];
     // `PROCESS` and `BRACKET` both need a `[`; other dated rows, such as
     // Android ones, skip their scans.
     if body.is_empty() || has_terminator(body) || memchr::memchr(b'[', body.as_bytes()).is_none() {
@@ -263,35 +367,36 @@ fn ios(s: &str) -> Option<Parsed<'_>> {
     }
     let (mut process, mut pid, mut tid) = ("", "", "");
     let mut context = false;
-    if let Some(p) = PROCESS.captures(body) {
-        process = trim(p.get(1)?.as_str());
+    if let Some(p) = read::<3>(&PROCESS, &PROCESS_SLOTS, body) {
+        process = trim(p.text(body, 1));
         if process.is_empty() {
             return None;
         }
-        pid = p.get(2)?.as_str();
-        tid = p.get(3)?.as_str();
+        pid = p.text(body, 2);
+        tid = p.text(body, 3);
         // Terminators were rejected above, so the remainder is the message.
-        body = &body[p.get(0)?.end()..];
+        body = &body[p.end..];
         context = true;
     }
-    let first = BRACKET.captures(body);
-    let mut supplied = first.as_ref().and_then(|p| ios_level(p.get(1)?.as_str()));
-    let mut level_text = supplied.map(|_| first.as_ref().unwrap().get(1).unwrap().as_str());
+    let first = bracket(body);
+    let mut level_text = first.map(|p| p.text(body, 1));
+    let mut supplied = level_text.and_then(ios_level);
     let primary = if supplied.is_some() {
-        body = &body[first.as_ref().unwrap().get(0)?.end()..];
-        BRACKET.captures(body)
+        body = &body[first?.end..];
+        bracket(body)
     } else {
+        level_text = None;
         first
     };
     if !context && supplied.is_none() {
         return None;
     }
     let (tag, message) = if let Some(primary) = primary {
-        let tag = trim(primary.get(1)?.as_str());
+        let tag = trim(primary.text(body, 1));
         if tag.is_empty() {
             return None;
         }
-        (tag, &body[primary.get(0)?.end()..])
+        (tag, &body[primary.end..])
     } else if context && !trim(body).is_empty() && !trim(body).starts_with('[') {
         // A plain message requires the existing complete process/ID header.
         // Do not reinterpret malformed bracket fields as an absent tag.
@@ -306,16 +411,16 @@ fn ios(s: &str) -> Option<Parsed<'_>> {
     // Rows usually carry a few tags; a set is built only for long lists.
     let mut seen: Option<HashSet<&str>> = None;
     let mut rest = message;
-    while let Some(p) = BRACKET.captures(rest) {
-        let text = trim(p.get(1)?.as_str());
+    while let Some(p) = bracket(rest) {
+        let text = trim(p.text(rest, 1));
         // Some loggers put the level after their own tags, as in
         // `[plugin][Render][INFO]`. Only a full level name counts
         // there: one-letter fields such as `[A]` are usually components.
         if supplied.is_none() && text.chars().nth(1).is_some() {
             if let Some(level) = ios_level(text) {
                 supplied = Some(level);
-                level_text = Some(p.get(1)?.as_str());
-                rest = &rest[p.get(0)?.end()..];
+                level_text = Some(p.text(rest, 1));
+                rest = &rest[p.end..];
                 continue;
             }
         }
@@ -328,11 +433,11 @@ fn ios(s: &str) -> Option<Parsed<'_>> {
         if new {
             tags.push(text);
         }
-        rest = &rest[p.get(0)?.end()..];
+        rest = &rest[p.end..];
     }
     Some(Parsed {
-        date: stamp.get(1)?.as_str(),
-        time: stamp.get(2)?.as_str(),
+        date: stamp.text(s, 1),
+        time: stamp.text(s, 2),
         pid,
         tid,
         level: supplied.unwrap_or("U"),
@@ -345,45 +450,284 @@ fn ios(s: &str) -> Option<Parsed<'_>> {
         dlt: None,
     })
 }
-/// Android formats tried only after `threadtime` and iOS fail, so a row
-/// those parse keeps its fields: `-v time` (also with the year, fraction and
-/// `uid` options), `threadtime` with `uid`, Android Studio's Logcat window,
-/// and `brief`. `lead` is the row after leading whitespace; its first bytes
-/// rule out other rows before any regex runs. Rows with line terminators
-/// stay raw.
+/// Formats tried only after `threadtime` and iOS fail, so a row those parse
+/// keeps its fields: rows that start with a stamp (`stamped`), `-v long`
+/// headers, `brief`, and iPhone syslog rows. `lead` is the row after leading
+/// whitespace; its first bytes rule out other rows before any regex runs.
+/// Rows with line terminators stay raw.
 #[inline(never)]
 fn later<'a>(s: &'a str, lead: &[u8]) -> Option<Parsed<'a>> {
-    if lead.first()?.is_ascii_digit() {
-        let stamp = STAMP.captures(s)?;
-        let (date, time) = (stamp.get(1)?.as_str(), stamp.get(2)?.as_str());
-        if matches!(time.len() - 9, 7 | 8) || has_terminator(s) {
-            return None;
+    match lead.first()? {
+        b'0'..=b'9' => stamped(s),
+        b'[' => long(s, s.len() - lead.len()),
+        _ if lead.get(1) == Some(&b'/') => {
+            if has_terminator(s) {
+                return None;
+            }
+            slashed(s, s.len() - lead.len(), "", "")
         }
-        let at = stamp.get(0)?.end();
-        // `L/` starts `-v time`. Otherwise the UID form has three IDs before
-        // the level and Android Studio's IDs are followed by two words.
-        if let Some(p) = slashed(s, at, date, time) {
+        _ => syslog(s, s.len() - lead.len()),
+    }
+}
+/// A stamp's date and time spans; `-v epoch` and `-v monotonic` have an
+/// empty date. `end` is after the stamp and its whitespace; `plain` stamps
+/// are those of `ANDROID`, without the zone of `-v zone`.
+struct Stamp {
+    date: (usize, usize),
+    time: (usize, usize),
+    end: usize,
+    plain: bool,
+}
+fn stamp_at(s: &str, at: usize) -> Option<Stamp> {
+    let shift = |(a, b): (usize, usize)| (at + a, at + b);
+    let stamp = if let Some(p) = read::<2>(&STAMP, &STAMP_SLOTS, &s[at..]) {
+        let end = at + p.end;
+        let zoned = zone(s, end);
+        Stamp {
+            date: shift(p.spans[0]),
+            time: shift(p.spans[1]),
+            end: zoned.unwrap_or(end),
+            plain: zoned.is_none(),
+        }
+    } else {
+        let p = read::<1>(&SECONDS, &SECONDS_SLOTS, &s[at..])?;
+        let time = shift(p.spans[0]);
+        Stamp {
+            date: (time.0, time.0),
+            time,
+            end: at + p.end,
+            plain: false,
+        }
+    };
+    (!matches!(fraction(&s[stamp.time.0..stamp.time.1]), 7 | 8)).then_some(stamp)
+}
+/// The offset after the `+0900` that `-v zone` puts after the time at `at`,
+/// and after the whitespace that follows it.
+fn zone(s: &str, at: usize) -> Option<usize> {
+    let b = s.as_bytes();
+    let digits = b.get(at + 1..at + 5)?;
+    if !matches!(b[at], b'+' | b'-') || !digits.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    let rest = s[at + 5..].trim_start_matches(is_ws);
+    (rest.len() < s.len() - at - 5).then(|| s.len() - rest.len())
+}
+/// Rows that start with a stamp but are no `ANDROID` row: `-v time` (also
+/// with the year, fraction, zone, epoch, monotonic and `uid` options),
+/// `threadtime` with `uid` or with a zone, epoch or monotonic stamp, and
+/// Android Studio's Logcat window.
+fn stamped(s: &str) -> Option<Parsed<'_>> {
+    let stamp = stamp_at(s, 0)?;
+    if has_terminator(s) {
+        return None;
+    }
+    let text = |(a, b): (usize, usize)| &s[a..b];
+    let (at, date, time) = (stamp.end, text(stamp.date), text(stamp.time));
+    // `L/` starts `-v time`. Otherwise the UID form has three IDs before
+    // the level and Android Studio's IDs are followed by two words.
+    if let Some(p) = slashed(s, at, date, time) {
+        return Some(p);
+    }
+    // IDs need `:` or whitespace after their first word; Android Studio's
+    // `PID-TID` skips those regexes.
+    let b = s.as_bytes();
+    let w = at
+        + b[at..]
+            .iter()
+            .take_while(|c| c.is_ascii_alphanumeric() || **c == b'_')
+            .count();
+    let colon = b[w..].starts_with(b":");
+    if w > at && (colon || s[w..].starts_with(is_ws)) {
+        if let Some(p) = threadtime_at(s, &stamp, colon) {
             return Some(p);
         }
-        // `UID` needs `:` or whitespace after its first word; Android
-        // Studio's `PID-TID` skips that regex.
-        let b = s.as_bytes();
+    }
+    // Android Studio prints neither zones nor seconds.
+    stamp.plain.then(|| studio(s, at, date, time)).flatten()
+}
+/// `threadtime` after `stamp`: IDs, with or without the UID of `-v uid`,
+/// level and tag. `ANDROID` already read plain stamps with their IDs.
+/// logcat ends the UID with `:` (`colon`). Plain stamps also take
+/// whitespace there, as before; zone, epoch and monotonic stamps need the
+/// `:`, so that continuation rows such as `1.500 s  2 3 E x: y` stay raw.
+fn threadtime_at<'a>(s: &'a str, stamp: &Stamp, colon: bool) -> Option<Parsed<'a>> {
+    let rest = &s[stamp.end..];
+    let uid = || read::<4>(&UID_IDS, &UID_IDS_SLOTS, rest);
+    let ids = if stamp.plain {
+        uid()
+    } else {
+        read::<4>(&IDS, &IDS_SLOTS, rest).or_else(|| colon.then(uid).flatten())
+    }?;
+    let [pid, tid, level, gap] = ids.spans.map(|(a, b)| (stamp.end + a, stamp.end + b));
+    let p = Groups {
+        end: stamp.end + ids.end,
+        spans: [stamp.date, stamp.time, pid, tid, level, gap],
+    };
+    threadtime(s, &p)
+}
+/// The header row of `-v long`, `[ stamp PID:TID L/tag ]` from `at`, with
+/// any stamp of `stamped` and the UID of `-v uid` before the PID. The
+/// message is on the rows after it, which continue its entry, so the
+/// header's message is empty.
+fn long(s: &str, at: usize) -> Option<Parsed<'_>> {
+    let b = s.as_bytes();
+    if !s[at + 1..].starts_with(is_ws) {
+        return None;
+    }
+    let stamp = stamp_at(s, at + 1)?;
+    if has_terminator(s) {
+        return None;
+    }
+    // `UID:PID:TID` or `PID:TID`: words that end at `:`, then the TID.
+    let mut ids = [(0, 0); 3];
+    let (mut n, mut at) = (0, stamp.end);
+    loop {
         let w = at
             + b[at..]
                 .iter()
                 .take_while(|c| c.is_ascii_alphanumeric() || **c == b'_')
                 .count();
-        if w > at && (b[w..].starts_with(b":") || s[w..].starts_with(is_ws)) {
-            if let Some(p) = UID.captures(s).and_then(|p| threadtime(s, &p)) {
-                return Some(p);
-            }
+        if w == at || n == ids.len() {
+            return None;
         }
-        return studio(s, at, date, time);
+        ids[n] = (at, w);
+        n += 1;
+        if b.get(w) != Some(&b':') {
+            at = w;
+            break;
+        }
+        at = s.len() - s[w + 1..].trim_start_matches(is_ws).len();
     }
-    if lead.get(1) != Some(&b'/') || has_terminator(s) {
+    let number = |(a, b): (usize, usize)| s[a..b].bytes().all(|c| c.is_ascii_digit());
+    if n < 2 || !number(ids[n - 2]) || !number(ids[n - 1]) {
         return None;
     }
-    slashed(s, s.len() - lead.len(), "", "")
+    let level = s.len() - s[at..].trim_start_matches(is_ws).len();
+    if level == at
+        || !matches!(
+            b.get(level)?,
+            b'V' | b'D' | b'I' | b'W' | b'E' | b'F' | b'A'
+        )
+        || b.get(level + 1) != Some(&b'/')
+    {
+        return None;
+    }
+    let tag = s[level + 2..].trim_end_matches(is_ws).strip_suffix(']')?;
+    let text = |(a, b): (usize, usize)| &s[a..b];
+    Some(Parsed {
+        date: text(stamp.date),
+        time: text(stamp.time),
+        pid: text(ids[n - 2]),
+        tid: text(ids[n - 1]),
+        level: &s[level..level + 1],
+        tag: trim(tag),
+        message: &s[s.len()..],
+        tags: Vec::new(),
+        process: None,
+        level_text: None,
+        ios: false,
+        dlt: None,
+    })
+}
+const MONTHS: [&[u8]; 12] = [
+    b"Jan", b"Feb", b"Mar", b"Apr", b"May", b"Jun", b"Jul", b"Aug", b"Sep", b"Oct", b"Nov", b"Dec",
+];
+/// Whether `b` starts with the `Mmm dd HH:MM:SS ` stamp of BSD syslog; the
+/// day is padded with a space.
+fn syslog_stamp(b: &[u8]) -> bool {
+    let digits = |r: std::ops::Range<usize>| b[r].iter().all(u8::is_ascii_digit);
+    b.len() > 16
+        && MONTHS.contains(&&b[..3])
+        && b[3] == b' '
+        && (b[4] == b' ' || b[4].is_ascii_digit())
+        && b[5].is_ascii_digit()
+        && b[6] == b' '
+        && digits(7..9)
+        && b[9] == b':'
+        && digits(10..12)
+        && b[12] == b':'
+        && digits(13..15)
+        && b[15] == b' '
+}
+/// Apple's level for a syslog priority name, as `idevicesyslog` prints it.
+fn syslog_level(name: &str) -> Option<&'static str> {
+    const NAMES: [(&str, &str); 10] = [
+        ("Debug", "D"),
+        ("Info", "I"),
+        // os_log's default level.
+        ("Notice", "U"),
+        ("Default", "U"),
+        ("Warning", "W"),
+        ("Error", "E"),
+        ("Fault", "F"),
+        ("Critical", "F"),
+        ("Alert", "F"),
+        ("Emergency", "F"),
+    ];
+    NAMES
+        .iter()
+        .find(|(n, _)| n.eq_ignore_ascii_case(name))
+        .map(|(_, level)| *level)
+}
+/// An iPhone or iPad syslog row from `at`, as `idevicesyslog` prints it:
+/// `Mmm dd HH:MM:SS device process(library)[PID] <Level>: message`. The
+/// device name stays in the raw row; the library, when present, is the tag.
+/// The header ends at the first `] <Level>:`. The library is the
+/// parenthesized text just before its `[PID`, spaces allowed, and the
+/// process is the word before the library or the `[`.
+fn syslog(s: &str, at: usize) -> Option<Parsed<'_>> {
+    let b = &s.as_bytes()[at..];
+    if !syslog_stamp(b) || has_terminator(s) {
+        return None;
+    }
+    let (date, time, head) = (&s[at..at + 6], &s[at + 7..at + 15], at + 16);
+    for close in memchr::memmem::find_iter(&b[16..], b"] <").map(|i| head + i) {
+        let word = &s[close + 3..];
+        let n = word.bytes().take_while(u8::is_ascii_alphabetic).count();
+        let Some(level) = syslog_level(&word[..n]) else {
+            continue;
+        };
+        if !word[n..].starts_with(">:") {
+            continue;
+        }
+        let open = s[head..close].rfind('[').map(|i| head + i)?;
+        let pid = &s[open + 1..close];
+        let named = &s[head..open];
+        let (named, library) = match named.strip_suffix(')').and_then(|n| n.rsplit_once('(')) {
+            Some((named, library)) => (named, trim(library)),
+            None => (named, ""),
+        };
+        let (device, process) = named.rsplit_once(' ')?;
+        if pid.is_empty() || !pid.bytes().all(|c| c.is_ascii_digit()) || trim(device).is_empty() {
+            return None;
+        }
+        if process.is_empty() || process.contains(['(', ')', '[', ']']) {
+            return None;
+        }
+        let mut message = close + 3 + n + 2;
+        if s[message..].starts_with(' ') {
+            message += 1;
+        }
+        return Some(Parsed {
+            date,
+            time,
+            pid,
+            tid: "",
+            level,
+            tag: library,
+            message: &s[message..],
+            tags: if library.is_empty() {
+                Vec::new()
+            } else {
+                vec![library]
+            },
+            process: Some(process),
+            level_text: Some(&word[..n]),
+            ios: true,
+            dlt: None,
+        });
+    }
+    None
 }
 /// `L/TAG(PID): message` from `at`: a `brief` row, or a `-v time` row after
 /// its stamp. The tag runs to the first `(` that opens a PID group, without
@@ -501,8 +845,10 @@ fn studio<'a>(s: &'a str, at: usize, date: &'a str, time: &'a str) -> Option<Par
 /// Android or iOS fields. Only a row that starts with a year can be iOS or
 /// dated Android; iOS keeps precedence there, as before dated Android rows
 /// were recognized. Other rows need only the Android attempt. Formats added
-/// later are tried last.
+/// later are tried last (`later`). The color codes of `logcat -v color` stay
+/// in the raw row, outside the fields.
 fn fields(s: &str) -> Option<Parsed<'_>> {
+    let s = uncolored(s);
     let b = s.trim_start_matches(is_ws).as_bytes();
     let known = if b.len() > 4 && b[4] == b'-' && b[..4].iter().all(u8::is_ascii_digit) {
         ios(s).or_else(|| android(s))
@@ -514,24 +860,34 @@ fn fields(s: &str) -> Option<Parsed<'_>> {
 // A number is a prefix only when the entire remainder is a supported log row.
 // Return the validated record so optional summaries do not parse it twice.
 pub(crate) fn parse_numbered_line(raw: &str, line: u64) -> Option<Record<'_>> {
-    let prefix = PREFIX.captures(raw)?;
-    let rest = &raw[prefix.get(0)?.end()..];
-    let parsed = fields(rest)?;
+    let (number, end) = prefix(raw)?;
+    let parsed = fields(&raw[end..])?;
     Some(Record {
         raw,
         line,
         kind: "parsed",
         parsed: Some(parsed),
-        source_number: Some(trim(prefix.get(1)?.as_str())),
+        source_number: Some(trim(number)),
     })
 }
 /// Whether a row without fields still opens its own log entry: it starts
 /// like a log row, with a date and time (`MM-DD HH:MM` or `YYYY-MM-DD HH:MM`,
-/// also after a numbered prefix when prefixes are recognized), but the rest
-/// is malformed. Any other row without fields continues the entry before it.
+/// also after the `[ ` of a `-v long` header, or syslog's `Mmm dd HH:MM:SS`;
+/// also after a numbered prefix when prefixes are recognized, and inside
+/// color codes), but the rest is malformed. Any other row without fields
+/// continues the entry before it. Epoch and monotonic seconds alone do not
+/// open entries: continuation rows often start with a number.
 pub fn starts_entry(raw: &str, recognize: bool) -> bool {
     fn stamp(s: &str) -> bool {
+        let s = uncolored(s).trim_start_matches(is_ws);
+        let s = s
+            .strip_prefix('[')
+            .filter(|r| r.starts_with(is_ws))
+            .unwrap_or(s);
         let b = s.trim_start_matches(is_ws).as_bytes();
+        if syslog_stamp(b) {
+            return true;
+        }
         let digits = |at: usize, n: usize| {
             b.get(at..at + n)
                 .is_some_and(|d| d.iter().all(u8::is_ascii_digit))
@@ -551,11 +907,11 @@ pub fn starts_entry(raw: &str, recognize: bool) -> bool {
         }
         at > gap && digits(at, 2) && b.get(at + 2) == Some(&b':') && digits(at + 3, 2)
     }
-    // Both forms start with a digit; most continuation rows do not, and they
-    // skip the prefix regex.
+    // Stamps start with a digit, `[`, a month or a color code; most
+    // continuation rows do not.
     let lead = raw.trim_start_matches(is_ws).as_bytes().first();
-    lead.is_some_and(u8::is_ascii_digit)
-        && (stamp(raw) || (recognize && PREFIX.find(raw).is_some_and(|p| stamp(&raw[p.end()..]))))
+    matches!(lead, Some(b'0'..=b'9' | b'[' | b'A'..=b'S' | 0x1b))
+        && (stamp(raw) || (recognize && prefix(raw).is_some_and(|(_, end)| stamp(&raw[end..]))))
 }
 pub fn has_source_prefix(raw: &str) -> bool {
     parse_numbered_line(raw, 0).is_some()
@@ -697,7 +1053,12 @@ impl Record<'_> {
                 v["dlt"] = json!({"uptime":d.uptime,"count":d.count,"ecu":d.ecu,"apid":d.apid,"ctid":d.ctid,"session":d.session,"kind":d.kind});
                 v["tags"] = json!(p.tags);
             } else if p.ios {
-                v["year"] = json!(&p.date[..4]);
+                // Syslog rows have no year; `null` still marks an iOS row,
+                // which the page lays out by `year`.
+                v["year"] = json!(p
+                    .date
+                    .get(..4)
+                    .filter(|y| y.bytes().all(|c| c.is_ascii_digit())));
                 v["process"] = json!(p.process.unwrap_or(""));
                 v["levelText"] = json!(p.level_text);
                 v["tags"] = json!(p
@@ -923,6 +1284,29 @@ mod tests {
             ("", false, false),
         ] {
             assert_eq!(starts_entry(raw, recognize), starts, "{raw:?}");
+        }
+    }
+    #[test]
+    fn numbered_prefix_matches_its_former_regex() {
+        let re = Regex::new(&format!(r"^([{WS}]*[0-9]+)[\t ]+")).unwrap();
+        let mut caps = re.create_captures();
+        let parts = [
+            "", " ", "\t", "\u{3000}", "\u{a0}", "\u{feff}", "0", "42", "１", "٣", "x", "-", "\n",
+            "\r", "09-21",
+        ];
+        for a in parts {
+            for b in parts {
+                for c in parts {
+                    for d in parts {
+                        let s = format!("{a}{b}{c}{d}");
+                        re.captures(s.as_str(), &mut caps);
+                        let want = caps
+                            .get_match()
+                            .map(|m| (&s[caps.get_group(1).unwrap().range()], m.end()));
+                        assert_eq!(prefix(&s), want, "{s:?}");
+                    }
+                }
+            }
         }
     }
     #[test]

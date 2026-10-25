@@ -10,7 +10,7 @@
 | `core/src/order.rs` | 다중 선택·드롭한 파일의 정렬: 파일 끝 64 KiB의 마지막 로그 시각(없으면 앞 64 KiB의 첫 로그 시각, DLT는 첫 메시지 시각) 기준, 시각이 없거나 모호하면 회전 번호를 고려한 자연 이름순 정렬(`order`, `arrange`) |
 | `core/src/dataset.rs` | 희소 물리 행 인덱스(약 128 KiB 블록 단위, 파일 경계를 넘지 않음), DLT 단위 인덱스(`index_dlt_file`) 및 블록을 행 텍스트로 변환하는 `read_rows`, pane별 쿼리 실행, 레벨 집계, `page`·`locate`·`range`·`record`·`lines`, 내보내기(`export_as`), 실시간 따라가기 |
 | `core/src/fields_index.rs` | 분석 단계에서 생성하는 블록별 PID·TID·태그 메타데이터 표, 필드 필터 적용 시 블록 건너뛰기 및 블록을 읽지 않는 카운트 계산 |
-| `core/src/parser.rs` | Android(`threadtime`·`-v time`·`brief`, `-v uid`·`-v year`·`-v nsec`, Android Studio Logcat 복사본) 및 iOS 필드 파싱, 앞쪽 줄 번호 인식, 데이터셋 형식별 파서 선택(`parse_in`·`starts_entry_in`), DLT 행 필드 분리 |
+| `core/src/parser.rs` | Android(`threadtime`·`-v time`·`brief`·`-v long`, `-v uid`·`-v year`·`-v usec`·`-v nsec`·`-v zone`·`-v epoch`·`-v monotonic`·`-v color`, Android Studio Logcat 복사본) 및 iOS(`idevicesyslog` 포함) 필드 파싱, 앞쪽 줄 번호 인식, 데이터셋 형식별 파서 선택(`parse_in`·`starts_entry_in`), DLT 행 필드 분리 |
 | `core/src/dlt.rs` | DLT(프로토콜 버전 1) 단위 분할(`units`), 헤더 파싱, `dlt-viewer` 호환 페이로드 포매팅 및 행 렌더링(`Decoder::render`), 행 필드 추출(`parse_row`), 로컬 시각 변환(`Clock`), 테스트·벤치마크용 합성 생성기(`synth`) |
 | `core/src/search.rs` | 고정 버전 `grep-regex` / `grep-searcher` 기반 문자열·정규식 검색 및 하이라이트 범위 계산 |
 | `core/src/encoding.rs` | 표시 텍스트 디코딩: 손상된 UTF-8 바이트의 표시용 대체(``)와 손상 위치 마스크, Mac OS Roman으로 잘못 읽혀 깨진 UTF-8 문자 복원(`repair`), UTF-16·압축 파일 판별 |
@@ -64,7 +64,10 @@
 - **즉시 표시:** `page` 조회와 쿼리 스캔은 전체 파일 인덱싱이 끝나기를 기다리지 않고 이미 게시된 블록부터 즉시 읽습니다. 전체 레벨 통계 및 필드 메타데이터 분석은 인덱싱 완료 후 워커 스레드에서 이어서 실행됩니다.
 - **병렬 스캔:** 각 pane마다 전용 쿼리 스레드가 하나씩 동작하며, 블록 판정은 최대 4개(DLT는 최대 8개, CPU 코어 수의 절반 이하) 워커가 병렬로 처리합니다. 일치 결과는 전체 행 번호 배열 대신 블록별 일치 건수(`ends`)와 비트마스크로 관리해 메모리 사용량을 낮추고 원문 순서를 유지합니다.
 - **제로카피 필드 판정:** 필터 판정 시에는 원문 슬라이스를 빌린(`borrow`) 필드를 사용하며, JSON 행 객체는 화면에 실제로 보낼 페이지 행에 대해서만 생성합니다.
-- **파서 우선순위:** 각 행에 대해 `threadtime`과 iOS(연도로 시작하면 iOS 우선) 파서를 먼저 시도하고, 둘 다 실패한 행에만 `-v time`·`brief`·`-v uid`·Android Studio 형식을 시도합니다(`parser::later`). 줄 앞 몇 바이트만으로 대상이 아닌 줄을 빠르게 걸러내 정규식 오버헤드를 피합니다.
+- **파서 우선순위:** 각 행에 대해 `threadtime`과 iOS(연도로 시작하면 iOS 우선) 파서를 먼저 시도하고, 둘 다 실패한 행에만 `parser::later`의 나머지 형식을 시도합니다. 시각으로 시작하는 줄(`stamped`)은 `-v time`·`-v uid`·Android Studio 형식, 그리고 시간대·epoch·monotonic 시각이 붙은 `threadtime`·`-v time`입니다. 그 밖의 형식은 `-v long` 머리 줄(`long`), `brief`, `idevicesyslog`(`syslog`)입니다. 줄 앞 몇 바이트만으로 대상이 아닌 줄을 빠르게 걸러내 정규식 오버헤드를 피하므로, 새 형식을 더해도 기존 형식 행의 처리 경로는 바뀌지 않습니다.
+  - **색상 코드:** `-v color`가 줄 앞뒤에 붙이는 SGR 코드는 필드를 읽기 전에 건너뜁니다(`uncolored`). 필드는 여전히 원문 슬라이스를 가리키므로 원문 바이트는 바뀌지 않고 `fieldOffsets`도 원문 위치로 계산됩니다. 줄 앞에 코드가 없으면 메시지 안의 코드도 건드리지 않습니다.
+  - **`idevicesyslog` 행:** iOS 행(`Parsed::ios`)이지만 날짜에 연도가 없어 행 JSON의 `year`가 `null`입니다. 화면은 `year` 키가 있는지로 iOS 행 배치(프로세스 칸 폭, 태그 끝부분 보이기)를 고르므로 키를 빼지 않습니다.
+  - **정규식 상태 재사용:** 파서 정규식은 `regex-automata`의 meta 엔진을 직접 쓰고, 정규식마다 스레드별 검색 캐시와 캡처 슬롯을 하나씩 두어 재사용합니다(`parser::read`). `regex::Regex::captures`는 호출마다 캡처 객체를 할당하고 워커들이 함께 쓰는 캐시 풀을 거치므로, 모든 행을 파싱하는 집계·필드 필터 스캔에서는 이 비용이 매칭 자체만큼 들었습니다([측정](LARGE_LOG_VALIDATION.md#파서-정규식-상태-재사용)). 정규식 문법과 매칭 결과는 같습니다.
 
 ### 필터 조건과 메타데이터 가속
 

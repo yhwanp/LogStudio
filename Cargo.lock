@@ -2072,6 +2072,7 @@ dependencies = [
  "memchr",
  "plist",
  "regex",
+ "regex-automata",
  "serde",
  "serde_json",
  "tempfile",

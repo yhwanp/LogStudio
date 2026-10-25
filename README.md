@@ -18,7 +18,7 @@ https://github.com/user-attachments/assets/bfe612d8-acb8-45b8-8507-1085cf5f9e58
 ## 주요 기능
 
 - **대용량 파일 즉시 열기:** 최대 8 GiB(UTF-8) 파일을 끝까지 읽을 때까지 기다리지 않고 첫 행부터 바로 보여 줍니다. 손상된 UTF-8 바이트가 섞여 있어도 행을 버리지 않고 해당 구간만 표시합니다.
-- **Android·iOS 로그 파싱:** Android `logcat`(`threadtime`·`time`·`brief`, `-v uid`·`year`·`usec`·`nsec`), Android Studio Logcat 복사본, iOS 로그를 날짜·시간·PID·TID·레벨·태그·메시지 열로 나누어 보여 줍니다. 형식에 맞지 않는 줄은 원문 그대로 표시합니다.
+- **Android·iOS 로그 파싱:** Android `logcat`(`threadtime`·`time`·`brief`·`long`, `-v uid`·`year`·`usec`·`nsec`·`zone`·`epoch`·`monotonic`·`color`), Android Studio Logcat 복사본, iOS 로그(`idevicesyslog` 출력 포함)를 날짜·시간·PID·TID·레벨·태그·메시지 열로 나누어 보여 줍니다. 형식에 맞지 않는 줄은 원문 그대로 표시합니다.
 - **DLT 파일 지원:** COVESA DLT(`.dlt`, 버전 1) 파일을 시간·타임스탬프·ECU·APID·CTID·레벨·페이로드 열로 표시합니다. ECU·APID·CTID로 필터링하고 결과를 `.dlt` 원본이나 텍스트(`.txt`)로 내보낼 수 있습니다.
 - **조건별 필터와 프리셋:** 레벨, 태그, PID/TID, 시간 범위를 조합한 포함·제외 조건으로 로그를 거릅니다(DLT Viewer의 포함·제외 필터와 동일한 방식). 자주 쓰는 필터 조합은 이름을 붙여 저장해 두고 다른 파일에서도 바로 불러올 수 있습니다.
 - **빠른 검색:** 문자열 및 정규식(Rust regex) 검색과 대소문자 구분 옵션을 지원합니다. 검색 결과에 일치한 행은 상단 로그에서도 강조 표시됩니다.

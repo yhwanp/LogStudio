@@ -13,7 +13,7 @@ grep-matcher.workspace = true
 memchr.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-regex.workspace = true
+regex-automata.workspace = true
 tempfile.workspace = true
 chrono.workspace = true
 # iPhones and iPads through Apple's device service; pinned, as its API
@@ -23,5 +23,7 @@ plist = "=1.10.1"
 tokio = { version = "=1.53.2", features = ["rt", "net", "time", "macros", "sync"] }
 
 [dev-dependencies]
+# A reference for regex searches in the DLT tests.
+regex.workspace = true
 # Independent DLT parser, used only as a test oracle for `dlt`.
 dlt_parse = "=0.10.1"
