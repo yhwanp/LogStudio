@@ -146,8 +146,9 @@ h2{font-size:16px;margin:0;font-weight:650}
 .id-fields .field{margin-bottom:8px}
 /* PID·TID and the time range wait behind dashed + buttons, outlined like
    the empty fields they open, until a condition uses them. */
-.field-openers{display:flex;flex-wrap:wrap;gap:6px;margin:-4px 0 10px}
-.field-opener{background:none;border:1px dashed var(--border-strong);border-radius:6px;color:var(--accent-text);font-size:12px;font-weight:600;padding:2px 10px;min-height:26px}
+/* The message, PID·TID and time openers share one row, also in a card. */
+.field-openers{display:flex;flex-wrap:wrap;gap:5px;margin:-4px 0 10px}
+.field-opener{background:none;border:1px dashed var(--border-strong);border-radius:6px;color:var(--accent-text);font-size:12px;font-weight:600;padding:2px 7px;min-height:26px}
 .field-opener:hover{background:var(--accent-soft);border-color:var(--accent-border)}
 /* Field help is collapsed behind a "?" beside the labels. */
 .has-help,.check-row{position:relative}
@@ -177,6 +178,9 @@ h2{font-size:16px;margin:0;font-weight:650}
 .cond-alert{margin:0 0 8px;font-size:12px;line-height:1.5;color:var(--muted);border:1px dashed var(--border-strong);border-radius:6px;padding:4px 8px}
 /* Under a card's summary, aligned with its text. */
 .cond-card:not(.solo)>.cond-alert{margin:-4px 0 0;border:0;padding:0 8px 6px 32px;font-size:11px}
+/* Under the editor of the condition being edited, so typing never moves it. */
+.cond-editor+.cond-alert{margin:0 0 8px}
+.cond-card:not(.solo)>.cond-editor+.cond-alert{margin:0;padding:0 8px 8px}
 .cond-remove{flex-shrink:0;background:none;color:var(--faint);font-size:15px;line-height:1;width:22px;height:22px;border-radius:5px}
 .cond-remove:hover{background:var(--surface-3);color:var(--text)}
 .cond-card:not(.solo)>.cond-editor{padding:8px 10px 2px;border-top:1px solid var(--border)}
@@ -192,6 +196,12 @@ h2{font-size:16px;margin:0;font-weight:650}
 .help-toggle:hover,.help-toggle[aria-expanded=true]{background:var(--accent-soft);border-color:var(--accent-border);color:var(--accent-text)}
 .filters .field-help{margin:0 0 10px}
 .field-error{font-size:12px;color:var(--error-text);margin:0 0 12px;line-height:1.5}
+/* A field with a switch inside its right end, such as the message's .* */
+.toggle-input{position:relative;display:flex}
+.field .toggle-input input{padding-right:38px}
+.regex-toggle{position:absolute;right:4px;top:50%;transform:translateY(-50%);min-width:28px;height:24px;padding:0 5px;border:1px solid transparent;border-radius:4px;background:none;color:var(--muted);font:600 12px/1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.regex-toggle:hover{background:var(--surface-3);color:var(--text)}
+.regex-toggle[aria-pressed=true]{background:var(--accent-soft);border-color:var(--accent-border);color:var(--accent-text)}
 .field+.field-error{margin-top:-4px}
 .check-line{font-size:13px;display:flex;align-items:center;gap:6px;line-height:1.5;white-space:nowrap}
 .small-note{font-size:12px;color:var(--muted);line-height:1.6;margin:8px 0 0}
@@ -211,6 +221,8 @@ h2{font-size:16px;margin:0;font-weight:650}
 .pane-title{font-size:13px;font-weight:650;white-space:nowrap;flex-shrink:0}
 .pane-nav{display:flex;align-items:center;gap:5px;margin-left:auto;color:var(--muted)}
 .range-text{font-variant-numeric:tabular-nums;white-space:nowrap;margin-right:4px}
+/* A list still finding its kept row says so in the accent. */
+.range-text.finding{color:var(--accent-text);font-weight:600}
 .jump-form{display:flex;align-items:center;gap:4px}
 .jump-form input{width:76px;padding:2px 6px;border:1px solid var(--control-border);border-radius:5px;min-height:24px;font-size:12px;background:var(--surface);font-variant-numeric:tabular-nums}
 .jump-form input::placeholder{color:var(--muted)}

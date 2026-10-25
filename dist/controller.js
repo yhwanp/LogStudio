@@ -1,6 +1,6 @@
 // One pane's query lifecycle against the native engine: status polling,
 // pushed progress, paging, location and detail reads. No DOM access.
-import {validateFilters, defaultFilters, normalizeFilters, coreFilters} from './filter-model.js';
+import {validateFilters, defaultFilters, normalizeFilters, coreFilters, MESSAGE_PATTERN_ERROR} from './filter-model.js';
 
 export const PAGE_SIZE = 200;
 export const DETAIL_BYTES = 65536;
@@ -8,6 +8,10 @@ const POLL_MS = 800;
 // How often a completed single file is checked for appended rows.
 const WATCH_MS = 2000;
 export const DETAIL_SETTLE_MS = 120;
+// A new query that keeps the list's place holds its first rows back this
+// long, so a filter the field tables decide shows the kept row at once
+// instead of the list's start first.
+export const RELOCATE_HOLD_MS = 300;
 const MAX_QUERY_RETRIES = 3;
 export const BUSY = 'Local engine is busy; retry';
 export const FINAL_QUERY_STATES = new Set(['complete', 'cancelled', 'error']);
@@ -43,13 +47,13 @@ export function recordSpan(data, lineNumber) {
   return valid ? {first:data.first, last:data.last, recordComplete:data.recordComplete !== false} : {first:lineNumber, last:lineNumber, recordComplete:true};
 }
 
-export function createLargeLogController({transport, onChange=()=>{}, onLocate=()=>{}, setTimer=globalThis.setTimeout, clearTimer=globalThis.clearTimeout, pollMs=POLL_MS, pane=null}) {
+export function createLargeLogController({transport, onChange=()=>{}, onLocate=()=>{}, onRelocate=()=>{}, setTimer=globalThis.setTimeout, clearTimer=globalThis.clearTimeout, pollMs=POLL_MS, pane=null}) {
   let disposed = false, timer = null, retryTimer = null, statusBusy = false, serial = 0, detailSerial = 0, navigationSerial = 0;
   let progressTimer = null, pendingProgress = null, statusRevision = 0, queryInvalidated = false;
-  let detailHistory = [], locationBusy = false, locationNearest = false, locationRestore = null, searchMarks = null;
+  let detailHistory = [], locationBusy = false, locationNearest = false, locationKeepsAnchor = false, locationRestore = null, searchMarks = null, relocation = null;
   let querySequence = 0, desiredFilters = defaultFilters();
   const requests = new Map();
-  const initialState = {datasetId:null, name:'', files:[], size:0, status:'connecting', indexedBytes:0, total:0, summary:null, complete:false, textComplete:false, summaryComplete:false, analysis:null, queryComplete:false, fieldFiltering:false, queryId:0, queryAccepted:false, queryStatus:'idle', caughtUp:false, count:0, scannedBytes:0, viewportStart:0, scrollRevision:0, scrollAlign:'start', selectedIndex:null, locationPending:null, detail:null, selectedLine:null, error:'', closed:false, followable:false, following:false, grown:false, followError:'', tailRevision:0, format:'text', ios:false, conditions:null, checkedConditions:null, capture:null};
+  const initialState = {datasetId:null, name:'', files:[], size:0, status:'connecting', indexedBytes:0, total:0, summary:null, complete:false, textComplete:false, summaryComplete:false, analysis:null, queryComplete:false, fieldFiltering:false, queryId:0, queryAccepted:false, queryStatus:'idle', caughtUp:false, count:0, scannedBytes:0, viewportStart:0, scrollRevision:0, scrollAlign:'start', scrollOffset:0, selectedIndex:null, locationPending:null, detail:null, selectedLine:null, error:'', closed:false, followable:false, following:false, grown:false, followError:'', tailRevision:0, format:'text', ios:false, conditions:null, checkedConditions:null, capture:null, rejected:'', anchor:null, anchorOffset:null};
   const state = {...initialState};
   const snapshot = () => ({...state, detail:state.detail && {...state.detail}});
   const emit = () => { if (!disposed) onChange(snapshot()); };
@@ -156,7 +160,7 @@ export function createLargeLogController({transport, onChange=()=>{}, onLocate=(
     sourceProgress(data); emit();
   }
   function followStatus() {
-    if (state.locationPending && !locationBusy) void resolveLocation();
+    if (state.locationPending && !locationBusy) void (relocation ? relocate() : resolveLocation());
   }
   function acceptProgress(data) {
     if (queryInvalidated || !matches(data, capture()) || data?.query?.id !== state.queryId || !state.queryId || ['cancelled','error'].includes(state.queryStatus) || stale(data)) return;
@@ -191,33 +195,66 @@ export function createLargeLogController({transport, onChange=()=>{}, onLocate=(
       else followStatus();
     } catch (error) {if (observedSerial === serial) fail(error);} finally {statusBusy = false; schedule();}
   }
+  // A list's place kept across a new query, until the query finds it or the
+  // user moves the list: the anchor row (`select`, at `offset` rows from the
+  // top when its selection was in view, else centred) with its detail, or
+  // the top row. While `shown` is false the list's rows are held back
+  // (`fetchRows`). The anchor (`state.anchor`) is the row the user chose; a
+  // result that stands in for it while filtered out is selected but never
+  // becomes the anchor, so a wider filter returns to the user's row.
+  const setAnchor=(line,offset=null)=>{state.anchor=Number.isSafeInteger(line)&&line>0?line:null;state.anchorOffset=state.anchor&&number(offset)?offset:null;};
+  const validPlace=place=>Number.isSafeInteger(place?.line)&&place.line>0;
+  function endRelocation(){
+    const r=relocation;if(!r)return;
+    relocation=null;if(r.timer!==null)clearTimer(r.timer);r.release();
+  }
+  function startRelocation(place,{hold=true}={}){
+    endRelocation();
+    const r={line:place.line,offset:number(place.offset)?place.offset:null,select:place.select===true,index:null,shown:false,timer:null,release:()=>{}};
+    r.hold=new Promise(resolve=>{r.release=resolve;});
+    if(hold)r.timer=setTimer(()=>{r.timer=null;if(relocation!==r)return;r.shown=true;r.release();emit();},RELOCATE_HOLD_MS);
+    else r.release();
+    relocation=r;
+    // A kept row's selection (the anchor, or a result standing in for it)
+    // and its detail stay while the anchor is looked for.
+    if(!r.select){state.selectedLine=null;state.detail=null;state.anchor=null;}
+  }
+  // The kept place a replacing query would keep, or null.
+  function relocating(){const r=relocation;return r&&{line:r.line,offset:r.offset,select:r.select,shown:r.shown};}
   // Immediately discard the prior query on new intent, before debounce submits
   // its replacement. A reserved identity rejects late replies/events and clears
   // viewport caches once; repeated pending keystrokes do no extra clearing.
-  function invalidateQuery(){
+  // A `place` stays for the replacement (`setFilters`): its selected row and
+  // detail stay meanwhile.
+  function invalidateQuery({place=null}={}){
     if(disposed||queryInvalidated||!state.datasetId)return;
     const old=capture(),running=state.queryStatus==='running';
     queryInvalidated=true;clearProgress();serial++;detailSerial++;navigationSerial++;
     cancelRequests();if(timer!==null)clearTimer(timer);if(retryTimer!==null)clearTimer(retryTimer);timer=retryTimer=null;
-    detailHistory=[];
     state.queryId=++querySequence;state.queryAccepted=false;state.queryStatus='idle';state.queryComplete=false;state.count=0;state.scannedBytes=0;
-    state.viewportStart=0;state.scrollRevision++;state.scrollAlign='start';state.selectedIndex=null;
-    state.locationPending=null;state.selectedLine=null;state.detail=null;state.error='';state.conditions=null;state.checkedConditions=null;emit();
+    state.viewportStart=0;state.scrollRevision++;state.scrollAlign='start';state.selectedIndex=null;state.locationPending=null;state.rejected='';
+    if(validPlace(place))startRelocation(place,{hold:false});else{endRelocation();state.selectedLine=null;state.detail=null;setAnchor(null);}
+    if(!state.detail)detailHistory=[];
+    state.error='';state.conditions=null;state.checkedConditions=null;emit();
     // Native cancellation is scoped to the discarded identity. A delayed cancel
     // cannot stop the replacement; source changes and already-replaced queries
     // may reject it harmlessly. It never publishes discarded state.
     if(running&&old.queryId)void request('cancel',old).catch(()=>{});
   }
-  async function setFilters(filters, {retryAttempt=0}={}) {
+  // Starts a query for `filters`. Without a `place` the list starts at its
+  // first result with nothing selected; with one (see `startRelocation`) it
+  // returns there once the scan reaches that row.
+  async function setFilters(filters, {retryAttempt=0, place=null}={}) {
     if (disposed) return;
     clearProgress();
     if (retryTimer !== null) clearTimer(retryTimer); retryTimer = null;
     validateFilters(filters); queryInvalidated=false;
+    // The engine checks a filter before it replaces the pane's query.
+    const previous = {queryId:state.queryId, queryAccepted:state.queryAccepted, queryStatus:state.queryStatus, count:state.count, queryComplete:state.queryComplete, caughtUp:state.caughtUp, scannedBytes:state.scannedBytes, fieldFiltering:state.fieldFiltering, conditions:state.conditions, checkedConditions:state.checkedConditions, filters:desiredFilters};
     desiredFilters = normalizeFilters(filters);
-    if (state.datasetId === null) return;
+    if (state.datasetId === null) {endRelocation(); return;}
     cancelRequests(['query', 'range', 'viewport', 'locate']);
     detailSerial++; navigationSerial++;
-    detailHistory = [];
     const expected = {...capture(), queryId:++querySequence};
     state.queryId = expected.queryId; state.queryAccepted = false; state.queryStatus = 'running'; state.count = 0;
     state.queryComplete = false;
@@ -225,7 +262,11 @@ export function createLargeLogController({transport, onChange=()=>{}, onLocate=(
     state.fieldFiltering = !!(sent.include.length || sent.exclude.length || !sent.includeRaw);
     // The engine's condition states refer to these, by position.
     state.checkedConditions = {include:sent.include, exclude:sent.exclude}; state.conditions = null;
-    state.viewportStart = 0; state.scrollRevision++; state.scrollAlign = 'start'; state.selectedIndex = null; state.locationPending = null; state.detail = null; state.selectedLine = null; state.scannedBytes = 0; state.error = '';
+    state.viewportStart = 0; state.scrollRevision++; state.scrollAlign = 'start'; state.selectedIndex = null; state.scannedBytes = 0; state.error = ''; state.rejected = '';
+    locationNearest = false; locationRestore = null;
+    if (validPlace(place)) {startRelocation(place); state.locationPending = place.line;}
+    else {endRelocation(); state.locationPending = null; state.detail = null; state.selectedLine = null; setAnchor(null);}
+    if (!state.detail) detailHistory = [];
     const sequence = ++serial;
     if (timer !== null) clearTimer(timer); timer = null;
     emit(); schedule();
@@ -233,17 +274,29 @@ export function createLargeLogController({transport, onChange=()=>{}, onLocate=(
       const data = await request('query', {...expected, filters:sent});
       if (!data || sequence !== serial || !matches(data, expected, true)) return;
       queryProgress(data.query ?? {id:data.queryId, status:data.status, count:data.count, scannedBytes:data.scannedBytes, error:data.error});
-      emit();
+      emit(); followStatus();
     } catch (error) {
       if (sequence !== serial) return;
       if (error?.userMessage === BUSY && retryAttempt < MAX_QUERY_RETRIES) {
-        retryTimer = setTimer(() => {retryTimer = null; if (!disposed && sequence === serial) void setFilters(desiredFilters, {retryAttempt:retryAttempt + 1});}, Math.min(2000, 250 * 2 ** retryAttempt));
-      } else {state.queryStatus = 'error'; fail(error);}
+        retryTimer = setTimer(() => {retryTimer = null; if (!disposed && sequence === serial) void setFilters(desiredFilters, {retryAttempt:retryAttempt + 1, place:relocating()});}, Math.min(2000, 250 * 2 ** retryAttempt));
+      } else if (String(error?.userMessage ?? '').startsWith(MESSAGE_PATTERN_ERROR) && previous.queryAccepted) {
+        // A message pattern the engine rejects leaves its previous query, and
+        // the list returns to it and its place; `rejected` says why.
+        const place = relocating(), {filters:kept, ...query} = previous;
+        endRelocation(); desiredFilters = kept; Object.assign(state, query);
+        state.rejected = safeMessage(error.userMessage); state.scrollRevision++; state.viewportStart = 0;
+        if (place) {startRelocation(place); state.locationPending = place.line;} else state.locationPending = null;
+        emit(); followStatus(); schedule();
+      } else {state.queryStatus = 'error'; endRelocation(); state.locationPending = null; fail(error);}
     }
   }
   // The continuous viewport owns row reads and its bounded cache.
   async function fetchRows(start) {
     if(disposed||!state.datasetId||!state.queryId||!number(start))return null;
+    // A kept place briefly holds the first rows back; once it is found the
+    // list reads around it instead.
+    const r=relocation,revision=state.scrollRevision,query=state.queryId;
+    if(r&&!r.shown){await r.hold;if(disposed||state.queryId!==query||state.scrollRevision!==revision)throw new DOMException('Aborted','AbortError');}
     const expected=capture(),marks=searchMarks;
     const data=await request('page',{...expected,start,count:PAGE_SIZE,...(marks?{searchQueryId:marks}:{})},'viewport');
     return data&&matches(data,expected,true)?data:null;
@@ -298,16 +351,76 @@ export function createLargeLogController({transport, onChange=()=>{}, onLocate=(
   }
   function selectLine(line){
     if(disposed||!state.datasetId||!state.queryId||!Number.isSafeInteger(line)||line<1)return;
-    navigationSerial++;cancelRequests(['locate']);state.locationPending=null;state.selectedLine=line;emit();
+    navigationSerial++;cancelRequests(['locate']);endRelocation();state.locationPending=null;state.selectedLine=line;setAnchor(line);emit();
   }
   function rememberPosition(index){if(number(index))state.viewportStart=index;}
-  function seek(index,{selectedLine=null,center=false,restore=false}={}){
+  // `offset` keeps that many rows above the row at `index`, as on screen
+  // before. The selected row becomes the anchor unless `anchor` names it.
+  function seek(index,{selectedLine=null,center=false,restore=false,offset=null,anchor=selectedLine}={}){
     if(disposed||!number(index))return;
-    navigationSerial++;cancelRequests(['viewport','locate']);
-    state.locationPending=null;state.selectedLine=selectedLine;
-    state.viewportStart=restore?index:Math.min(index,Math.max(0,state.count-1));state.scrollAlign=center?'center':'start';
+    navigationSerial++;cancelRequests(['viewport','locate']);endRelocation();
+    state.locationPending=null;state.selectedLine=selectedLine;if(anchor!==state.anchor)setAnchor(anchor);
+    state.viewportStart=restore?index:Math.min(index,Math.max(0,state.count-1));
+    state.scrollAlign=number(offset)?'offset':center?'center':'start';state.scrollOffset=number(offset)?offset:0;
     // A restored anchor is the first visible row, not the selected row's ordinal.
     state.selectedIndex=selectedLine&&!restore?state.viewportStart:null;state.scrollRevision++;emit();
+  }
+  // Finds a kept place (`startRelocation`) once the new query's scan reaches
+  // it. A kept row that the results leave out gives its place to the result
+  // after it, or to the last result when none follows; the owner hears of a
+  // selection that moved so.
+  async function relocate(navigation=navigationSerial){
+    const r=relocation;
+    // Only a query the engine has accepted can locate a row.
+    if(disposed||locationBusy||!r||state.locationPending!==r.line||!state.queryAccepted)return;
+    locationBusy=true;const expected=capture();
+    const current=()=>navigation===navigationSerial&&relocation===r&&state.queryId===expected.queryId;
+    try{
+      if(r.index===null){
+        const data=await request('locate',{...expected,lineNumber:r.line});
+        if(!data||!current()||!matches(data,expected,true)||data.pending)return;
+        if(data.incomplete===true||!number(data.index))return void unplace();
+        if(data.found||!r.select)return void settle(r,data.index,data.found?r.line:null);
+        r.index=data.index;
+      }
+      if(['cancelled','error'].includes(state.queryStatus))return void unplace();
+      // A scan still running may find a result after the row.
+      if(r.index>=state.count&&state.queryStatus!=='complete')return;
+      if(!state.count)return void settle(r,0,null);
+      const at=Math.min(r.index,state.count-1);
+      const page=await request('page',{...expected,start:at,count:1},'locate');
+      if(!page||!current()||!matches(page,expected,true))return;
+      const line=page.rows?.[0]?.lineNumber;
+      if(page.start!==at||!Number.isSafeInteger(line))return void unplace();
+      settle(r,at,line);
+    }catch(error){if(current()){unplace();fail(error);}}
+    // A place replaced meanwhile is looked for now, not at the next poll.
+    finally{locationBusy=false;if(!disposed&&(relocation!==r||navigation!==navigationSerial))followStatus();schedule();}
+  }
+  // The list moves to the found place: the top row at the top, or the
+  // selected row (`line`: the anchor, a result standing in for it, or null
+  // with no results) where it was on screen. With no results the anchor and
+  // its detail stay for the next filter.
+  function settle(r,index,line){
+    endRelocation();
+    if(!r.select)return seek(index,{restore:true});
+    const detail=state.detail,before=state.selectedLine;
+    if(line===null){seek(0,{anchor:r.line});state.anchorOffset=r.offset;return;}
+    seek(index,{selectedLine:line,offset:r.offset,center:r.offset===null,anchor:r.line});state.anchorOffset=r.offset;
+    if(detail&&(detail.lineNumber!==line||detail.loading))void loadDetail(line,detail.lineNumber===line?detail.startByte:0);
+    if(line!==r.line&&line!==before)onRelocate({lineNumber:r.line,target:line});
+  }
+  // A place the query cannot find: the list stays at its start; the anchor
+  // stays for the next filter.
+  function unplace(){endRelocation();state.locationPending=null;state.selectedLine=null;closeDetail();}
+  // The user moved the list while a kept or restored place was still being
+  // found: it is no longer wanted. A kept selection stays, by its row. Returns
+  // the place given up, or null.
+  function stopRelocating(){
+    if(disposed||!state.locationPending||(!relocation&&!locationRestore))return null;
+    const given=relocating();
+    navigationSerial++;cancelRequests(['locate']);endRelocation();locationRestore=null;state.locationPending=null;emit();
+    return given;
   }
   async function resolveLocation(navigation=navigationSerial){
     if(disposed||locationBusy||!state.locationPending)return;
@@ -327,7 +440,9 @@ export function createLargeLogController({transport, onChange=()=>{}, onLocate=(
       state.locationPending=null;
       // A restored place puts the row, or the next result after it, first.
       if(restore){if(number(data.index))seek(data.index,{restore:true,selectedLine:kept(restore.selectedLine)});else emit();return;}
-      if(data.found&&number(data.index)){state.error='';seek(data.index,{selectedLine:line,center:true});onLocate({lineNumber:line,outcome:'found'});return;}
+      // A row followed from the other pane in place of its anchor leaves
+      // this pane's anchor as it was.
+      if(data.found&&number(data.index)){state.error='';seek(data.index,{selectedLine:line,center:true,...(locationKeepsAnchor?{anchor:state.anchor}:{})});onLocate({lineNumber:line,outcome:'found'});return;}
       // A row number typed by the user reports the outcome to the owner and
       // may select the next result instead: the engine's index of a missing
       // row is the number of results before it.
@@ -345,11 +460,12 @@ export function createLargeLogController({transport, onChange=()=>{}, onLocate=(
       else{state.selectedLine=null;state.error='선택한 행을 현재 필터 결과에서 찾을 수 없습니다. 필터 완료 후 다시 시도해 주세요.';emit();}
     }catch(error){if(navigation===navigationSerial){state.locationPending=null;fail(error);}}
     // A location requested while this one was busy resolves now, not at the next poll.
-    finally{locationBusy=false;if(state.locationPending&&navigation!==navigationSerial&&!disposed)void resolveLocation();schedule();}
+    finally{locationBusy=false;if(navigation!==navigationSerial&&!disposed)followStatus();schedule();}
   }
-  async function locateLine(line,{nearest=false}={}){
+  // `keepAnchor` follows a row that stands in for the other pane's anchor.
+  async function locateLine(line,{nearest=false,keepAnchor=false}={}){
     if(disposed||!state.datasetId||!state.queryId||!Number.isSafeInteger(line)||line<1)return;
-    navigationSerial++;cancelRequests(['locate']);locationNearest=nearest;locationRestore=null;state.locationPending=line;state.selectedLine=line;emit();
+    navigationSerial++;cancelRequests(['locate']);endRelocation();locationNearest=nearest;locationKeepsAnchor=keepAnchor;locationRestore=null;state.locationPending=line;state.selectedLine=line;emit();
     await resolveLocation();schedule();
   }
   // Returns to a saved place by physical rows: `line` (or the first result
@@ -357,7 +473,7 @@ export function createLargeLogController({transport, onChange=()=>{}, onLocate=(
   // it. Any navigation before then replaces the restore.
   async function restorePosition(line,selectedLine=null){
     if(disposed||!state.datasetId||!state.queryId||!Number.isSafeInteger(line)||line<1)return;
-    navigationSerial++;cancelRequests(['locate']);locationNearest=false;locationRestore={selectedLine:Number.isSafeInteger(selectedLine)&&selectedLine>0?selectedLine:null};
+    navigationSerial++;cancelRequests(['locate']);endRelocation();locationNearest=false;locationKeepsAnchor=false;locationRestore={selectedLine:Number.isSafeInteger(selectedLine)&&selectedLine>0?selectedLine:null};
     state.locationPending=line;state.selectedLine=locationRestore.selectedLine;emit();
     await resolveLocation();schedule();
   }
@@ -398,8 +514,8 @@ export function createLargeLogController({transport, onChange=()=>{}, onLocate=(
     const expected = capture();
     clearProgress();
     if (retryTimer !== null) clearTimer(retryTimer); retryTimer = null;
-    const sequence = ++serial; detailSerial++; navigationSerial++; cancelRequests();
-    state.detail = null; state.queryStatus = 'cancelled'; state.queryComplete = false; if(clearError)state.error=''; emit();
+    const sequence = ++serial; detailSerial++; navigationSerial++; cancelRequests(); endRelocation();
+    state.detail = null; state.locationPending = null; state.queryStatus = 'cancelled'; state.queryComplete = false; if(clearError)state.error=''; emit();
     try {
       const data = await request('cancel', expected);
       if (!data || !matches(data, expected, true)) return;
@@ -413,7 +529,7 @@ export function createLargeLogController({transport, onChange=()=>{}, onLocate=(
   function close({remote=true}={}) {
     if (disposed) return Promise.resolve();
     disposed = true; serial++; detailSerial++; navigationSerial++;
-    clearProgress();
+    clearProgress(); endRelocation();
     if (timer !== null) clearTimer(timer); timer = null;
     if (retryTimer !== null) clearTimer(retryTimer); retryTimer = null; cancelRequests();
     state.detail = null; state.selectedLine = null; state.locationPending = null; state.closed = true;
@@ -423,12 +539,14 @@ export function createLargeLogController({transport, onChange=()=>{}, onLocate=(
     return Promise.resolve().then(() => transport({action:'close'})).catch(()=>{});
   }
   function reopen(filters=DEFAULT_FILTERS) {
-    queryInvalidated=false;clearProgress();
+    queryInvalidated=false;clearProgress();endRelocation();
     cancelRequests();serial++;detailSerial++;navigationSerial++;
     if(timer!==null)clearTimer(timer);if(retryTimer!==null)clearTimer(retryTimer);
     timer=retryTimer=null;statusBusy=false;disposed=false;
     querySequence=0;statusRevision=0;detailHistory=[];searchMarks=null;desiredFilters=normalizeFilters(filters);
     Object.assign(state,initialState,{detail:null});emit();return poll({waitForQuery:true});
   }
-  return {reopen,start:poll, setFollow, acceptProgress, invalidateQuery, setFilters, fetchRows, readRows, readLines, readLineText, readRecordText, seek, rememberPosition, selectLine, locateLine, restorePosition, setSearchMarks, reportError:fail, loadDetail, previousDetail, closeDetail, cancel, close, getState:snapshot};
+  // The filters of the pane's query: after a rejected pattern, the ones kept.
+  const filters = () => normalizeFilters(desiredFilters);
+  return {reopen,start:poll, setFollow, acceptProgress, invalidateQuery, setFilters, filters, fetchRows, readRows, readLines, readLineText, readRecordText, seek, rememberPosition, selectLine, locateLine, restorePosition, relocating, stopRelocating, setSearchMarks, reportError:fail, loadDetail, previousDetail, closeDetail, cancel, close, getState:snapshot};
 }

@@ -328,3 +328,18 @@ test('a typed row reports its outcome and a hidden row selects the next counted 
   await controller.locateLine(31);assert.match(controller.getState().error,/찾을 수 없습니다/);
   await controller.close({remote:false});
 });
+
+test('an offset anchor keeps that many rows above it, and only the user moving the list is reported',async()=>{
+  const viewport=new Element(),rowsElement=new Element();let moves=0;
+  const document={createElement:()=>new Element()},window={addEventListener(){},removeEventListener(){}};
+  const view=createContinuousViewport({viewport,rowsElement,document,window,fetchRows:async start=>({start,rows:Array.from({length:200},(_,n)=>row(start+n))}),paint(){},onError:e=>{throw e;},onUserMove:()=>moves++});
+  view.update(state(10000,{viewportStart:500,scrollRevision:1,scrollAlign:'offset',scrollOffset:3}));await settle();
+  assert.equal(view.metrics().first,497);
+  // More rows above than fit keep the anchor in view.
+  view.update(state(10000,{viewportStart:800,scrollRevision:2,scrollAlign:'offset',scrollOffset:50}));await settle();
+  assert.equal(view.metrics().first,800-Math.floor(280/ROW_HEIGHT)+1);
+  assert.equal(moves,0,'moves the list makes itself are not the user\'s');
+  viewport.scroll(900);await settle();assert.equal(moves,1);
+  const keys=viewport.listeners.get('keydown');keys({key:'PageDown',preventDefault(){},target:null});assert.equal(moves,2);
+  view.destroy();
+});

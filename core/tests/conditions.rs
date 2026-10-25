@@ -231,7 +231,7 @@ fn conditions_are_skipped_normalized_bounded_and_compared() {
     ] {
         assert!(Filter::new(f(bad.clone())).is_err(), "{bad}");
     }
-    assert!(serde_json::from_value::<Filters>(json!({"include":[{"message":"x"}]})).is_err());
+    assert!(serde_json::from_value::<Filters>(json!({"include":[{"payload":"x"}]})).is_err());
     // A hiding condition keeps a tag item with a line break: it matches no
     // tag, so the condition hides nothing rather than every level.
     let broken = Filter::new(Filters {

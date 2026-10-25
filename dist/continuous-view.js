@@ -31,7 +31,9 @@ export class ScrollPosition {
 }
 
 const MOVE_HINT='. 스크롤하거나 Home/End/PageUp/PageDown으로 이동';
-export function createContinuousViewport({viewport,rowsElement,document,window,fetchRows,paint,onVisible=()=>{},onError=()=>{},onSelect=()=>{}}) {
+// `onUserMove` hears of the user scrolling the list (wheel, scrollbar or
+// keys), as opposed to the list moving itself.
+export function createContinuousViewport({viewport,rowsElement,document,window,fetchRows,paint,onVisible=()=>{},onError=()=>{},onSelect=()=>{},onUserMove=()=>{}}) {
   const model=new ScrollPosition(),cache=new Map();let bytes=0,epoch=0,key=null,state=null;
   let flight=null,blocked=null,viewVersion=0,scrollRevision=null,pendingAnchor=null,disposed=false;
   let lastPaint=null,lastProgrammatic=0;
@@ -104,10 +106,10 @@ export function createContinuousViewport({viewport,rowsElement,document,window,f
     }).finally(()=>{if(flight===job)flight=null;if(!disposed)pump();});
   }
   function changed(){viewVersion++;blocked=null;render();pump();}
-  function onScroll(){if(disposed)return;if(Math.abs(viewport.scrollTop-lastProgrammatic)>.01)model.native(viewport.scrollTop);lastProgrammatic=viewport.scrollTop;changed();}
+  function onScroll(){if(disposed)return;const moved=Math.abs(viewport.scrollTop-lastProgrammatic)>.01;if(moved)model.native(viewport.scrollTop);lastProgrammatic=viewport.scrollTop;changed();if(moved)onUserMove();}
   function onWheel(event){
     if(!model.scaled||event.ctrlKey||event.shiftKey||!event.deltaY)return;
-    event.preventDefault();model.move(event.deltaY*(event.deltaMode===1?ROW_HEIGHT:event.deltaMode===2?model.height:1));sync();changed();
+    event.preventDefault();model.move(event.deltaY*(event.deltaMode===1?ROW_HEIGHT:event.deltaMode===2?model.height:1));sync();changed();onUserMove();
   }
   function onKey(event){
     if(event.defaultPrevented||event.altKey||event.ctrlKey||event.metaKey||event.target?.isContentEditable||event.target?.closest?.('input,textarea,select,button,[contenteditable]:not([contenteditable="false"])'))return;
@@ -120,7 +122,7 @@ export function createContinuousViewport({viewport,rowsElement,document,window,f
     if(delta!==undefined){event.preventDefault();model.move(delta);}
     else if(event.key==='Home'||event.key==='End'){event.preventDefault();model.jump(event.key==='Home'?0:Math.max(0,model.count-1));}
     else return;
-    sync();changed();
+    sync();changed();onUserMove();
   }
   // Selection travels in displayed ordinal order, including uncached rows. A
   // held key replaces the pending ordinal; page replies publish only the latest.
@@ -171,7 +173,11 @@ export function createContinuousViewport({viewport,rowsElement,document,window,f
       }
     }
     if(anchorMoved){scrollRevision=next.scrollRevision;pendingAnchor=next.viewportStart??0;viewVersion++;blocked=null;}
-    if(pendingAnchor!==null&&(model.count>pendingAnchor||next.queryComplete||next.queryStatus==='cancelled')){model.jump(Math.max(0,pendingAnchor-(next.scrollAlign==='center'?Math.floor(model.height/ROW_HEIGHT/2):0)));pendingAnchor=null;}
+    if(pendingAnchor!==null&&(model.count>pendingAnchor||next.queryComplete||next.queryStatus==='cancelled')){
+      // `offset` rows stay above the anchor, as many as fit above its row.
+      const rows=Math.floor(model.height/ROW_HEIGHT),above=next.scrollAlign==='center'?Math.floor(rows/2):next.scrollAlign==='offset'?Math.min(next.scrollOffset|0,Math.max(0,rows-1)):0;
+      model.jump(Math.max(0,pendingAnchor-above));pendingAnchor=null;
+    }
     sync();render(force);pump();
   }
   function scrollToEnd(){if(disposed)return;model.position=model.maximum;sync();changed();}

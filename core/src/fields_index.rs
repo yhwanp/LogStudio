@@ -644,14 +644,14 @@ impl FieldIndex {
 pub struct Probe {
     table: Arc<FieldIndex>,
     known: Known,
-    /// Whether levels and fields decide the condition: no time range and no
-    /// tested field without metadata.
+    /// Whether levels and fields decide the condition: no time range or
+    /// message and no tested field without metadata.
     exact: bool,
 }
 impl FieldIndex {
     pub fn probe(self: &Arc<Self>, c: &Cond) -> Probe {
         let known = self.known(c);
-        let exact = !c.has_time() && known.fields.iter().all(|(_, v)| v.is_some());
+        let exact = !c.reads_rows() && known.fields.iter().all(|(_, v)| v.is_some());
         Probe {
             table: self.clone(),
             known,

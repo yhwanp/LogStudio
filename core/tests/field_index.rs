@@ -223,6 +223,25 @@ fn filters() -> Vec<Filters> {
             serde_json::json!({"include":[{"tag":"rare","timeFrom":"12:07:10","timeTo":"12:07:40"},{"levels":["F"]}]}),
             serde_json::json!({"exclude":[{"levels":["V"]},{"tag":"comp"}],"includeRaw":false}),
             serde_json::json!({"include":[{"levels":[]}]}),
+            // Message conditions read the rows; the tables still skip blocks
+            // where no other criterion of a showing condition can match.
+            serde_json::json!({"include":[{"message":"CRASH"}]}),
+            serde_json::json!({"exclude":[{"message":"value="}]}),
+            serde_json::json!({"include":[{"tag":"RareTag","message":"rare"}]}),
+            serde_json::json!({"include":[{"tag":"activitymanager","message":"zzz-nothing"}]}),
+            serde_json::json!({"exclude":[{"tag":"wifi","message":"[05]$","messageRegex":true}]}),
+            serde_json::json!({"include":[{"levels":["E"],"message":"crash"},{"pid":"4242"}],"query":"rare"}),
+            serde_json::json!({"include":[{"message":"안내"},{"message":"m \\d+5$","messageRegex":true}]}),
+            // Rows without a literal text are decided unread: a hidden entry
+            // still hides its continuation rows, and a shown one, the 12,000
+            // rows after it across blocks; a text only continuation rows have
+            // decides nothing.
+            serde_json::json!({"exclude":[{"message":"crash"}]}),
+            serde_json::json!({"exclude":[{"message":"crash"}],"includeRaw":false}),
+            serde_json::json!({"include":[{"message":"message 1"}],"exclude":[{"tag":"wifi"}]}),
+            serde_json::json!({"exclude":[{"message":"huge body"},{"message":"START"}]}),
+            serde_json::json!({"include":[{"message":"start"},{"message":"안내문구"}]}),
+            serde_json::json!({"include":[{"message":"malformed"}]}),
         ] {
             v["recognizeLineNumbers"] = recognize.clone();
             out.push(f(v));
@@ -379,10 +398,10 @@ fn metadata_keeps_every_result() {
     assert!(n > 0 && n < blocks, "{n}/{blocks}");
     // Several conditions over levels and one field decide every block.
     for needle in [
-        "tag: \"activitymanager\", pid: \"\", tid: \"\", time_from: \"\", time_to: \"\" }, Condition { levels: [\"E\", \"F\"]",
+        "tag: \"activitymanager\", pid: \"\", tid: \"\", time_from: \"\", time_to: \"\", message: \"\", message_regex: false }, Condition { levels: [\"E\", \"F\"]",
         "exclude: [Condition { levels: [\"V\", \"D\", \"I\"], tag: \"activitymanager\"",
         "exclude: [Condition { levels: [\"E\"], tag: \"wifi\"",
-        "tag: \"RareTag\", pid: \"\", tid: \"\", time_from: \"\", time_to: \"\" }, Condition",
+        "tag: \"RareTag\", pid: \"\", tid: \"\", time_from: \"\", time_to: \"\", message: \"\", message_regex: false }, Condition",
         "include: [Condition { levels: [], tag",
     ] {
         let (n, blocks) = by(&usage, needle);

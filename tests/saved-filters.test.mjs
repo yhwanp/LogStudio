@@ -27,7 +27,7 @@ test('a filter is stored as the fields its conditions set', () => {
 });
 
 test('filters with unknown fields or values the filter rejects are not applied', () => {
-  assert.equal(fromStored({v:SAVED_VERSION, include:[{tag:'a', message:'x'}]}), null, 'an unknown field');
+  assert.equal(fromStored({v:SAVED_VERSION, include:[{tag:'a', payload:'x'}]}), null, 'an unknown field');
   assert.equal(fromStored({v:SAVED_VERSION, include:Array.from({length:MAX_CONDITIONS + 1}, (_, i) => ({tag:`t${i}`}))}), null, 'too many conditions');
   assert.equal(fromStored({v:2, include:[]}), null);
   for (const bad of [null, [], 'x', {v:SAVED_VERSION, include:'a'}, {v:SAVED_VERSION, include:[[1]]}]) assert.equal(fromStored(bad), null);

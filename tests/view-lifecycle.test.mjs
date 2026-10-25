@@ -930,7 +930,7 @@ test('row menu adds removable conditions without changing existing ones, and exc
   const menu=()=>r.get('rowMenu').children.filter(n=>n.tagName==='BUTTON').map(n=>n.textContent);
   await row(1).dispatch('contextmenu',{clientX:10,clientY:20,preventDefault(){}});await settle();
   assert.equal(r.get('rowMenu').hidden,false);
-  assert.deepEqual(menu(),["태그 'Choreographer' 보기 조건 추가","태그 'Choreographer' 제외",'PID 100 보기 조건 추가','TID 200 보기 조건 추가','06-18 19:24:00.000부터 보기 조건 추가','06-18 19:24:00.000까지 보기 조건 추가','Info 레벨 보기 조건 추가','행 원문 복사','북마크 추가']);
+  assert.deepEqual(menu(),["태그 'Choreographer' 보기 조건 추가","태그 'Choreographer' 제외","메시지 'x' 보기 조건 추가","메시지 'x' 제외",'PID 100 보기 조건 추가','TID 200 보기 조건 추가','06-18 19:24:00.000부터 보기 조건 추가','06-18 19:24:00.000까지 보기 조건 추가','Info 레벨 보기 조건 추가','행 원문 복사','북마크 추가']);
   const title=label=>r.get('rowMenu').children.find(n=>n.textContent===label).title;
   assert.equal(title('PID 100 보기 조건 추가'),'이 값에 맞는 줄만 보입니다','no showing condition is in use yet');
   assert.equal(r.controller.logs.getState().selectedLine,1,'right-click selects the row');
@@ -1461,7 +1461,7 @@ test('a condition no row of the log matches says so on its card and its chip whi
   const r=await rig({query:b=>({status:'complete',count:6,complete:true,...(b.pane==='logs'?{conditions:{include:states(b.filters.include),exclude:states(b.filters.exclude)}}:{})})});
   t.after(()=>r.controller.close());
   const enter=async(id,value)=>{r.get(id).value=value;await r.get(id).dispatch('input');await r.get(id).dispatch('keydown',{key:'Enter',preventDefault(){}});await settle();};
-  const shows=()=>r.get('showList').children,hides=()=>r.get('hideList').children,head=card=>card.children[0],note=card=>card.children[1];
+  const shows=()=>r.get('showList').children,hides=()=>r.get('hideList').children,head=card=>card.children[0],note=card=>card.children.find(child=>child.className==='cond-alert');
   const chips=()=>chipNodes(r.get('activeFilters')).filter(node=>node.className.startsWith('filter-chip'));
   // A lone showing condition has no card header: the note is above its fields.
   await enter('tagFilter','Nothing');
@@ -1500,4 +1500,57 @@ test('a condition known after its query is marked when the engine reports it, ne
   assert.equal(card().dataset.rows,'','the replaced query cannot mark the new one');
   await report(r.controller.logs.getState().queryId,'some');
   assert.equal(card().dataset.rows,'');
+});
+
+test('a message condition comes from a row, the field or its .* switch, and a rejected pattern keeps the last conditions',async t=>{
+  const rows=[{lineNumber:1,kind:'parsed',raw:'06-18 19:24:00.000  100 200 I Choreographer: Skipped 12 frames!',date:'06-18',time:'19:24:00.000',pid:'100',tid:'200',level:'I',tag:'Choreographer',message:'Skipped 12 frames!'}];
+  const query=async b=>{if(b.filters.include.some(c=>c.message==='('))throw 'Invalid or unsupported message pattern: unclosed group';return {status:'complete',count:1,complete:true};};
+  const r=await rig({rows,query});t.after(()=>r.controller.close());
+  const upper=()=>r.calls.filter(c=>c.args.request?.action==='query'&&c.args.request.pane==='logs').at(-1).args.request.filters;
+  const chips=()=>chipNodes(r.get('activeFilters')).map(chip=>chip.textContent);
+  const row=line=>r.get('logsRows').children.find(n=>n.dataset.lineNumber===String(line));
+  const hide="메시지 'Skipped 12 frames!' 제외";
+  await row(1).dispatch('contextmenu',{clientX:10,clientY:20,preventDefault(){}});await settle();
+  assert.ok(r.get('rowMenu').children.some(n=>n.textContent==="메시지 'Skipped 12 frames!' 보기 조건 추가"));
+  await r.get('rowMenu').children.find(n=>n.textContent===hide).dispatch('click');await settle();
+  assert.deepEqual(upper().exclude.map(c=>[c.message,c.messageRegex]),[['Skipped 12 frames!',false]]);
+  assert.deepEqual(chips(),['제외','메시지: “Skipped 12 frames!”×']);
+  assert.equal(r.get('toast').children[0].textContent,'제외 조건을 추가했습니다 · 메시지: “Skipped 12 frames!”');
+  // The same message hidden again adds nothing.
+  await row(1).dispatch('contextmenu',{clientX:10,clientY:20,preventDefault(){}});await settle();
+  await r.get('rowMenu').children.find(n=>n.textContent===hide).dispatch('click');await settle();
+  assert.equal(r.get('hideList').children.length,1);
+  // The field takes a string; the .* switch makes it a pattern.
+  const field=r.get('messageFilter'),enter=async value=>{field.value=value;await field.dispatch('input');await field.dispatch('keydown',{key:'Enter',preventDefault(){}});await settle();};
+  await enter('frames');
+  assert.deepEqual(upper().include.map(c=>[c.message,c.messageRegex]),[['frames',false]]);
+  await r.get('messageRegex').dispatch('click');await field.dispatch('keydown',{key:'Enter',preventDefault(){}});await settle();
+  assert.equal(r.get('messageRegex').attributes['aria-pressed'],'true');
+  assert.deepEqual(upper().include.map(c=>[c.message,c.messageRegex]),[['frames',true]]);
+  assert.deepEqual(chips(),['메시지 정규식: “frames”×','제외','메시지: “Skipped 12 frames!”×']);
+  // A pattern only the engine can reject: the list and chips keep the last
+  // conditions, and the field says why.
+  const kept=r.controller.logs.getState().queryId;
+  await enter('(');
+  assert.equal(r.get('messageFilterError').hidden,true,'not while typing');
+  for(const [id,task] of [...r.timers])if(task.ms===600){r.timers.delete(id);task.fn();}
+  assert.equal(r.controller.logs.getState().queryId,kept);assert.equal(r.controller.logs.getState().count,1);
+  assert.equal(r.get('messageFilterError').textContent,'메시지 정규식을 확인해 주세요: unclosed group');assert.equal(r.get('messageFilterError').hidden,false);
+  assert.equal(field.attributes['aria-invalid'],'true');assert.equal(r.get('largeError').hidden,true,'not also in the banner');
+  assert.equal(r.get('logsPending').textContent,'입력한 조건 미적용 · 이전 조건 결과');
+  assert.deepEqual(chips(),['메시지 정규식: “frames”×','제외','메시지: “Skipped 12 frames!”×']);
+  // The mark stays on the condition whose pattern the engine may have
+  // rejected, also while another condition is edited.
+  const summary=list=>r.get(list).children[0].children[0].children[1].textContent;
+  assert.match(summary('showList'),/확인 필요$/);
+  await r.get('hideList').children[0].children[0].children[1].dispatch('click');await settle();
+  assert.match(summary('showList'),/확인 필요$/);assert.doesNotMatch(summary('hideList'),/확인 필요/);
+  assert.equal(r.get('messageFilterError').hidden,true,'the edited condition has no rejected pattern');
+  await r.get('showList').children[0].children[0].children[1].dispatch('click');await settle();
+  await enter('(frames)');
+  assert.equal(r.get('messageFilterError').hidden,true);assert.equal(r.get('logsPending').hidden,true);
+  assert.deepEqual(chips(),['메시지 정규식: “(frames)”×','제외','메시지: “Skipped 12 frames!”×']);
+  // Its chip clears the message and its mode.
+  await chipNodes(r.get('activeFilters'))[0].dispatch('click');await settle();
+  assert.equal(field.value,'');assert.equal(r.get('messageRegex').attributes['aria-pressed'],'false');
 });

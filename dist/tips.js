@@ -36,9 +36,9 @@ export const TIPS = {
   // takes its place while it waits for a pause.
   help: {ambient: true, target: byId('shortcutHelp'), title: '처음 사용하시나요?', body: '주요 기능을 화면에서 차례로 짚어 드립니다. 단축키 목록과 이 둘러보기는 이 버튼이나 {?} 키로 언제든 열 수 있습니다.', next: '둘러보기', back: '닫기', tour: true},
   // Offered when the filter panel opens; the panel stays open meanwhile.
-  levels: {target: byId('levelFilters'), sides: ['right', 'bottom', 'top', 'left'], title: '레벨 필터', body: '레벨을 눌러 켜고 끄며, {Alt}+클릭하면 그 레벨만 남깁니다. 태그·PID·TID 칸에는 쉼표로 여러 값을 적을 수 있습니다.'},
+  levels: {target: byId('levelFilters'), sides: ['right', 'bottom', 'top', 'left'], title: '레벨 필터', body: '레벨을 눌러 켜고 끄며, {Alt}+클릭하면 그 레벨만 남깁니다. 태그·PID·TID 칸에는 쉼표로 여러 값을 적을 수 있고, + 메시지를 눌러 메시지 내용으로도 거를 수 있습니다.'},
   // Offered when a row of the upper logs is selected.
-  rows: {target: document => document.querySelector('#logsRows .selected-log-row'), clip: logsViewport, title: '행 복사·북마크·행 메뉴', body: '행을 드래그하거나 {Shift}+클릭해 이어진 행을, {⌘}+클릭으로 떨어진 행을 선택해 {⌘C}로 원문을 복사합니다.\n다시 볼 행은 {⌘B}로 북마크해 두세요. 필터나 검색을 바꿔도 남고, 아래 북마크 탭에 모여 {F2}로 오갈 수 있습니다.\n행을 우클릭하면 그 행의 태그·PID·시각으로 바로 거를 수 있습니다.'},
+  rows: {target: document => document.querySelector('#logsRows .selected-log-row'), clip: logsViewport, title: '행 복사·북마크·행 메뉴', body: '행을 드래그하거나 {Shift}+클릭해 이어진 행을, {⌘}+클릭으로 떨어진 행을 선택해 {⌘C}로 원문을 복사합니다.\n다시 볼 행은 {⌘B}로 북마크해 두세요. 필터나 검색을 바꿔도 남고, 아래 북마크 탭에 모여 {F2}로 오갈 수 있습니다.\n행을 우클릭하면 그 행의 태그·메시지·PID·시각으로 바로 거를 수 있습니다.'},
   // Offered when search results are shown.
   search: {target: byId('largeSearchPane'), sides: ['top', 'bottom', 'right', 'left'], title: '검색 결과를 위 로그에서 보기', body: '결과 행을 선택하면 위 로그도 그 행을 보여 주고, 더블클릭이나 {Enter}로 위 로그로 이동합니다. 검색창에서는 {Enter}·{Shift}+{Enter}로 결과를 차례로 넘깁니다.'},
   // Offered when the first bookmark makes the tab appear.
@@ -50,9 +50,9 @@ export const TIPS = {
 export const TOUR = [
   {target: byId('openFile'), title: '로그 열기', body: '{⌘O}로 파일을 엽니다. 여러 파일을 함께 선택하거나 창에 끌어다 놓으면 시간순으로 합쳐 하나의 로그로 엽니다. 로그 텍스트는 {⌘V}로 붙여넣습니다.'},
   {target: byId('reopenFile'), title: '다시 열기', body: '파일이 바뀌면 {⌘R}로 다시 읽습니다. 필터·검색·북마크와 보던 위치는 그대로 남습니다.'},
-  {covers: 'levels', target: byId('toggleFilters'), sides: ['right', 'bottom', 'top', 'left'], title: '필터', body: '레벨·태그·PID/TID·시간으로 위 로그를 거릅니다. 보기 조건을 추가하면 그중 하나라도 맞는 줄을 보여 주고, 제외 조건에 맞는 줄은 숨깁니다. 레벨은 {Alt}+클릭하면 그 레벨만 남고, 칸마다 쉼표로 여러 값을 적을 수 있습니다.'},
+  {covers: 'levels', target: byId('toggleFilters'), sides: ['right', 'bottom', 'top', 'left'], title: '필터', body: '레벨·태그·메시지·PID/TID·시간으로 위 로그를 거릅니다. 보기 조건을 추가하면 그중 하나라도 맞는 줄을 보여 주고, 제외 조건에 맞는 줄은 숨깁니다. 레벨은 {Alt}+클릭하면 그 레벨만 남고, 태그·PID·TID 칸에는 쉼표로 여러 값을 적을 수 있습니다.'},
   {target: byId('savedFilterButton'), sides: ['bottom', 'right', 'top', 'left'], title: '저장된 필터', body: '자주 쓰는 필터를 이름 붙여 저장해 두고, 다른 파일을 열었을 때 여기서 선택해 바로 적용합니다. 적용한 뒤 조건을 바꾸면 \'수정됨\'이 붙고, 다시 저장하거나 저장한 조건으로 되돌릴 수 있습니다.'},
-  {covers: 'rows', target: rowInView, clip: logsViewport, title: '행 선택과 복사', body: '행을 클릭하면 아래에 그 로그의 원문이 열립니다. 드래그·{Shift}+클릭으로 이어진 행을, {⌘}+클릭으로 떨어진 행을 선택해 {⌘C}로 복사하고, 우클릭하면 그 행의 태그·PID·시각으로 바로 거릅니다.'},
+  {covers: 'rows', target: rowInView, clip: logsViewport, title: '행 선택과 복사', body: '행을 클릭하면 아래에 그 로그의 원문이 열립니다. 드래그·{Shift}+클릭으로 이어진 행을, {⌘}+클릭으로 떨어진 행을 선택해 {⌘C}로 복사하고, 우클릭하면 그 행의 태그·메시지·PID·시각으로 바로 거릅니다.'},
   {covers: 'bookmarks', target: document => rowInView(document)?.children?.[0] ?? null, clip: logsViewport, title: '북마크', body: '다시 볼 행은 {⌘B}로 북마크해 두세요. 북마크하면 행 번호에 표시가 붙고 아래 북마크 탭에 모이며, 필터나 검색을 바꿔도 남습니다. {F2}·{Shift}+{F2}로 북마크 사이를 오갑니다.'},
   {target: byId('logsHeaders'), title: '열 폭', body: '머리글 경계를 드래그해 폭을 바꾸고, 경계를 더블클릭하면 내용에 맞춥니다. 머리글을 우클릭하면 모든 열을 내용에 맞추거나 기본 폭으로 되돌립니다.'},
   {covers: 'search', target: byId('largeSearchTools'), sides: ['top', 'bottom', 'right', 'left'], title: '검색', body: '{⌘F}나 {/}로 검색창으로 갑니다. 결과는 아래쪽에 열리고 {Enter}·{Shift}+{Enter}로 결과를 위 로그에서 차례로 보여 줍니다. 결과가 열리면 경계선을 끌어 위아래 높이를 바꿀 수 있습니다.'},

@@ -1,12 +1,14 @@
 // The filter panel's conditions: a card per showing and per hiding condition,
-// and one editor (the panel's level, tag, ID and time fields) inside the card
-// being edited. A lone showing condition being edited has no card header, so
-// a filter of one condition reads as one set of fields. Cards are rebuilt only
-// when conditions are added, removed or selected; typing refreshes their
-// summaries in place, so the editor keeps focus. A condition no row of the
-// log matches (`rowless`, from the engine) says so in a line under its
-// summary, which keeps its width, or above the editor of a lone showing
-// condition, which has no card header.
+// and one editor (the panel's level, tag, message, ID and time fields) inside
+// the card being edited. A lone showing condition being edited has no card
+// header, so a filter of one condition reads as one set of fields. Cards are
+// rebuilt only when conditions are added, removed or selected; typing
+// refreshes their summaries in place, so the editor keeps focus. A condition
+// no row of the log matches (`rowless`, from the engine) says so in a line
+// under its summary, which keeps its width, or under the editor of the
+// condition being edited, so that typing never moves the field. `problem`
+// names a problem only the engine finds, such as a message pattern it
+// rejected.
 import {describeCondition} from './describe.js';
 import {isEmptyCondition, conditionProblem, MAX_CONDITIONS} from './filter-model.js';
 
@@ -22,7 +24,7 @@ export function rowlessText(list, following=false) {
   return `${none} · ${list === 'include' ? '이 조건으로 보이는 줄이 없습니다' : '이 조건이 숨기는 줄이 없습니다'}`;
 }
 
-export function mountConditions({document, lists, hints, adders, editor, onSelect, onToggle, onRemove, onAdd, rowless=() => ({include:new Set(), exclude:new Set(), following:false})}) {
+export function mountConditions({document, lists, hints, adders, editor, onSelect, onToggle, onRemove, onAdd, rowless=() => ({include:new Set(), exclude:new Set(), following:false}), problem:engineProblem=() => ''}) {
   let cards = {include:[], exclude:[]};
   for (const list of LISTS) adders[list].addEventListener('click', () => onAdd(list));
   function card(list, index) {
@@ -46,7 +48,8 @@ export function mountConditions({document, lists, hints, adders, editor, onSelec
       cards[list] = conds[list].map((_, index) => card(list, index));
       lists[list].replaceChildren(...cards[list].map(c => c.box));
     }
-    cards[active.list]?.[active.index]?.box.append(editor);
+    const editing = cards[active.list]?.[active.index];
+    editing?.box.insertBefore(editor, editing.alert);
     refresh(conds, active, format);
   }
   // Summaries, switches and states, without moving the editor.
@@ -58,7 +61,7 @@ export function mountConditions({document, lists, hints, adders, editor, onSelec
         if (!view) return;
         const current = active.list === list && active.index === index, text = conditionSummary(c, format);
         const kind = list === 'include' ? '보기' : '제외', name = `${kind} 조건 ${index + 1}`;
-        const problem = conditionProblem(c), none = !!marks[list]?.has(index), lone = solo && list === 'include';
+        const problem = conditionProblem(c) || engineProblem(list, index), none = !!marks[list]?.has(index), lone = solo && list === 'include';
         view.box.dataset.active = String(current);
         view.box.dataset.off = String(c.enabled === false);
         view.box.dataset.empty = String(isEmptyCondition(c));
