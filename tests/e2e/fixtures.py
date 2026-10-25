@@ -291,3 +291,46 @@ def covesa(root: Path):
     source = Path(__file__).resolve().parents[1] / 'fixtures' / 'covesa'
     for name in (COVESA_EXTENDED, COVESA_V2, COVESA_HEADERLESS):
         shutil.copyfile(source / name, root / name)
+
+
+def track(root: Path):
+    """track.log: 1,200 Android threadtime rows. From row 10, every third
+    row is a NavSample position (`onPositionChanged` and a JSON fix in
+    degrees times 1e7) along a synthetic loop; rows 301 and 601 carry the
+    marker with a fix that has no number. Returns the points as (row,
+    latitude, longitude)."""
+    import math
+    rows, points = [], []
+    for i in range(1200):
+        line = i + 1
+        time = f'10-25 09:{i // 600:02d}:{(i // 10) % 60:02d}.{(i % 10) * 100:03d}'
+        if line in (301, 601):
+            rows.append(f'{time}  4100  4120 W NavSample           : onPositionChanged {{"fix":{{"lat":"pending"}}}}')
+        elif i >= 9 and i % 3 == 0:
+            k = len(points)
+            a = k / 60 * math.pi
+            lat, lon = round((52.52 + 0.004 * math.sin(a)) * 1e7), round((13.405 + 0.006 * math.cos(a) + k * 0.00002) * 1e7)
+            points.append((line, lat / 1e7, lon / 1e7))
+            rows.append(f'{time}  4100  4120 D NavSample           : onPositionChanged {{"fix":{{"lat":{lat},"lon":{lon},"alt":0}},"seq":{k}}}')
+        else:
+            rows.append(f'{time}  4100  4121 {"ID"[i % 2]} ExampleApp          : synthetic step {i}')
+    (root / 'track.log').write_text('\n'.join(rows) + '\n', encoding='utf-8')
+    return points
+
+
+def tile_png(x, y):
+    """A synthetic 256 px map tile: a light checkerboard square with a
+    border, so tiles show where they meet. No real map data."""
+    import zlib
+    base = (236, 240, 232) if (x + y) % 2 else (226, 232, 222)
+    line = bytearray()
+    for row in range(256):
+        line.append(0)
+        for col in range(256):
+            edge = row in (0, 255) or col in (0, 255)
+            line += bytes((205, 212, 200) if edge else base)
+
+    def chunk(kind, data):
+        return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data) & 0xffffffff)
+    header = struct.pack('>IIBBBBB', 256, 256, 8, 2, 0, 0, 0)
+    return b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', header) + chunk(b'IDAT', zlib.compress(bytes(line))) + chunk(b'IEND', b'')

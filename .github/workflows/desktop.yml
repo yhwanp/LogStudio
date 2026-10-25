@@ -112,6 +112,34 @@ jobs:
           ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
           PLATFORM: ${{ matrix.name }}
         run: printf '[Download %s](%s)\n' "$PLATFORM" "$ARTIFACT_URL" >> "$GITHUB_STEP_SUMMARY"
+      # App extensions (extras/) build into a separate download that no
+      # release includes: its artifact name is outside the release job's
+      # `LogStudio-*` pattern.
+      - name: Check the build with extensions
+        run: cargo clippy --locked --release -p logstudio-desktop --all-targets --target "$BUILD_TARGET" --features extras -- -D warnings
+      - name: Build and package the download with extensions
+        if: github.event_name != 'pull_request' && !startsWith(github.ref, 'refs/tags/')
+        run: |
+          cargo build --locked --release -p logstudio-desktop --target "$BUILD_TARGET" --features extras
+          python desktop/package_download.py \
+            --binary "target/$BUILD_TARGET/release/$BUILD_EXECUTABLE" \
+            --target "$BUILD_TARGET" --output artifacts/extras-downloads
+      - name: Upload the download with extensions
+        id: upload-extras
+        if: github.event_name != 'pull_request' && !startsWith(github.ref, 'refs/tags/')
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: extras-LogStudio-${{ matrix.label }}
+          path: artifacts/extras-downloads/*
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+      - name: Add the link to the download with extensions
+        if: github.event_name != 'pull_request' && !startsWith(github.ref, 'refs/tags/')
+        env:
+          ARTIFACT_URL: ${{ steps.upload-extras.outputs.artifact-url }}
+          PLATFORM: ${{ matrix.name }}
+        run: printf '[Download %s with extensions (not released)](%s)\n' "$PLATFORM" "$ARTIFACT_URL" >> "$GITHUB_STEP_SUMMARY"
       - name: Save Rust cache including failed-build dependencies
         if: ${{ always() && !cancelled() && github.event_name != 'pull_request' && steps.rust-cache.outcome == 'success' && steps.rust-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5

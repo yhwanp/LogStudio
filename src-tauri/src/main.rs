@@ -857,6 +857,24 @@ async fn reopen_source(
         .await
         .map_err(|_| "Request failed".to_string())?
 }
+/// The page's app extensions, which only `extras` builds have
+/// (`logstudio_extras::request`): `list` lists none in other builds.
+#[tauri::command]
+fn extras(window: tauri::WebviewWindow, request: Value) -> Result<Value, String> {
+    main_window(&window)?;
+    extras_request(window.app_handle(), request)
+}
+#[cfg(feature = "extras")]
+fn extras_request(app: &tauri::AppHandle, request: Value) -> Result<Value, String> {
+    logstudio_extras::request(app, request)
+}
+#[cfg(not(feature = "extras"))]
+fn extras_request(_: &tauri::AppHandle, request: Value) -> Result<Value, String> {
+    match request["action"].as_str() {
+        Some("list") => Ok(json!([])),
+        _ => Err("This build has no extensions".into()),
+    }
+}
 #[cfg(feature = "qa")]
 #[tauri::command]
 async fn qa_open_fixture(state: tauri::State<'_, AppState>, name: String) -> Result<Value, String> {
@@ -1062,9 +1080,19 @@ fn main() {
                 )
             }
         };
-    let mut builder = tauri::Builder::default()
+    let engine = Arc::new(Engine::default());
+    let mut builder = tauri::Builder::default();
+    #[cfg(feature = "extras")]
+    {
+        #[cfg(feature = "qa")]
+        let background = qa_background();
+        #[cfg(not(feature = "qa"))]
+        let background = false;
+        builder = logstudio_extras::install(builder, engine.clone(), background);
+    }
+    builder = builder
         .plugin(tauri_plugin_dialog::init())
-        .manage(AppState(Arc::new(Engine::default())))
+        .manage(AppState(engine))
         .manage(clipboard::Grants::default())
         .manage(Exports::default())
         .manage(recent::Recent::default())
@@ -1165,6 +1193,10 @@ fn main() {
             let _ = (app, event);
         })
         .on_window_event(|window, event| {
+            // Other windows, such as an extension's, handle their own events.
+            if window.label() != "main" {
+                return;
+            }
             let engine = window.state::<AppState>().0.clone();
             match event {
                 // Entry and exit only drive the drop hint; no path is read for
@@ -1204,6 +1236,13 @@ fn main() {
                 tauri::WindowEvent::Destroyed => {
                     window.state::<clipboard::Grants>().clear();
                     engine.close();
+                    // The app ends with the main window, as it does with its
+                    // last window.
+                    for (label, other) in window.app_handle().webview_windows() {
+                        if label != "main" {
+                            let _ = other.destroy();
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -1247,6 +1286,7 @@ fn main() {
                 delete_leftover,
                 finish_drop,
                 answer_close,
+                extras,
                 qa_devices,
                 qa_quit,
                 qa_open_fixture,
@@ -1289,7 +1329,8 @@ fn main() {
             open_leftover,
             delete_leftover,
             finish_drop,
-            answer_close
+            answer_close,
+            extras
         ]);
     }
     #[allow(unused_mut)]

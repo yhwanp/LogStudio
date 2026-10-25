@@ -2084,6 +2084,7 @@ name = "logstudio-desktop"
 version = "1.0.0"
 dependencies = [
  "logstudio-core",
+ "logstudio-extras",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
@@ -2093,6 +2094,17 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-wdio-webdriver",
+ "tempfile",
+]
+
+[[package]]
+name = "logstudio-extras"
+version = "0.1.0"
+dependencies = [
+ "logstudio-core",
+ "memchr",
+ "serde_json",
+ "tauri",
  "tempfile",
 ]
 

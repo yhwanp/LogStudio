@@ -293,6 +293,12 @@ impl Engine {
         }
         opened
     }
+    /// The dataset the window shows, for app extensions that read its rows
+    /// (`Dataset::read_blocks`): the log being opened from the moment it
+    /// opens, or the one shown again after an open fails.
+    pub fn shown(&self) -> Option<Arc<Dataset>> {
+        self.state.lock().unwrap().active.clone()
+    }
     /// The capture dataset `id` shows, open or kept for rollback.
     pub fn capture(&self, id: u64) -> Option<Arc<Capture>> {
         let s = self.state.lock().unwrap();

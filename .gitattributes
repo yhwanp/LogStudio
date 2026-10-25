@@ -6,3 +6,7 @@ tests/fixtures/** -text
 # dist/ is hand-written frontend source, not a build output; keep it in
 # GitHub's language statistics.
 dist/** linguist-vendored=false
+
+# Vendored libraries stay byte for byte as published (their checksums are
+# recorded next to them).
+extras/web/vendor/** -text linguist-vendored

@@ -35,6 +35,7 @@
 | `tests/e2e/` | QA 빌드의 내장 WebDriver로 실제 macOS WKWebView를 검증하고 라이트·다크 화면을 캡처하는 E2E 테스트([tests/e2e/README.md](../tests/e2e/README.md)) |
 | `bench/` | 합성 로그 생성기 및 코어 엔진 성능 측정 바이너리([bench/README.md](../bench/README.md)) |
 | `docs/` | 사용 설명서(`USER_GUIDE.md`), 개발 문서(`DEVELOPMENT.md`), 대용량 로그 검증 기록(`LARGE_LOG_VALIDATION.md`) |
+| `extras/` | 릴리스에 포함되지 않는 확장 기능(`--features extras`): 확장 호스트(`src/lib.rs`), 좌표 궤적(`src/track.rs`), 확장 창의 페이지 파일(`web/`)과 내장 Leaflet([EXTRAS.md](EXTRAS.md) 참고) |
 | `artifacts/` | Git에서 제외되는 로컬 빌드(`desktop/`) 및 E2E 테스트(`e2e/`) 출력 폴더 |
 
 ### 화면 모듈
@@ -47,11 +48,12 @@
 | 행 선택·목록 | `row-selection.js`(상단·검색·북마크 공통 행 선택 상태 머신, DOM 비의존), `row-gestures.js`(마우스 클릭·드래그·자동 스크롤), `bookmarks.js`(북마크 관리), `recent.js`(최근 파일 메뉴) |
 | 공통·유틸 | `dom.js`(DOM 헬퍼), `demo.js`(빈 화면의 `샘플 로그 보기`용 합성 로그) |
 | 기기 기록 | `devices.js`(Android 기기와 iPhone·iPad를 종류별로 보여 주고, USB 디버깅 허용·신뢰·잠금 해제를 기다리는 기기가 있으면 열린 동안 다시 조회하는 기기 메뉴, adb·Apple 기기 서비스 설치 안내, 상단 바 기록 상태와 화면 낭독기용 설명, 기록 중인 iPhone·iPad의 `앱 실행…` 메뉴(macOS만)와 실행 지점 표시, 저장 확인 대화상자, 남은 기록 목록, 드롭·창 닫기 보류 응답) |
+| 확장 기능 | `extras.js`(extras 빌드에서 설정 파일이 있는 확장 기능의 `확장` 메뉴와 설정 오류 표시·`설정 폴더 열기`, 창으로 돌아올 때 목록 갱신, 선택한 행을 확장 창에 전달, 확장 창이 고른 행을 위 로그에서 선택; 다른 빌드에서는 버튼을 숨김) |
 | 메뉴·대화상자·문구 | `menu.js`(팝업 메뉴), `shortcuts.js`(단축키 안내 대화상자), `clipboard.js`(붙여넣기 대상 판별: 입력란·로그 텍스트·파일 경로), `paste-confirm.js`(열린 로그 교체 확인 대화상자), `tips.js`(첫 사용 팁 및 기능 둘러보기), `describe.js`(진행 상태·오류·필터 요약 문구) |
 
 ## 처리 구조
 
-파일 읽기·파싱·필터링·검색은 Tauri에 링크된 단일 Rust 코어(`core/`)가 수행하며, 프론트엔드(`dist/`)는 화면 렌더링과 사용자 입력만 담당합니다. QA WebDriver와 픽스처 열기 커맨드는 `--features qa` 빌드에한해 포함됩니다.
+파일 읽기·파싱·필터링·검색은 Tauri에 링크된 단일 Rust 코어(`core/`)가 수행하며, 프론트엔드(`dist/`)는 화면 렌더링과 사용자 입력만 담당합니다. QA WebDriver와 픽스처 열기 커맨드는 `--features qa` 빌드에 한해 포함됩니다. 확장 기능은 `--features extras` 빌드에만 포함되며, 코어의 `Engine::shown`과 `Dataset::read_blocks`로 화면의 로그를 읽습니다([EXTRAS.md](EXTRAS.md)).
 
 ### 인덱싱과 스캔
 
@@ -179,6 +181,7 @@
 
 - **승인된 파일만 접근:** Rust 백엔드는 OS 파일 선택 대화상자, 네이티브 드래그 앤 드롭, 명시적 CLI 인자, macOS Finder 파일 붙여넣기 일회성 권한(grant)으로 사용자가 직접 승인한 파일만 읽습니다. 프론트엔드에는 파일 경로를 직접 열어 볼 수 있는 API가 없으며, 최근 파일(`recent-files.json`), 다시 열기(`reopen_source`), 작업 상태(`work-states.json`) 모두 내부 ID(`datasetId` 또는 항목 ID)로만 통신합니다.
 - **기기 기록과 외부 프로그램 실행:** 앱이 실행하는 외부 프로그램은 adb와, macOS에서 iPhone·iPad 앱 목록을 열거나 앱을 실행할 때만 쓰는 `xcode-select`·`xcodebuild`·`devicectl`뿐입니다. iPhone·iPad는 외부 프로그램 없이 OS의 Apple 기기 서비스와 기기가 이미 맺은 페어링 기록으로만 연결하며, 페어링을 새로 만들거나 바꾸지 않고 로그 서비스 하나만 엽니다. adb는 백엔드가 정해진 위치에서 찾거나 OS 파일 선택 창으로 지정한 파일만 쓰며, `adb version` 출력으로 adb인지 확인합니다. 화면은 실행 파일 경로나 명령을 보낼 수 없고, adb의 출처와 버전만 받습니다. 기기 serial은 백엔드가 마지막으로 받은 기기 목록에 있는 값만 허용하며, 셸을 거치지 않고 프로세스 인자로 넘깁니다. 기기에서 실행하는 명령은 고정된 조회와 `logcat`뿐이며, 앱 실행의 bundle ID는 마지막 앱 목록에 있고 허용 문자(영문자·숫자·`-`·`.`·`_`)만으로 된 값만 받아 `--` 뒤에 넘깁니다. 임시 기록 파일과 남은 기록도 화면에는 ID와 이름만 전달합니다.
+- **확장 기능 창:** extras 빌드의 확장 창은 `extras` URI 스킴에서 페이지를 받고, 그 스킴은 확장 자신의 창이 보낸 GET 요청에만 답합니다. 지도 창만 타일 서버에 접속하며, 메인 창의 CSP와 앱 명령의 메인 창 제한은 그대로입니다. extras 빌드는 `설정 폴더 열기`에서만 앱 데이터의 `extras/` 폴더를 macOS `open`(Windows `explorer`)으로 엽니다([EXTRAS.md](EXTRAS.md#구조)).
 - **메모리 및 원자적 쓰기:** 로그 원문 전체를 메모리에 복제하지 않고 필요할 때마다 128 KiB 블록 단위로 파일에서 직접 읽으며 반복 읽기는 OS 페이지 캐시를 활용합니다. 결과 내보내기와 설정 파일(`recent-files.json`, `work-states.json`, `saved-filters.json`) 저장은 모두 임시 파일에 먼저 기록한 뒤 원자적으로 교체(atomic rename)합니다.
 
 ## 빌드와 배포
@@ -197,6 +200,7 @@ done | sort -u
 ### 자동 빌드와 릴리스
 
 - `main` 브랜치 push 및 PR 시 Windows·macOS 빌드·테스트·패키징 워크플로([desktop.yml](../.github/workflows/desktop.yml))가 실행됩니다.
+- 같은 워크플로는 `main` push 때 확장 기능을 넣은 빌드(`--features extras`)도 OS별로 `extras-LogStudio-macos-arm64`·`extras-LogStudio-windows-x64` 아티팩트로 올립니다. 이 아티팩트는 릴리스에 포함되지 않습니다. 두 OS 모두 PR에서도 이 빌드를 clippy로 검사합니다.
 - 앱 버전(`src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, `package.json` 세 곳의 버전이 일치해야 함)과 동일한 `v1.0.0` 형식의 태그를 push하면 빌드 및 체크섬 검증 후 GitHub Releases에 Windows·macOS ZIP과 각각의 `.zip.sha256` 파일이 자동 게시됩니다.
 
 ### macOS에서 한 번에 빌드하고 실행
@@ -214,6 +218,7 @@ sh build-run-macos.command
 ```sh
 cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo clippy --locked -p logstudio-desktop --all-targets --features extras -- -D warnings
 cargo test --locked --workspace
 npm test
 npm run check
