@@ -15,7 +15,7 @@
 | `core/src/search.rs` | 고정 버전 `grep-regex` / `grep-searcher` 기반 문자열·정규식 검색 및 하이라이트 범위 계산 |
 | `core/src/encoding.rs` | 표시 텍스트 디코딩: 손상된 UTF-8 바이트의 표시용 대체(``)와 손상 위치 마스크, Mac OS Roman으로 잘못 읽혀 깨진 UTF-8 문자 복원(`repair`), UTF-16·압축 파일 판별 |
 | `core/src/launch.rs` | CLI 경로 인자(복수 지정 시 병합 열기) 및 `--large-log`(반복 가능) 옵션 해석 |
-| `core/src/capture/` | 기기 기록: `mod.rs`(기록기·재연결 상태 흐름·저장·버리기), `gate.rs`(`threadtime` 시각과 시작 경계·중복 제거), `link.rs`(연결 계층 trait·기기 종류·`adb devices -l` 파서·공개 오류 문구), `cli.rs`(adb 명령 실행 연결), `adb.rs`(adb 탐지·`adb version` 검증·시간 제한 실행), `ios.rs`(Apple 기기 서비스(usbmuxd)로 iPhone·iPad 목록과 `os_trace_relay` 로그를 받아 iOS 로그 줄로 쓰는 연결), `apps.rs`(기록 중인 iPhone·iPad의 개발용 서명 앱 목록과 Xcode `devicectl`로 `OS_ACTIVITY_DT_MODE=1` 실행), `store.rs`(임시 기록 파일과 잠금·남은 기록), `fake.rs`(테스트·QA용 가짜 연결과 합성 로그) |
+| `core/src/capture/` | 기기 기록: `mod.rs`(기록기·재연결 상태 흐름·저장·버리기), `gate.rs`(`threadtime` 시각과 시작 경계·중복 제거), `link.rs`(연결 계층 trait·기기 종류·`adb devices -l` 파서·공개 오류 문구), `cli.rs`(adb 명령 실행 연결), `adb.rs`(adb 탐지·`adb version` 검증), `process.rs`(adb·Xcode 도구 명령을 표준 입력과 Windows 콘솔 창 없이 만들고, 시간 제한 안에 끝까지 실행), `ios.rs`(Apple 기기 서비스(usbmuxd)로 iPhone·iPad 목록과 `os_trace_relay` 로그를 받아 iOS 로그 줄로 쓰는 연결), `apps.rs`(기록 중인 iPhone·iPad의 개발용 서명 앱 목록과 Xcode `devicectl`로 `OS_ACTIVITY_DT_MODE=1` 실행), `store.rs`(임시 기록 파일과 잠금·남은 기록), `fake.rs`(테스트·QA용 가짜 연결과 합성 로그) |
 | `core/src/lib.rs` | `Engine`: 파일 열기·검증·롤백 복원, 기기 기록 로그 열기(`open_capture`)와 수명 관리, IPC 요청 처리, 진행 상태 이벤트 발행 |
 | `src-tauri/src/main.rs` | Tauri 커맨드 핸들러, 동시 요청 수 제한, 파일 선택·드롭 처리(다중 파일은 `order::arrange` 정렬), 시작 인자 오류 보관(`take_startup_error`) |
 | `src-tauri/src/clipboard.rs` | macOS Finder 파일 및 UTF-8 BOM 붙여넣기용 일회성 권한(grant) 발급·연장·폐기 |
@@ -96,7 +96,7 @@
 
 연결한 Android 기기의 logcat이나 iPhone·iPad의 로그를 앱 캐시의 임시 파일에 기록하고, 그 파일을 기존 [실시간 따라가기](#외부-파일-변경-감지와-실시간-따라가기)로 엽니다. 인덱싱·쿼리·집계는 일반 파일과 같은 경로를 쓰고, 기기 읽기는 인덱싱·화면과 분리된 스레드에서 이루어집니다.
 
-- **연결 계층(`link::Link`):** 기기 목록, `boot_id`, 기기 고유 번호(`ro.serialno`), 최근 로그(`logcat -d -t N`), 스트림(`logcat -v threadtime [-T 시각]`)만 요청합니다. 연결은 스트림이 열리기 전의 줄을 보내는지(`replays`)를 알리며, 보내지 않는 연결(iPhone·iPad)은 시작 경계 없이 받은 줄을 모두 씁니다. Android는 adb 명령 실행(`cli::AdbCli`)을 쓰며, 서버는 출력을 쓰지 않는 `adb start-server`로 먼저 띄워 서버가 앱의 파이프를 물려받지 않게 합니다. 모든 명령은 시간 제한이 있고 Windows에서는 콘솔 창 없이 실행하며, 앱 환경의 `ANDROID_LOG_TAGS`는 지웁니다.
+- **연결 계층(`link::Link`):** 기기 목록, `boot_id`, 기기 고유 번호(`ro.serialno`), 최근 로그(`logcat -d -t N`), 스트림(`logcat -v threadtime [-T 시각]`)만 요청합니다. 연결은 스트림이 열리기 전의 줄을 보내는지(`replays`)를 알리며, 보내지 않는 연결(iPhone·iPad)은 시작 경계 없이 받은 줄을 모두 씁니다. Android는 adb 명령 실행(`cli::AdbCli`)을 쓰며, 서버는 출력을 쓰지 않는 `adb start-server`로 먼저 띄워 서버가 앱의 파이프를 물려받지 않게 합니다. 스트림을 뺀 명령은 시간 제한 안에 끝나야 하고, 모든 명령은 Windows에서 콘솔 창 없이 실행하며 앱 환경의 `ANDROID_LOG_TAGS`는 지웁니다.
 - **시작 경계(`gate.rs`):** 기기 버퍼의 최근 줄 가운데 마지막 시각을 경계로 `-T`를 요청하고(`-T`는 그 시각의 줄을 포함), 경계 시각의 줄 중 이미 있던 줄은 원문 횟수만큼 버립니다. 1 MiB를 넘게 버리면 그 뒤로는 모두 통과시켜 줄을 잃지 않습니다.
 - **기록기:** 받은 바이트를 변환하지 않고 LF로 끝난 줄만 파일 끝에 추가합니다. 연결이 줄 중간에서 끊기면 그 조각은 다음 연결이 다시 보내는 온전한 줄로 대체되고, 기록을 멈출 때는 받은 바이트를 모두 씁니다. 8 GiB·디스크 부족·쓰기 실패는 기록을 멈춥니다.
 - **재연결:** 스트림이 끝나면 기기를 1초마다 찾습니다. 같은 `boot_id`면 기록 파일 끝의 마지막 시각을 경계로 이어 붙이고, 다르면(재부팅) 새 부팅의 처음부터 받습니다. adb의 종료 코드와 오류 출력만으로는 끊긴 원인을 구분할 수 없으므로(에뮬레이터에서 adb 서버 종료와 재부팅 모두 종료 코드 255, 오류 출력 없음) 다시 연결해 보면서 판단합니다. 기다리는 동안 같은 serial의 기기가 미승인·오프라인으로 보이면 그 이유를 상태에 담아 화면에 표시합니다. adb 버전 불일치 문구를 보면 재연결을 멈춥니다. 끊긴 지점(다음 첫 행 번호·시각·재부팅 여부)은 상태로만 보관합니다.
