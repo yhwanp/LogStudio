@@ -9,7 +9,7 @@
   --accent:#0b7568;--on-accent:#fff;--accent-text:#0a6357;--accent-soft:#e4f3f0;--accent-border:#86bdb4;--focus:#3c968b;
   --row-hover:#f0f8f6;--row-selected:#dff4ef;--row-range:#ecf7f4;--row-error:#fff7f8;
   --raw-text:#7c725d;--mark:#f7dc8b;--mark-text:inherit;--search-hit:#d4a514;--search-hit-bg:#fbefc4;
-  --row-selected-2:#eef1f4;--row-selected-2-border:#c9d2dc;
+  --row-selected-2:#eef1f4;--row-selected-2-border:#7b8796;
   --error-bg:#fff0f1;--error-text:#a83043;--error-border:#f2d0d6;
   --lv-bg:#f0f3f7;--lv-text:#56687c;--lv-i-bg:#e8f5f2;--lv-i:#087061;--lv-d-bg:#eaf2fb;--lv-d:#3d6fa5;
   --lv-w-bg:#fff3d9;--lv-w:#916008;--lv-e-bg:#fce9ed;--lv-e:#b3384b;--lv-w-border:#d6b85f;--lv-e-border:#dda3ae;
@@ -28,7 +28,7 @@
   --accent:#36b9a3;--on-accent:#0b1a17;--accent-text:#7bdcca;--accent-soft:#16352f;--accent-border:#2c6a60;--focus:#4fc7b2;
   --row-hover:#1a2a31;--row-selected:#17393a;--row-range:#152d2f;--row-error:#1f1a20;
   --raw-text:#b3a688;--mark:#7a6110;--mark-text:#fff4cc;--search-hit:#d9b23a;--search-hit-bg:#3b3215;
-  --row-selected-2:#1f2a36;--row-selected-2-border:#3a4a5b;
+  --row-selected-2:#1f2a36;--row-selected-2-border:#6c7b8a;
   --error-bg:#35181e;--error-text:#ff9fac;--error-border:#5a2a33;
   --lv-bg:#222e3b;--lv-text:#9aaabb;--lv-i-bg:#143530;--lv-i:#6fd6c2;--lv-d-bg:#182a3f;--lv-d:#8db8e8;
   --lv-w-bg:#3a2d10;--lv-w:#f0c560;--lv-e-bg:#401c25;--lv-e:#ff8f9f;--lv-w-border:#7a6326;--lv-e-border:#7a3442;
@@ -300,6 +300,8 @@ h2{font-size:16px;margin:0;font-weight:650}
 /* A running search's cancel takes the shortcut hint's place in the box. */
 .search-box:has(>.search-cancel:not([hidden]))>kbd{display:none}
 .search-cancel{flex-shrink:0;margin-right:-4px;min-height:22px;padding:1px 8px}
+.search-position{flex-shrink:0;color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.search-position:empty{display:none}
 .search-error{margin:-2px 12px 7px}
 .search-result-pane{display:flex;flex-direction:column;flex:1 1 0;min-height:90px;min-width:0;overflow:hidden;border-top:1px solid var(--border)}
 .result-count{display:flex;align-items:baseline;gap:4px;font-variant-numeric:tabular-nums;white-space:nowrap}
@@ -333,7 +335,8 @@ h2{font-size:16px;margin:0;font-weight:650}
 /* Every selected row carries a bar, so rows selected apart read at a glance. */
 .log-row.in-selection{background:var(--row-range);box-shadow:inset 3px 0 var(--accent-border)}
 .log-row.selected-log-row{background:var(--row-selected);box-shadow:inset 3px 0 var(--accent),inset 0 0 0 1px var(--accent-border)}
-/* The pane whose row the raw detail does not show keeps a muted selection. */
+/* Lists without keyboard focus keep a muted selection: an outline instead of
+   the bar, at 3:1 against its fill and the rows around it. */
 .secondary-selection>.log-row.in-selection{box-shadow:inset 3px 0 var(--row-selected-2-border)}
 .secondary-selection>.log-row.selected-log-row{background:var(--row-selected-2);box-shadow:inset 0 0 0 1px var(--row-selected-2-border)}
 .log-row:focus-visible{outline-offset:-3px}
@@ -438,6 +441,9 @@ mark{background:var(--mark);color:var(--mark-text);padding:0;border-radius:2px}
 .lower-tabs button[aria-selected=true]{background:var(--accent-soft);color:var(--accent-text);font-weight:600}
 .lower-tabs button:focus-visible{outline-offset:-3px}
 .bookmark-tools{margin-left:auto}
+/* 모두 해제 removes every mark, so it sits apart from 모두 복사. */
+.tool-divider{width:1px;height:14px;background:var(--border-strong)}
+.text-button.danger-text{color:var(--error-text)}
 .bookmark-row{position:relative}
 .bookmark-row:focus-visible{outline-offset:-3px}
 .bookmark-remove{position:absolute;right:6px;top:50%;transform:translateY(-50%);width:22px;height:22px;border-radius:5px;background:var(--surface-3);color:var(--muted);font-size:15px;line-height:1;display:none;align-items:center;justify-content:center}

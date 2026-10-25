@@ -122,5 +122,6 @@ export function createPopupMenu({menu, document, window, scrollers = []}) {
   window.addEventListener('blur', () => close(false));
   window.addEventListener('resize', () => close(false));
   for (const scroller of scrollers) scroller.addEventListener('scroll', () => {if (onList) close(false);});
-  return {show, close};
+  // The element focused when the open menu was shown.
+  return {show, close, opener: () => opener};
 }

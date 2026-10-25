@@ -283,3 +283,20 @@ test('a saved filter applies to another file, stays through a reload and returns
   await r.get('resetFilters').dispatch('click');await settle();
   assert.equal(label(),'저장된 필터|');
 });
+
+test('an undo offered before a reload re-reads the bookmarks cannot bring back an outdated mark',async t=>{
+  const r=await rig();t.after(()=>r.controller.close());
+  for(const line of [3,8])await bookmark(r,line);
+  const rows=Array.from({length:30},(_,i)=>raw(i+1));rows[7]={lineNumber:8,kind:'raw',raw:'rewritten'};
+  r.env.all=new Map(rows.map(row=>[row.lineNumber,row]));
+  await r.get('reopenFile').dispatch('click');await settle();
+  r.env.complete=false;await reopenAs(r,2,{rows});
+  assert.equal(r.get('bookmarkTab').textContent,'북마크 2','the old marks show while the file is read');
+  await bookmark(r,8);assert.equal(r.get('bookmarkTab').textContent,'북마크 1');
+  const undo=r.get('toast').children.find(n=>n.className==='toast-action');
+  r.env.complete=true;
+  for(let i=0;i<40&&!r.lines().length;i++)await new Promise(resolve=>setTimeout(resolve,50));
+  await settle();assert.ok(r.lines().length,'the marks were read again');
+  await undo.dispatch('click');await settle();
+  assert.equal(r.get('bookmarkTab').textContent,'북마크 1','the mark read before the reload stays removed');
+});
