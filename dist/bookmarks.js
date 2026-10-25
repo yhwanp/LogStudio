@@ -14,11 +14,12 @@ export const MAX_BOOKMARKS=1000;
 export const markOf=row=>({lineNumber:row.lineNumber,file:row.file,fileLine:row.fileLine,raw:row.raw??'',truncated:!!row.truncated,kind:row.kind,date:row.date,time:row.time,process:row.process,pid:row.pid,tid:row.tid,level:row.level,tag:row.tag,message:row.message,owner:ownerSnapshot(row),...(row.dlt?{dlt:{...row.dlt}}:{})});
 
 // `logs` is the upper pane controller; `canNavigate` says whether its current
-// result may be navigated; `onChange` repaints rows after a mark changes;
+// result may be navigated; `jump(line)` moves focus to a row there;
+// `onChange` repaints rows after a mark changes;
 // `openMenu(mark,size,x,y)` opens a row's menu for a selection of `size`.
 // The list is a lower-region tab: `onCount` lets the view show or hide that
 // tab before the list renders, and the list renders only while it is shown.
-export function createBookmarks({ui, document, window, notify, mod, logs, lineCell, openMenu=()=>{}, isRawMode, canNavigate, onChange, onCount}) {
+export function createBookmarks({ui, document, window, notify, mod, logs, lineCell, jump=()=>{}, openMenu=()=>{}, isRawMode, canNavigate, onChange, onCount}) {
   const bookmarks=new Map();
   // The list selects rows as the other lists do (row-selection.js), by
   // position in line order. `cursor` is the line of its focus row, the row
@@ -60,7 +61,7 @@ export function createBookmarks({ui, document, window, notify, mod, logs, lineCe
   };
   function rowNode(line,focusable,chosen){
     const mark=bookmarks.get(line),row=document.createElement('div'),remove=document.createElement('button');
-    row.className=rowClass(mark,line,chosen);row.dataset.lineNumber=String(line);row.setAttribute('role','listitem');row.tabIndex=focusable?0:-1;
+    row.className=rowClass(mark,line,chosen);row.dataset.lineNumber=String(line);row.setAttribute('role','listitem');row.setAttribute('aria-describedby','bookmarkRowHint');row.tabIndex=focusable?0:-1;
     if(line===cursor)row.setAttribute('aria-current','true');
     row.append(Number.isSafeInteger(mark.fileLine)?lineCell(mark):textSpan(document,formatNumber(line),'line-number'));
     const owner=entryOwner(mark);
@@ -102,7 +103,7 @@ export function createBookmarks({ui, document, window, notify, mod, logs, lineCe
       if(!inRanges(selectedRanges(current(),rows.length),at))select(selectOne(at));
       if(target!==undefined){const index=Math.max(0,Math.min(last,target));select(event.shiftKey?extendTo(current(),index,rows.length):selectOne(index));reveal(cursor);}
       else if(remove)removeSelected();
-      else reveal(line);
+      else moveTo(line);
     });
     return row;
   }
@@ -180,6 +181,11 @@ export function createBookmarks({ui, document, window, notify, mod, logs, lineCe
   function reveal(line){
     cursor=line;paint();
     if(canNavigate())void logs.locateLine(line);
+  }
+  // Enter moves focus to a bookmark's row above, as on a search result.
+  function moveTo(line){
+    cursor=line;paint();
+    if(canNavigate())jump(line);
   }
   function step(direction){
     const lines=sorted();

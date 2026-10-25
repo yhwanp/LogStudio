@@ -486,25 +486,36 @@ test('search double-click keeps the first-clicked row when the detail shifts lay
   const rows=Array.from({length:300},(_,i)=>({lineNumber:i+1,kind:'raw',raw:`COMMON ${i+1}`}));
   const detail={text:'COMMON',startByte:0,nextByte:6,totalBytes:6,complete:true,highlights:[]};
   const r=await rig({rows,detail});t.after(()=>r.controller.close());
-  // Double-click semantics alone; following single clicks is tested below.
-  r.get('followSearch').checked=false;
   r.get('searchInput').value='COMMON';await r.get('searchInput').dispatch('input');
   await r.get('searchInput').dispatch('keydown',{key:'Enter',preventDefault(){}});await settle();
   const panel=r.get('largeLogPanel'),row=line=>r.get('largeRows').children.find(n=>n.dataset.lineNumber===String(line));
   const ranges=()=>r.calls.filter(c=>c.args.request?.action==='record').map(c=>c.args.request.lineNumber);
-  // Capture-phase panel listener runs before the row target, as in the DOM.
-  const click=async(detailCount,target)=>{await panel.dispatch('click',{detail:detailCount});await target?.dispatch('click',{detail:detailCount});};
+  // A single click already follows in the upper logs, so each double-click
+  // shows as a further locate of the row it jumps to.
+  const locates=()=>r.calls.filter(c=>c.args.request?.action==='locate'&&c.args.request.pane==='logs').map(c=>c.args.request.lineNumber);
+  // Each click is a press and a release; capture-phase panel listeners run
+  // before the row target's, as in the DOM.
+  const click=async(detailCount,target)=>{for(const type of ['mousedown','click']){await panel.dispatch(type,{detail:detailCount});await target?.dispatch(type,{detail:detailCount,button:0});}};
   await click(1,row(5));await settle();
   await click(2,row(7));await panel.dispatch('dblclick');
   assert.equal(r.controller.logs.getState().selectedLine,5,'second click on a shifted row');
+  assert.deepEqual(locates(),[5,5]);
   assert.deepEqual(ranges(),[5],'second click must not replace the detail');
   await settle();
   await click(1,row(9));await click(2,null);await panel.dispatch('dblclick');
   assert.equal(r.controller.logs.getState().selectedLine,9,'second click on the detail panel');
+  assert.deepEqual(locates(),[5,5,9,9]);
+  await settle();
+  // The detail may open under the held first press, so its release lands
+  // off the row and only the press names it.
+  await panel.dispatch('mousedown',{detail:1});await row(13).dispatch('mousedown',{detail:1,button:0});await panel.dispatch('click',{detail:1});
+  await click(2,row(15));await panel.dispatch('dblclick');
+  assert.equal(r.controller.logs.getState().selectedLine,13,'a release off the pressed row');
+  assert.deepEqual(locates(),[5,5,9,9,13,13]);
   await settle();
   // Double-clicking detail text to select a word must not reuse an older row.
   await click(1,row(11));await settle();await click(1,null);await click(2,null);await panel.dispatch('dblclick');
-  assert.equal(r.controller.logs.getState().selectedLine,9);
+  assert.equal(r.controller.logs.getState().selectedLine,11);assert.deepEqual(locates(),[5,5,9,9,13,13,11]);
   const upper=r.get('logsRows').children.find(n=>n.dataset.lineNumber==='11');await upper.dispatch('click',{detail:1});await settle();
   assert.equal(r.controller.logs.getState().selectedLine,11);assert.equal(upper.attributes['aria-current'],'true');
   assert.equal(r.get('logsRows').children.find(n=>n.dataset.lineNumber==='9').attributes['aria-current'],undefined);
@@ -1116,6 +1127,28 @@ test('bookmarks mark rows, list them in a lower tab, step with F2 and reset with
   assert.equal(r.get('lowerTabs').hidden,true,'a new file starts without bookmarks');
 });
 
+test('a bookmark shows its row above when selected and moves focus there on Enter or a double-click',async t=>{
+  const rows=Array.from({length:30},(_,i)=>({lineNumber:i+1,kind:'raw',raw:`raw ${i+1}`}));
+  const r=await rig({rows,detail:{text:'x',startByte:0,nextByte:1,totalBytes:1,complete:true,highlights:[]}});t.after(()=>r.controller.close());
+  const row=line=>r.get('logsRows').children.find(n=>n.dataset.lineNumber===String(line));
+  const key=event=>r.handlers.get('keydown')({preventDefault(){},target:new Element(),...event});
+  const pane=r.get('largeSearchPane'),marks=()=>r.get('bookmarkList').children;
+  const upper=()=>r.get('logsViewport').contains(r.document.activeElement)?r.document.activeElement.dataset?.lineNumber:null;
+  assert.equal(pane.attributes.role,undefined,'the search results are no tab panel without tabs');
+  for(const line of [3,8,12]){await row(line).dispatch('click',{detail:1});await settle();key({key:'b',metaKey:true});await settle();}
+  assert.equal(pane.attributes.role,'tabpanel');assert.equal(pane.attributes['aria-labelledby'],'searchTab');
+  await r.get('bookmarkTab').dispatch('click');
+  assert.equal(marks()[0].attributes['aria-describedby'],'bookmarkRowHint');
+  await marks()[0].dispatch('keydown',{key:'ArrowDown',target:marks()[0],preventDefault(){}});await settle();
+  assert.equal(r.controller.logs.getState().selectedLine,8);assert.equal(upper(),null,'selecting shows the row above and keeps focus');
+  await marks()[1].dispatch('keydown',{key:'Enter',target:marks()[1],preventDefault(){}});await settle();
+  assert.equal(upper(),'8','Enter moves focus to the row above');
+  const panel=r.get('largeLogPanel'),list=r.get('bookmarkList'),third=marks()[2],on={closest:selector=>selector==='.bookmark-row'?third:null};
+  for(const detail of [1,2]){await panel.dispatch('mousedown',{detail});await list.dispatch('mousedown',{detail,button:0,target:on});}
+  await panel.dispatch('dblclick');await settle();
+  assert.equal(r.controller.logs.getState().selectedLine,12);assert.equal(upper(),'12','a double-click does too');
+});
+
 test('a combined log numbers rows within their files and marks each later file start',async t=>{
   const files=[{name:'main.log.1',size:60,firstLine:1},{name:'main.log',size:40,firstLine:3}];
   const row=(lineNumber,file,fileLine)=>({lineNumber,file,fileLine,kind:'raw',raw:`raw ${lineNumber}`});
@@ -1347,22 +1380,39 @@ test('upper logs mark the accepted search results and drop them on new search in
   assert.deepEqual(hits(),[]);assert.equal(pages(r,'logs').length,count);assert.equal(upperQueries(),before);
 });
 
-test('selecting a search result follows it in the upper logs unless turned off, and held arrows follow where they settle',async t=>{
+test('selecting a search result always follows it in the upper logs, and held arrows follow where they settle',async t=>{
   const rows=Array.from({length:60},(_,i)=>({lineNumber:i*3+7,kind:'raw',raw:`COMMON ${i}`}));
   const r=await rig({rows,total:200,detail:b=>({text:`line ${b.lineNumber}`,startByte:0,nextByte:8,totalBytes:8,complete:true,highlights:[]})});t.after(()=>r.controller.close());
-  assert.equal(r.get('followSearch').checked,true,'follows by default');
   r.get('searchInput').value='COMMON';await r.get('searchInput').dispatch('input');await r.get('searchInput').dispatch('keydown',{key:'Enter',preventDefault(){}});await settle();
   const locates=()=>r.calls.filter(c=>c.args.request?.action==='locate'&&c.args.request.pane==='logs').map(c=>c.args.request.lineNumber);
   await r.get('largeRows').children[2].dispatch('click',{detail:1});await settle();
   assert.deepEqual(locates(),[13]);assert.equal(r.controller.logs.getState().selectedLine,13);
   assert.equal(r.get('logsViewport').contains(r.document.activeElement),false,'following keeps focus in the results');
+  assert.equal(r.get('logsRange').attributes['aria-live'],'off','the rows a followed result shows are not announced');
   const viewport=r.get('largeViewport'),settling=()=>[...r.timers.entries()].filter(([,timer])=>timer.ms===120);
   for(let i=0;i<3;i++){await viewport.dispatch('keydown',{key:'ArrowDown',repeat:true,target:r.document.activeElement,preventDefault(){}});await settle();}
   assert.deepEqual(locates(),[13],'a held arrow waits for the selection to settle');
   for(const [key,timer] of settling()){r.timers.delete(key);timer.fn();}await settle();
   assert.deepEqual(locates(),[13,22]);assert.equal(r.controller.logs.getState().selectedLine,22);
-  r.get('followSearch').checked=false;await r.get('largeRows').children[0].dispatch('click',{detail:1});await settle();
-  assert.deepEqual(locates(),[13,22]);assert.equal(r.controller.getState().selectedLine,7);
+  await r.get('largeRows').children[0].dispatch('click',{detail:1});await settle();
+  assert.deepEqual(locates(),[13,22,7]);assert.equal(r.controller.logs.getState().selectedLine,7);
+});
+
+test('Enter or a double-click on a result already followed above moves focus to its row there',async t=>{
+  const rows=Array.from({length:60},(_,i)=>({lineNumber:i*3+7,kind:'raw',raw:`COMMON ${i}`}));
+  const r=await rig({rows,total:200,detail:b=>({text:`line ${b.lineNumber}`,startByte:0,nextByte:8,totalBytes:8,complete:true,highlights:[]})});t.after(()=>r.controller.close());
+  r.get('searchInput').value='COMMON';await r.get('searchInput').dispatch('input');await r.get('searchInput').dispatch('keydown',{key:'Enter',preventDefault(){}});await settle();
+  const upper=()=>r.get('logsViewport').contains(r.document.activeElement)?r.document.activeElement.dataset?.lineNumber:null;
+  const result=r.get('largeRows').children[2];await result.dispatch('click',{detail:1});await settle();
+  assert.equal(r.controller.logs.getState().selectedLine,13);assert.equal(upper(),null,'a click follows without moving focus');
+  await result.dispatch('keydown',{key:'Enter',preventDefault(){}});await settle();
+  assert.equal(upper(),'13','Enter moves focus to the row already shown above');
+  const panel=r.get('largeLogPanel'),other=r.get('largeRows').children[4];
+  const click=async(detail,target)=>{for(const type of ['mousedown','click']){await panel.dispatch(type,{detail});await target.dispatch(type,{detail,button:0});}};
+  await click(1,other);await settle();
+  assert.equal(upper(),null);
+  await click(2,other);await panel.dispatch('dblclick');await settle();
+  assert.equal(upper(),'19','a double-click does too');
 });
 
 test('the jump box moves to a physical row number, or the next result after a hidden row',async t=>{
@@ -1404,8 +1454,6 @@ test('the pane whose row the detail does not show keeps a secondary selection',a
   assert.equal(lower.has('secondary-selection'),true);assert.equal(upper.has('secondary-selection'),false);assert.equal(r.get('largeDetailTitle').textContent,'로그 · 9행 원문');
   await r.get('largeRows').children[5].dispatch('click',{detail:1});await settle();
   assert.equal(lower.has('secondary-selection'),false);assert.equal(r.get('largeDetailTitle').textContent,'6행 원문');
-  r.get('followSearch').checked=false;await r.get('largeRows').children[1].dispatch('click',{detail:1});await settle();
-  assert.equal(upper.has('secondary-selection'),true);assert.equal(r.get('largeDetailTitle').textContent,'검색 결과 · 2행 원문');
 });
 
 test('a condition no row of the log matches says so on its card and its chip while it reads as sent',async t=>{

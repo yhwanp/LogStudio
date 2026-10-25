@@ -107,7 +107,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
   const MOD=/Mac|iPhone|iPad/.test(window.navigator?.platform??'')?'⌘':'Ctrl+';
   // Only macOS reads a copied file from the native pasteboard.
   if(MOD!=='⌘'){$('searchShortcut').textContent='Ctrl+F';$('pasteHint').textContent='로그 텍스트 붙여넣기';for(const key of document.querySelectorAll?.('.mod-key')??[])key.textContent='Ctrl';}
-  let toastTimer=null,revealSelection=false,exporting=false,exportTotal=0;
+  let toastTimer=null,exporting=false,exportTotal=0;
   // A toast may offer one action, such as undoing what it reports; it then
   // stays a little longer and takes pointer input.
   function notify(message,action=null){
@@ -242,10 +242,10 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
       const toggleKey=event=>!!(MOD==='⌘'?event.metaKey:event.ctrlKey);
       view=createContinuousViewport({viewport:realViewport,rowsElement:ui[prefix+'Rows'],document,window,
         fetchRows:start=>owner.fetchRows(start),onError:owner.reportError,
-        onSelect:(entry,index,{repeat=false,extend=false}={})=>{const current=owner.getState();setSelection(prefix,current,extend?.focus===index?extend:extend===true?extendTo(selectionOf(prefix,current),index,current.count):selectOne(index),entry.lineNumber);detailOwner=owner;if(isSearch&&(revealSelection||followInput.checked)){revealSelection=false;followUpper(entry.lineNumber,repeat);}owner.selectLine(entry.lineNumber);void owner.loadDetail(entry.lineNumber,0,{delay:repeat?DETAIL_SETTLE_MS:0});saver.schedule();if(!isSearch)tips?.offer('rows');},
+        onSelect:(entry,index,{repeat=false,extend=false}={})=>{const current=owner.getState();setSelection(prefix,current,extend?.focus===index?extend:extend===true?extendTo(selectionOf(prefix,current),index,current.count):selectOne(index),entry.lineNumber);detailOwner=owner;if(isSearch)followUpper(entry.lineNumber,repeat);owner.selectLine(entry.lineNumber);void owner.loadDetail(entry.lineNumber,0,{delay:repeat?DETAIL_SETTLE_MS:0});saver.schedule();if(!isSearch)tips?.offer('rows');},
         onVisible:(first,last,total)=>{
           owner.rememberPosition(first);saver.schedule();
-          if(total)ui[prefix+'Range'].textContent=`${formatNumber(first+1)}–${formatNumber(last)} / ${formatNumber(total)}건`;
+          if(total)showRange(ui[prefix+'Range'],`${formatNumber(first+1)}–${formatNumber(last)} / ${formatNumber(total)}건`,false);
           ui[prefix+'First'].disabled=!total||first===0;ui[prefix+'Last'].disabled=!total||last>=total;
         },
         paint:(entries,current)=>{
@@ -299,10 +299,12 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
             // row, whose text the browser may select) selects as it would.
             // Later clicks of a multi-click belong to the first click's row;
             // macOS Ctrl+click is the context menu.
-            row.addEventListener('mousedown',event=>gestures.down(event,index));
+            row.addEventListener('mousedown',event=>{
+              if(isSearch&&event.detail===1&&!event.shiftKey&&!toggleKey(event))doubleClickLine=entry.lineNumber;
+              gestures.down(event,index);
+            });
             row.addEventListener('click',event=>{
               if(event.detail>1||(MOD==='⌘'&&event.ctrlKey))return;
-              if(isSearch&&event.detail===1&&!event.shiftKey&&!toggleKey(event))doubleClickLine=entry.lineNumber;
               if(!gestures.click())press(index,{shift:event.shiftKey===true,toggle:toggleKey(event)});
             });
             row.addEventListener('keydown',event=>{
@@ -332,12 +334,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
             const line=activeElement?.dataset?.lineNumber,same=line&&container.querySelector?.(`[data-line-number="${line}"]`);
             (realViewport.contains(activeElement)?activeElement:same||realViewport).focus({preventScroll:true});
           }
-          const selection=`${current.datasetId}:${current.queryId}:${current.scrollRevision}:${current.selectedLine}`;
-          if(navigationFocus.has(prefix)&&navigationFocus.get(prefix)!==document.activeElement)navigationFocus.delete(prefix);
-          if(current.selectedLine&&focusedSelection.get(prefix)!==selection&&(hadFocus||navigationFocus.has(prefix))){
-            const row=ui[prefix+'Rows'].querySelector?.(`[data-line-number="${current.selectedLine}"]`);
-            if(row){row.focus?.({preventScroll:true});focusedSelection.set(prefix,selection);navigationFocus.delete(prefix);}
-          }
+          focusSelected(prefix,current,hadFocus);
         }});
       viewports.set(prefix,view);
     }
@@ -346,12 +343,31 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     const marks=captureBreaks(state.capture).map(b=>`${b.kind}:${b.row}`).join(',');
     view.update(state,{force:!previousRows.has(prefix)||previousRows.get(prefix)!==rawMode||paintedSelection.get(prefix)!==selectionRevision||paintedMarks.get(prefix)!==marks,stick:!isSearch&&!!state.following});previousRows.set(prefix,rawMode);paintedSelection.set(prefix,selectionRevision);paintedMarks.set(prefix,marks);updateSelectionInfo(prefix,state);
   }
-  function jumpTo(line){if(!inputPending&&!validationError&&!disposed){navigationFocus.set('logs',document.activeElement);void logs.locateLine(line);}}
-  // Selecting a search result can reveal its row in the upper logs without
-  // moving focus; a held arrow key follows only where the selection settles.
-  const FOLLOW_KEY='logstudio.search-follow.v1',followInput=$('followSearch');let followTimer=null;
-  try{followInput.checked=window.localStorage?.getItem(FOLLOW_KEY)!=='off';}catch{followInput.checked=true;}
-  followInput.addEventListener('change',()=>{try{window.localStorage?.setItem(FOLLOW_KEY,followInput.checked?'on':'off');}catch{}});
+  // A range text is a live status for what a query is doing, not for the
+  // rows a scroll or a followed result happens to show.
+  function showRange(node,text,announce){node.setAttribute('aria-live',announce?'polite':'off');node.textContent=text;}
+  // Focuses a pane's newly selected row when the pane had focus, or when a
+  // jump asked for it and focus has not moved since the jump.
+  function focusSelected(prefix,current,hadFocus=false){
+    const selection=`${current.datasetId}:${current.queryId}:${current.scrollRevision}:${current.selectedLine}`;
+    if(navigationFocus.has(prefix)&&navigationFocus.get(prefix)!==document.activeElement)navigationFocus.delete(prefix);
+    if(current.selectedLine&&focusedSelection.get(prefix)!==selection&&(hadFocus||navigationFocus.has(prefix))){
+      const row=ui[prefix+'Rows'].querySelector?.(`[data-line-number="${current.selectedLine}"]`);
+      if(row){row.focus?.({preventScroll:true});focusedSelection.set(prefix,selection);navigationFocus.delete(prefix);}
+    }
+  }
+  // A jump moves focus to the row it lands on. The paint after a scroll does
+  // that, but a row already shown (as a followed search result is) paints
+  // nothing, so the jump also tries once the locate settles.
+  function locateAndFocus(prefix,owner,line,options){
+    navigationFocus.set(prefix,document.activeElement);
+    void owner.locateLine(line,options).then(()=>{if(!disposed)focusSelected(prefix,owner.getState());});
+  }
+  function jumpTo(line){if(!inputPending&&!validationError&&!disposed)locateAndFocus('logs',logs,line);}
+  // Selecting a search result reveals its row in the upper logs without
+  // moving focus, as a bookmark does; a held arrow key follows only where
+  // the selection settles.
+  let followTimer=null;
   function followUpper(line,repeat){
     if(followTimer!==null)window.clearTimeout(followTimer);followTimer=null;
     const go=()=>{followTimer=null;if(!inputPending&&!validationError&&!disposed)void logs.locateLine(line);};
@@ -386,7 +402,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     if(!Number.isSafeInteger(line)||line<1)return reject('행 번호는 1부터입니다.');
     if(line>state.total)return reject(state.textComplete?`마지막 행은 ${rowLabel(state.total)}입니다.`:`${rowLabel(line)}은 아직 읽지 않았습니다. 읽기가 끝난 뒤 다시 시도해 주세요.`);
     input.removeAttribute('aria-invalid');jumpRequests.set(owner,line);
-    navigationFocus.set(prefix,document.activeElement);void owner.locateLine(line,{nearest:true});
+    locateAndFocus(prefix,owner,line,{nearest:true});
   }
   function located(owner,{lineNumber,outcome,target}){
     // Each locate replaces the pane's previous one, so any outcome ends a jump.
@@ -398,13 +414,20 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     else if(outcome==='hidden')notify(`${rowLabel(lineNumber)}은 ${where}에 없고 그 뒤에도 ${owner.getState().queryComplete?'결과가 없습니다':'아직 찾은 결과가 없습니다'}.`);
     else if(outcome==='incomplete')notify(`${where} 처리가 끝나지 않아 ${rowLabel(lineNumber)}의 위치를 확인할 수 없습니다.`);
   }
-  // The first click of a double-click opens the detail and may shift layout,
-  // so the second click can land on another row or on the detail itself.
-  // Every click sequence starts by clearing the target; only a search row's
-  // first click sets it, and the double-click jumps to that row.
+  // The first press of a double-click selects the row and opens the detail,
+  // which may shift layout before the button is even released, so the rest
+  // of it can land on another row, on the list itself or on the detail.
+  // Every press sequence starts by clearing the target; only the first press
+  // on a search result or a bookmark sets it, and the double-click jumps to
+  // that row.
   const panel=$('largeLogPanel'),lowerPane=$('largeLowerPane');
-  panel.addEventListener('click',event=>{if(event.detail<=1)doubleClickLine=null;},true);
-  panel.addEventListener('dblclick',()=>{const line=doubleClickLine;doubleClickLine=null;if(line!==null)jumpTo(line);});
+  panel.addEventListener('mousedown',event=>{if(event.detail<=1)doubleClickLine=null;},true);
+  ui.bookmarkList.addEventListener('mousedown',event=>{
+    const row=event.target?.closest?.('.bookmark-row');
+    if(event.detail===1&&row&&!event.target.closest('button')&&!event.shiftKey&&!(MOD==='⌘'?event.metaKey:event.ctrlKey))doubleClickLine=Number(row.dataset.lineNumber);
+  });
+  // The browser selects a word under a double-click; the jump drops it.
+  panel.addEventListener('dblclick',()=>{const line=doubleClickLine;doubleClickLine=null;if(line!==null){window.getSelection?.()?.removeAllRanges?.();jumpTo(line);}});
   // Search results and bookmarks share the lower region as tabs; the
   // bookmark tab exists only while there are bookmarks. The region takes its
   // resizable share only while it has content.
@@ -414,6 +437,9 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     if(!bookmarkCount&&lowerTab==='bookmarks'){lowerTab='search';if(ui.bookmarkPane.contains(document.activeElement))ui.logsViewport.focus({preventScroll:true});}
     const marks=lowerTab==='bookmarks';
     ui.lowerTabs.hidden=!bookmarkCount;
+    // The search results are a tab panel only while the tabs show.
+    if(bookmarkCount){ui.largeSearchPane.setAttribute('role','tabpanel');ui.largeSearchPane.setAttribute('aria-labelledby','searchTab');}
+    else{ui.largeSearchPane.removeAttribute('role');ui.largeSearchPane.removeAttribute('aria-labelledby');}
     ui.searchTab.setAttribute('aria-selected',String(!marks));ui.searchTab.tabIndex=marks?-1:0;
     ui.bookmarkTab.setAttribute('aria-selected',String(marks));ui.bookmarkTab.tabIndex=marks?0:-1;
     ui.largeSearchPane.hidden=marks||!ui.searchInput.value;ui.bookmarkPane.hidden=!marks;
@@ -518,7 +544,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     const files=hasFile&&state.files?.length>1?state.files:null;layout.setMultiFile(!!files);if(hasFile){applyLevelNames(state.ios===true||state.capture?.platform==='ios');applyFormat(state.format);}if(hasFile)layout.fitLines(widestLine(state));
     ui.largeName.title=!hasFile?'':files?`${files.length}개 파일을 이 순서로 합쳤습니다\n${files.map((file,i)=>`${i+1}. ${file.name} · ${formatSize(file.size)}`).join('\n')}\n합계 ${formatSize(state.size)}`:`${state.name}\n${formatSize(state.size)}`;ui.largeSize.textContent=hasFile&&state.size>0?formatSize(state.size):'';
     const p=describeLargeProgress(state,{omitDuplicateFileCount:true});ui.logsCount.textContent=`로그 · ${p.count}`;
-    ui.logsRange.textContent=p.range.replaceAll('검색 결과','필터 결과');
+    showRange(ui.logsRange,p.range.replaceAll('검색 결과','필터 결과'),true);
     ui.logsLast.textContent=p.exact?'끝':'현재 끝';ui.largeStatus.textContent=p.status;updateLevels(state.summary,state.summaryComplete);
     const empty=state.closed||!state.count;ui.logsFirst.disabled=empty||state.viewportStart===0;ui.logsLast.disabled=empty||state.viewportStart>=state.count-1;
     ui.logsJump.disabled=!state.count||state.closed;ui.logsJump.title=jumpTitle('현재 필터 결과',state);
@@ -582,7 +608,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     const queryText=p.query?` · ${p.query}${scanning?` ${Math.min(99,Math.floor(state.scannedBytes/state.size*100))}%`:''}`:'';
     if(ui.largeCount.textContent!==p.count)ui.largeCount.textContent=p.count;
     if(ui.largeTotal.textContent!==queryText)ui.largeTotal.textContent=queryText;
-    if(ui.largeRange.textContent!==p.range)ui.largeRange.textContent=p.range;
+    if(ui.largeRange.textContent!==p.range)showRange(ui.largeRange,p.range,true);
     ui.largeSearchPane.setAttribute('aria-busy',String(visible&&p.query==='검색 중'));
     if(inputPending)ui.largeRows.setAttribute('data-search-pending','true');else ui.largeRows.removeAttribute('data-search-pending');
     // An emptied search leaves an idle identity: there is nothing to cancel.
@@ -718,7 +744,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     const next=Number.isSafeInteger(index)?viewports.get(prefix)?.cachedRows(index+1,index+1)?.[0]:null;
     if(size===1&&(continuationOwner(entry)||(entry.kind==='parsed'&&continuationOwner(next)?.lineNumber===entry.lineNumber)))items.push(['로그 전체 원문 복사',()=>copyRecord(owner,owner.readRecordText(entry.lineNumber))]);
     items.push([size>1?`선택한 ${formatNumber(size)}행 북마크 추가/해제`:bookmarks.has(entry.lineNumber)?'북마크 해제':'북마크 추가',()=>toggleBookmarks(prefix)]);
-    if(isSearch)items.push(['위 로그에서 보기',()=>jumpTo(entry.lineNumber)]);
+    if(isSearch)items.push(['위 로그로 이동',()=>jumpTo(entry.lineNumber)]);
     menu.show(items,x,y,'행 작업',{onList:true});
   }
   // The bookmark list's menu: the same conditions, then its selection's copy
@@ -806,7 +832,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
   devices=mountDevices({ui,document,window,native,menu,logs,isGone:()=>pageGone,report:message=>{inputError=message;errors();},unreport:message=>{if(message&&inputError===message){inputError='';errors();}},notify});
   mountRecentFiles({ui,document,native,menu,isGone:()=>pageGone,onError:message=>{inputError=message;errors();},guard:()=>devices.guard(),keep:id=>devices.keep(id),shown:()=>logs.getState().datasetId});
   function repaintRows(){previousRows.clear();renderLogs(logs.getState());renderSearch(search.getState());}
-  const bookmarks=createBookmarks({ui,document,window,notify,mod:MOD,logs,lineCell,openMenu:openBookmarkMenu,isRawMode:()=>rawMode,canNavigate:()=>!disposed&&!inputPending&&!validationError,onChange:()=>{repaintRows();saver.schedule();},onCount:count=>{bookmarkCount=count;updateLowerPane();if(count)tips?.offer('bookmarks');}});
+  const bookmarks=createBookmarks({ui,document,window,notify,mod:MOD,logs,lineCell,jump:jumpTo,openMenu:openBookmarkMenu,isRawMode:()=>rawMode,canNavigate:()=>!disposed&&!inputPending&&!validationError,onChange:()=>{repaintRows();saver.schedule();},onCount:count=>{bookmarkCount=count;updateLowerPane();if(count)tips?.offer('bookmarks');}});
   const saver=createWorkSaver({invoke:(command,args)=>native.core.invoke(command,args),capture:captureWork,setTimer:(fn,ms)=>window.setTimeout(fn,ms),clearTimer:id=>window.clearTimeout(id)});
   saved=mountSavedFilters({native,menu,notify,document,read:()=>fieldsOf(currentFilters()),write:writeFields,changed:()=>saver.schedule(),format:()=>shownFormat,isGone:()=>pageGone});
   conditionView=mountConditions({document,lists:{include:$('showList'),exclude:$('hideList')},hints:{include:$('showHint'),exclude:$('hideHint')},adders:{include:$('addShow'),exclude:$('addHide')},editor:$('condEditor'),rowless:()=>rowless(),
@@ -988,7 +1014,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     event.preventDefault();
     const current=state.selectedLine?view.metrics().selectionIndex:null;
     const next=current===null?(step>0?0:state.count-1):(current+step+state.count)%state.count;
-    revealSelection=true;view.selectIndex(next,{force:true});
+    view.selectIndex(next,{force:true});
   }
   // A saved filter replaces the filter's conditions; the search and reading options stay.
   function writeFields(fields){setConditions(fields);ui.includeRaw.checked=fields.includeRaw;apply();}

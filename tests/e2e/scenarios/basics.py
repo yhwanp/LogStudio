@@ -293,6 +293,20 @@ document.activeElement.dispatchEvent(event);return {before:before.defaultPrevent
         app.key('Enter', shift=True, target='searchInput')
         s3 = app.wait(lambda: (lambda v: v['search'] == s1['search'] and v['logs'] == s1['search'] and v)(js(sel)), what='previous result')
         check('Enter/Shift+Enter walk results, reveal them above and keep typing focus', s1['active'] == s2['active'] == s3['active'] == 'searchInput', [s1, s2, s3])
+        # Clicking a result always follows it above, as a bookmark does, and keeps focus in the results.
+        other = js("return [...document.querySelectorAll('#largeRows .log-row')].map(r=>r.dataset.lineNumber).find(n=>n!==arguments[0]);", s1['search'])
+        app.click_row(other, pane='largeRows')
+        s4 = app.wait(lambda: (lambda v: v['search'] == other and v['logs'] == other and v)(js(sel)), what='clicked result')
+        s4['inResults'] = js("return document.getElementById('largeViewport').contains(document.activeElement);")
+        s4['toggle'] = js("return !!document.getElementById('followSearch');")
+        check('clicking a result follows it above with no toggle and keeps focus in the results', s4['inResults'] and not s4['toggle'], s4)
+        # Enter on that result moves focus to its row above, though the row is already shown.
+        app.key('Enter')
+        s5 = app.wait(lambda: (lambda v: v['line'] == other and v)(js("const a=document.activeElement;return {line:document.getElementById('logsViewport').contains(a)?a.dataset.lineNumber:null};")), what='focus on the row above')
+        check('Enter on a followed result moves focus to its row above', s5['line'] == other, s5)
+        # Back on the first result, so the upper logs are at their start again for the steps below.
+        app.click_row(s1['search'], pane='largeRows')
+        app.wait(lambda: (lambda v: v['search'] == s1['search'] and v['logs'] == s1['search'] and v)(js(sel)), what='first result again')
         lower = js(VISIBLE + "return {splitter:v('paneSplitter'),expanded:document.getElementById('largeLowerPane').classList.contains('expanded'),"
                    "lower:document.getElementById('largeLowerPane').getBoundingClientRect().height,content:document.getElementById('logContent').getBoundingClientRect().height};")
         check('the lower region expands with a splitter', lower['splitter'] and lower['expanded'] and 0.3 < lower['lower'] / lower['content'] < 0.55, lower)
