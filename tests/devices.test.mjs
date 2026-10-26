@@ -34,12 +34,17 @@ test('the device menu lists what adb and Apple\'s device service see, or why the
   const adb = {found:true, origin:'studio', version:'37.0.1'};
   assert.equal(describeAdb(adb), 'adb 37.0.1 · Android Studio');
   const none = deviceMenuItems({adb, list:[]}, actions);
-  assert.deepEqual(labels(none), ['연결된 기기가 없습니다', 'Android 기기는 USB 디버깅을 켜고, iPhone·iPad는 케이블이나 Wi-Fi로 연결해 주세요', null, '새로 고침', 'adb 위치 지정…']);
-  assert.equal(none[4][2], '지금 쓰는 adb: adb 37.0.1 · Android Studio');
+  // Picking an adb is offered in the menu only while using a picked one.
+  assert.deepEqual(labels(none), ['연결된 기기가 없습니다', 'Android 기기는 USB 디버깅을 켜고, iPhone·iPad는 케이블이나 Wi-Fi로 연결해 주세요', null, '새로 고침']);
+  for (const origin of ['sdk', 'path', 'homebrew']) assert.ok(!labels(deviceMenuItems({adb:{...adb, origin}, list:[]}, actions)).includes('adb 위치 지정…'), origin);
+  const picked = deviceMenuItems({adb:{...adb, origin:'chosen'}, list:[]}, actions);
+  assert.deepEqual(labels(picked).slice(-2), ['새로 고침', 'adb 위치 지정…']);
+  assert.equal(picked.at(-1)[2], '지금 쓰는 adb: adb 37.0.1 · 직접 지정');
+  picked.at(-1)[1](); assert.deepEqual(calls.slice(-1), ['pick']);
   // Without Apple's device service (Windows without Apple Devices or
   // iTunes), one item leads to getting it; other failures are said as they are.
   const noService = deviceMenuItems({adb, list:[], iosError:'Apple device service not found; install Apple Devices or iTunes'}, actions);
-  assert.deepEqual(labels(noService), ['연결된 기기가 없습니다', 'USB 디버깅을 켠 기기를 연결하거나 에뮬레이터를 실행해 주세요', null, 'iPhone·iPad 로그를 기록하려면 Apple Devices 앱을 설치해 주세요…', null, '새로 고침', 'adb 위치 지정…']);
+  assert.deepEqual(labels(noService), ['연결된 기기가 없습니다', 'USB 디버깅을 켠 기기를 연결하거나 에뮬레이터를 실행해 주세요', null, 'iPhone·iPad 로그를 기록하려면 Apple Devices 앱을 설치해 주세요…', null, '새로 고침']);
   noService[3][1](); assert.deepEqual(calls.slice(-1), ['apple']);
   assert.deepEqual(labels(deviceMenuItems({adb, list:[], iosError:'Could not list iPhones or iPads; check the connection and retry'}, actions)).slice(3, 4), ['iPhone·iPad 목록을 가져오지 못했습니다. 연결을 확인하고 다시 시도해 주세요.']);
   // An iPad that has not trusted the computer says on a second line how it comes to.

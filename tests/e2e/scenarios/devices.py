@@ -86,6 +86,7 @@ def run(ctx):
         check('an iPad that does not trust the computer says how it comes to, in view', '이 컴퓨터를 신뢰하겠습니까' in (trust or ''), trust)
         waiting_item = js("const b=[...document.querySelectorAll('#rowMenu>button')].find(b=>b.textContent.startsWith('Tablet X1'));return b?b.getAttribute('aria-disabled'):null")
         check('a device that cannot be picked is still a menu item the keyboard reaches', waiting_item == 'true', waiting_item)
+        check('the menu does not offer to pick an adb when one was found on its own', 'adb 위치 지정…' not in m, m)
         app.capture('04-menu-devices')
         # Trusted while the menu is open, the iPad becomes choosable on its
         # own, and focus stays on it.

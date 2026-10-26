@@ -80,8 +80,9 @@ function deviceItem(device, alike, actions) {
 export function deviceMenuItems({adb, list, error, androidError, iosError, loading}, actions) {
   if (loading) return [['기기를 찾는 중…']];
   const footer = [null, ['새로 고침', actions.refresh]];
-  // Without adb, picking one is part of how to get it (actions.help).
-  if (adb?.found) footer.push(['adb 위치 지정…', actions.pick, `지금 쓰는 adb: ${describeAdb(adb)}`]);
+  // Offering to pick an adb that was found on its own reads as a step left
+  // to do. Without adb, picking is part of getting one (actions.help).
+  if (adb?.found && adb.origin === 'chosen') footer.push(['adb 위치 지정…', actions.pick, `지금 쓰는 adb: ${describeAdb(adb)}`]);
   if (error) return [[describeLogError(error)], ...footer];
   const noAdb = !!adb && !adb.found;
   const items = [];

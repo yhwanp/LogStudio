@@ -340,7 +340,8 @@ USB 디버깅을 켠 Android 기기·에뮬레이터의 logcat이나, 케이블 
 **Android**
 
 - 컴퓨터에 adb(Google Android SDK Platform-Tools)가 있어야 합니다. Android Studio를 설치했다면 그대로 쓰며, Android Studio 없이 adb만 설치해도 됩니다.
-- adb는 Android Studio 기본 SDK 폴더, `ANDROID_HOME`·`ANDROID_SDK_ROOT`, `PATH`, Homebrew 설치 위치 순서로 찾습니다. 찾지 못하면 기기 메뉴의 `Android 기기 로그를 기록하려면 adb를 설치해 주세요…`에서 설치 명령(macOS `brew install --cask android-platform-tools`, Windows `winget install Google.PlatformTools`)과 공식 다운로드 주소를 안내하며, `adb 위치 지정…`으로 압축을 푼 폴더의 adb를 직접 선택할 수도 있습니다.
+- adb는 직접 지정한 위치, `ANDROID_HOME`·`ANDROID_SDK_ROOT`, Android Studio 기본 SDK 폴더, `PATH`, Homebrew 설치 위치 순서로 찾습니다. 찾지 못하면 기기 메뉴의 `Android 기기 로그를 기록하려면 adb를 설치해 주세요…`에서 설치 명령(macOS `brew install --cask android-platform-tools`, Windows `winget install Google.PlatformTools`)과 공식 다운로드 주소를 안내하며, `adb 위치 지정…`으로 압축을 푼 폴더의 adb를 직접 선택할 수도 있습니다.
+- adb를 자동으로 찾았다면 따로 지정할 필요가 없습니다. 기기 메뉴의 `adb 위치 지정…`은 직접 지정한 adb를 쓰는 동안에만 나오며, 다른 adb로 바꿀 때 씁니다.
 - Android Studio 등 다른 도구와 함께 쓸 때는 모두 같은 버전의 adb를 쓰도록 맞춥니다. 버전이 다른 adb가 함께 실행되면 adb 서버가 계속 다시 시작되므로, 이를 감지하면 기록을 멈추고 안내합니다.
 
 **iPhone·iPad**
