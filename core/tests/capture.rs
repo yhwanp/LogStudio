@@ -783,7 +783,9 @@ fn a_scripted_developer_build_started_again_shows_its_private_values() {
     let slot = store.create(Platform::Ios, "Test iPhone").unwrap();
     let c = Capture::start(link.clone(), IPHONE, slot, options()).unwrap();
     let text = || String::from_utf8_lossy(&content(&c)).into_owned();
-    wait("a redacted row", || text().contains("SampleApp[812:"));
+    // The redacted row itself: the feed's first rows from the app hold no
+    // value, so starting it after them can leave none before its values.
+    wait("a redacted row", || text().contains("to <private> failed"));
     assert_eq!(c.serial(), IPHONE);
     let apps = link.apps(IPHONE).unwrap();
     assert_eq!(
