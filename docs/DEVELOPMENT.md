@@ -43,7 +43,7 @@
 | 영역 | 파일 및 역할 |
 | --- | --- |
 | 조립·렌더링 | `app.js`(진입점 및 모듈 연결), `large-view.js`(화면 구성 및 행 렌더링), `continuous-view.js`(가상 연속 스크롤), `columns.js`(텍스트·DLT 열 프로필 및 셀 렌더링), `entries.js`(멀티라인 이어지는 줄 표시 규칙) |
-| 상태·통신 | `controller.js`(pane별 쿼리 수명주기 관리, DOM 비의존), `desktop.js`(Tauri IPC 래퍼), `work-state.js`(다시 열기·작업 복원 및 디바운스 저장), `layout.js`(열 폭·하단 높이 저장), `zoom.js`(화면 배율 제어) |
+| 상태·통신 | `controller.js`(pane별 쿼리 수명주기 관리, DOM 비의존), `desktop.js`(Tauri IPC 래퍼), `work-state.js`(다시 열기·작업 복원 및 디바운스 저장), `layout.js`(열 폭, 하단 영역과 원문 상세 높이 저장), `zoom.js`(화면 배율 제어) |
 | 필터 | `filter-model.js`(레벨 목록, 붙여넣기 25 MiB 상한, 조건 모델 및 입력 검증), `conditions.js`(필터 패널의 조건 카드 UI), `saved-filters.js`(저장된 필터 직렬화·비교·메뉴·이름 대화상자) |
 | 행 선택·목록 | `row-selection.js`(상단·검색·북마크 공통 행 선택 상태 머신, DOM 비의존), `row-gestures.js`(마우스 클릭·드래그·자동 스크롤), `bookmarks.js`(북마크 관리), `recent.js`(최근 파일 메뉴) |
 | 공통·유틸 | `dom.js`(DOM 헬퍼), `demo.js`(빈 화면의 `샘플 로그 보기`용 합성 로그) |

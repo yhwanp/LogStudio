@@ -275,22 +275,29 @@ h2{font-size:16px;margin:0;font-weight:650}
 
 /* Upper logs share the panel with the resizable lower region. */
 .logs-main-pane{display:flex;flex-direction:column;flex:1 1 0;min-height:110px;min-width:0;overflow:hidden}
-.pane-splitter{flex:0 0 7px;cursor:row-resize;background:var(--surface-3);border-top:1px solid var(--border);border-bottom:1px solid var(--border);position:relative;touch-action:none}
-.pane-splitter::after{content:'';position:absolute;left:50%;top:2px;width:36px;height:1px;margin-left:-18px;border-top:1px solid var(--faint);border-bottom:1px solid var(--faint);height:3px;box-sizing:border-box;opacity:.7}
-.pane-splitter:hover,.pane-splitter:focus-visible,.resizing-panes .pane-splitter{background:var(--accent-soft)}
+.pane-splitter{flex:0 0 7px;cursor:row-resize;background:var(--surface-3);border-top:1px solid var(--border);border-bottom:1px solid var(--border);position:relative;z-index:4;touch-action:none}
+/* The grip reaches 4px past each edge of the 7px bar it shows. */
+.pane-splitter::before{content:'';position:absolute;inset:-4px 0}
+.pane-splitter::after{content:'';position:absolute;left:50%;top:2px;width:36px;height:3px;margin-left:-18px;border-top:1px solid var(--faint);border-bottom:1px solid var(--faint);box-sizing:border-box}
+/* Hover, focus and a drag draw the accent, as on a column edge. */
+.pane-splitter:hover,.pane-splitter:focus-visible,.pane-splitter.dragging{background:var(--accent-soft);border-color:var(--accent-border)}
+.pane-splitter:is(:hover,:focus-visible,.dragging)::after{border-color:var(--accent)}
 .pane-splitter:focus-visible{outline-offset:-3px}
 .resizing-panes,.resizing-panes *{cursor:row-resize!important;user-select:none!important}
 .lower-pane{display:flex;flex-direction:column;flex:0 0 auto;min-width:0;min-height:0;border-top:1px solid var(--border)}
+/* Results or bookmarks expand the region to its share. A detail alone gives
+   it the detail's own height, yielding lines to the upper logs only in a
+   window too short for them. Neither follows the row the detail shows, so
+   moving between short and long rows never moves the search box. */
 .lower-pane.expanded{flex:0 0 calc(var(--lower-ratio,.42)*100%);border-top:0;min-height:150px}
-/* A detail alone takes the height of its text, up to the saved share, so a
-   one-line log does not leave the region mostly empty. */
-.lower-pane.expanded:not(:has(>.search-result-pane:not([hidden]))){flex:0 1 auto;max-height:calc(var(--lower-ratio,.42)*100%);min-height:0}
-.lower-pane.expanded:not(:has(>.search-result-pane:not([hidden])))>.raw-detail,.lower-pane.expanded:not(:has(>.search-result-pane:not([hidden])))>.raw-detail pre{flex:0 1 auto}
-/* Results with a detail keep five result rows (heading 36px, column header
-   27px) and three detail lines (112px) under the 46px search toolbar: the
-   region grows past a smaller saved share, but never past 62% of the logs. */
-.lower-pane.expanded:has(>.search-result-pane:not([hidden])):has(>.raw-detail:not([hidden])){min-height:min(62%,calc(46px + 63px + 5*var(--row-height) + 112px))}
-.lower-pane.expanded:has(>.raw-detail:not([hidden]))>.search-result-pane{min-height:min(100%,calc(63px + 5*var(--row-height)))}
+.lower-pane:not(.expanded):has(>.raw-detail:not([hidden])){flex-shrink:1}
+/* Results with a detail get room for five result rows (heading 36px, column
+   header 27px), the 7px splitter and a one-line detail (66px) under the 46px
+   search toolbar: the region grows past a smaller saved share, but never
+   past 62% of the logs. A taller detail leaves the results two rows, and in
+   a region too short for both the results give way first. */
+.lower-pane.expanded:has(>.raw-detail:not([hidden])){min-height:min(62%,calc(46px + 63px + 5*var(--row-height) + 7px + 66px))}
+.lower-pane.expanded:has(>.raw-detail:not([hidden]))>.search-result-pane{min-height:max(0px,min(calc(63px + 2*var(--row-height)),100% - 46px - 7px - 66px))}
 .search-toolbar{padding:7px 12px;display:flex;gap:12px;align-items:center;flex-shrink:0}
 .search-box{border:1px solid var(--control-border);border-radius:7px;background:var(--surface);display:flex;align-items:center;gap:8px;padding:0 8px 0 10px;flex:1;min-width:180px}
 .search-box>svg{width:16px;height:16px;color:var(--faint);flex-shrink:0}
@@ -390,14 +397,27 @@ mark{background:var(--mark);color:var(--mark-text);padding:0;border-radius:2px}
 .encoding-badge{font-size:11px;color:var(--damage-text);margin-left:3px}
 .encoding-damaged-row .line-number{color:var(--damage-text)}
 
-/* Raw detail: fills the lower region alone, or shares it with results. */
-.raw-detail{display:flex;flex-direction:column;background:var(--surface-2);border-top:1px solid var(--border);padding:6px 12px 8px;flex:1 1 0;min-height:70px}
-.search-result-pane:not([hidden])~.raw-detail{flex:0 1 auto;max-height:50%}
-.detail-heading{display:flex;justify-content:space-between;align-items:center;gap:10px;min-height:26px;flex-shrink:0}
-.detail-heading strong{font-size:12px}
-.detail-actions{display:flex;align-items:center;gap:5px}
+/* Raw detail: under its splitter, the lines that splitter sets (one by
+   default) whatever the row shows. Its 66px minimum holds the heading and
+   one line. */
+.raw-detail{display:flex;flex-direction:column;background:var(--surface-2);padding:6px 12px 8px;flex:0 1 auto;min-height:66px}
+.detail-heading{display:flex;align-items:center;gap:8px;min-height:26px;flex-shrink:0}
+/* One line, as a title that wrapped would move the search box between rows:
+   where the row comes from is cut short first, never its range or notes. */
+.detail-heading strong{display:flex;align-items:baseline;gap:6px;min-width:0;overflow:hidden;font-size:12px;white-space:nowrap}
+.detail-from{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.detail-range{flex-shrink:0}
+.detail-note{flex-shrink:0;padding:0 6px;border:1px solid var(--border-strong);border-radius:8px;font-size:11px;font-weight:600;line-height:16px;color:var(--muted)}
+.detail-note.damage{border-color:currentColor;color:var(--damage-text)}
+.detail-more{flex-shrink:0;color:var(--accent-text);font-variant-numeric:tabular-nums}
+.detail-actions{display:flex;align-items:center;gap:5px;flex-shrink:0;margin-left:auto}
 .large-detail-navigation{display:flex;gap:5px;margin-right:6px}
-.raw-detail pre{font:13px/1.65 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;margin:4px 0 0;user-select:text;overflow:auto;flex:1;min-height:0;color:var(--text)}
+.raw-detail pre{font:13px/1.65 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;margin:4px 0 0;user-select:text;overflow:auto;flex:0 1 calc(var(--detail-lines,1)*1.65em);min-height:1.65em;color:var(--text);--shade:color-mix(in srgb,var(--text) 20%,transparent)}
+/* A soft inner shade marks an edge with more text past it; the text stays
+   sharp, even on one line. */
+.raw-detail pre.more-above{box-shadow:inset 0 7px 6px -6px var(--shade)}
+.raw-detail pre.more-below{box-shadow:inset 0 -7px 6px -6px var(--shade)}
+.raw-detail pre.more-above.more-below{box-shadow:inset 0 7px 6px -6px var(--shade),inset 0 -7px 6px -6px var(--shade)}
 
 /* Empty state and transient overlays */
 .empty-state{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:32px 20px}

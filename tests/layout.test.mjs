@@ -22,7 +22,7 @@ function rig(saved=null,setup=()=>{}){
   const canvas={getContext:()=>({font:'',measureText:text=>({width:text.length*7})})};
   const elements=new Map(),document={activeElement:null,listeners:new Map(),getElementById:id=>{if(!elements.has(id))elements.set(id,new Element(document));return elements.get(id);},createElement:tag=>tag==='canvas'?canvas:new Element(document),addEventListener(name,fn){this.listeners.set(name,fn);}};
   const timers=new Map(),writes=[];let seq=0;
-  const window={localStorage:{getItem:()=>JSON.stringify(saved),setItem:(_key,value)=>writes.push(JSON.parse(value))},setTimeout:(fn,ms)=>{timers.set(++seq,{fn,ms});return seq;},clearTimeout:id=>timers.delete(id),addEventListener(){},getComputedStyle:()=>({fontWeight:'400',fontSize:'12px',fontFamily:'mono',paddingLeft:'6px',paddingRight:'6px'})};
+  const window={localStorage:{getItem:()=>JSON.stringify(saved),setItem:(_key,value)=>writes.push(JSON.parse(value))},setTimeout:(fn,ms)=>{timers.set(++seq,{fn,ms});return seq;},clearTimeout:id=>timers.delete(id),addEventListener(){},getComputedStyle:()=>({fontWeight:'400',fontSize:'12px',fontFamily:'mono',paddingLeft:'6px',paddingRight:'6px',lineHeight:'20px'})};
   const get=document.getElementById,panel=get('filterPanel'),input=get('pidFilter');panel.append(input);
   const main=get('logsRows'),selected=new Element(document);main.append(selected);selected.focus();
   setup({get,panel,document});
@@ -227,20 +227,71 @@ test('a row column width the user chose stays until defaults, Home or a fit hand
 
 test('the lower region splitter starts from the shown height, not only the saved share',()=>{
   const r=rig({lowerRatio:.42}),splitter=r.get('paneSplitter'),workspace=r.get('workspace');
-  r.get('logContent').getBoundingClientRect=()=>({height:1000});
-  // A one-line detail alone is shorter than its 42% share.
-  r.get('largeLowerPane').getBoundingClientRect=()=>({height:150});
+  // The region shows its share of the log area, but never less than `least`
+  // (its 150-pixel minimum, or room for results with a detail) nor more than
+  // `most` (what the upper logs' minimum leaves).
+  let total=300,least=150,most=300;
+  r.get('logContent').getBoundingClientRect=()=>({height:total});
+  r.get('largeLowerPane').getBoundingClientRect=()=>({height:Math.min(most,Math.max(least,Number(workspace.style['--lower-ratio'])*total))});
+  // The 150-pixel minimum is taller than a short log area's 42% share.
   splitter.fire('pointerdown',{button:0,clientY:500,pointerId:1,preventDefault(){}});
-  splitter.fire('pointermove',{clientY:450,pointerId:1});
-  assert.equal(workspace.style['--lower-ratio'],'0.2','dragging up grows it from what is shown');
-  splitter.fire('pointerup',{pointerId:1});assert.equal(r.writes.at(-1).lowerRatio,0.2);
-  r.get('largeLowerPane').getBoundingClientRect=()=>({height:400});
-  splitter.fire('keydown',{key:'ArrowDown',preventDefault(){}});
-  assert.equal(workspace.style['--lower-ratio'],'0.37','results with a detail grew past the share: keys start from 40%');
+  splitter.fire('pointermove',{clientY:470,pointerId:1});
+  assert.equal(workspace.style['--lower-ratio'],'0.6','dragging up grows it from what is shown');
+  splitter.fire('pointerup',{pointerId:1});assert.equal(r.writes.at(-1).lowerRatio,0.6);
+  most=210;
   splitter.fire('pointerdown',{button:0,clientY:500,pointerId:2,preventDefault(){}});
-  splitter.fire('pointermove',{clientY:300,pointerId:2});splitter.fire('pointercancel',{pointerId:2});
-  assert.equal(workspace.style['--lower-ratio'],'0.37','a cancelled drag restores the saved share');
+  splitter.fire('pointermove',{clientY:300,pointerId:2});
+  assert.equal(workspace.style['--lower-ratio'],'0.7','a share the upper logs leave no room for is not kept');
+  assert.equal(splitter.attributes['aria-valuenow'],'70');
+  splitter.fire('pointerup',{pointerId:2});assert.equal(r.writes.at(-1).lowerRatio,0.7);
+  total=1000;least=400;most=890;
   splitter.fire('keydown',{key:'Home',preventDefault(){}});assert.equal(workspace.style['--lower-ratio'],'0.42');
+  splitter.fire('keydown',{key:'ArrowDown',preventDefault(){}});assert.equal(workspace.style['--lower-ratio'],'0.39');
+  splitter.fire('keydown',{key:'ArrowDown',preventDefault(){}});
+  assert.equal(workspace.style['--lower-ratio'],'0.37','results with a detail keep 40%: keys start from it, not from the saved 39%');
+  splitter.fire('pointerdown',{button:0,clientY:500,pointerId:3,preventDefault(){}});
+  splitter.fire('pointermove',{clientY:300,pointerId:3});assert.equal(workspace.style['--lower-ratio'],'0.6');
+  splitter.fire('pointercancel',{pointerId:3});
+  assert.equal(workspace.style['--lower-ratio'],'0.37','a cancelled drag restores the saved share');
+  splitter.fire('dblclick');assert.equal(workspace.style['--lower-ratio'],'0.42');
+});
+
+test('the raw detail shows the whole lines its own splitter sets, one by default, saved apart from the lower region',()=>{
+  const r=rig({lowerRatio:.5}),splitter=r.get('detailSplitter'),workspace=r.get('workspace');
+  assert.equal(workspace.style['--detail-lines'],'1');assert.equal(splitter.attributes['aria-valuetext'],'원문 상세 1줄');
+  // The rig's detail lines are 20 pixels; other regions' minimums leave room
+  // for at most `room` pixels of text.
+  let room=Infinity;
+  r.get('largeDetailText').getBoundingClientRect=()=>({height:Math.min(room,Number(workspace.style['--detail-lines'])*20)});
+  const drag=(id,to,end='pointerup')=>{splitter.fire('pointerdown',{button:0,clientY:500,pointerId:id,preventDefault(){}});splitter.fire('pointermove',{clientY:to,pointerId:id});const lines=workspace.style['--detail-lines'];splitter.fire(end,{pointerId:id});return lines;};
+  const key=(name,shiftKey=false)=>{splitter.fire('keydown',{key:name,shiftKey,preventDefault(){}});return workspace.style['--detail-lines'];};
+  splitter.fire('pointerdown',{button:0,clientY:500,pointerId:9,preventDefault(){}});
+  assert.deepEqual([splitter.classList.contains('dragging'),r.get('paneSplitter').classList.contains('dragging')],[true,false],'only the dragged splitter is marked');
+  splitter.fire('pointercancel',{pointerId:9});assert.equal(splitter.classList.contains('dragging'),false);
+  assert.equal(drag(1,445),'4','dragging up adds whole lines');
+  assert.deepEqual([r.writes.at(-1).detailLines,r.writes.at(-1).lowerRatio],[4,0.5],'the lower region keeps its share');
+  assert.equal(workspace.style['--lower-ratio'],'0.5');assert.equal(splitter.attributes['aria-valuenow'],'4');
+  // The results' two rows leave room for three of the four lines.
+  room=60;
+  assert.equal(key('ArrowDown'),'2','keys step from the shown lines');
+  assert.equal(key('ArrowUp',true),'3','lines there is no room for are not kept');
+  room=Infinity;
+  assert.equal(key('ArrowUp',true),'8','Shift steps five lines');
+  room=100;
+  assert.equal(drag(2,-5000),'5','a drag keeps no more lines than show');
+  assert.equal(r.writes.at(-1).detailLines,5);assert.equal(splitter.attributes['aria-valuetext'],'원문 상세 5줄');
+  room=Infinity;
+  assert.equal(drag(3,400,'pointercancel'),'10');assert.equal(workspace.style['--detail-lines'],'5','a cancelled drag restores the saved lines');
+  assert.equal(drag(4,-5000),'100','a drag stops at the most lines');
+  // A double-click or Enter fits the current text, as far as there is room.
+  r.get('largeDetailText').scrollHeight=7*20;
+  splitter.fire('dblclick');assert.equal(workspace.style['--detail-lines'],'7','a double-click shows the whole text');assert.equal(r.writes.at(-1).detailLines,7);
+  assert.equal(key('Home'),'1','Home goes back to one line');
+  room=100;
+  assert.equal(key('Enter'),'5','Enter fits the text as far as there is room');assert.equal(r.writes.at(-1).detailLines,5);
+  room=Infinity;r.layout.fitDetail();assert.equal(workspace.style['--detail-lines'],'7','the more-lines button fits the same way');
+  assert.equal(key('ArrowUp'),'8');assert.equal(key('Home'),'1');
+  for(const [value,shown] of [[500,'100'],[2.6,'3'],[0,'1'],['many','1']])assert.equal(rig({detailLines:value}).get('workspace').style['--detail-lines'],shown,`saved ${value}`);
 });
 
 test('a DLT log shows its own columns and keeps their widths apart from text logs',()=>{

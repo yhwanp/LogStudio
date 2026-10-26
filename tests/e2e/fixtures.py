@@ -124,7 +124,8 @@ def order(root: Path):
 def records(root: Path):
     """record.log: multi-line entries (an iOS JSON body with CRLF, an Android
     stack trace, a malformed stamped row with a tail, a long entry over two
-    64 KiB detail windows). Returns the row spans."""
+    64 KiB detail windows, a 21 KB row with a word deep inside). Returns the
+    row spans."""
     out, meta = [], {}
 
     def add(text, br='\n'):
@@ -152,6 +153,7 @@ def records(root: Path):
     meta['big'] = [first, add(']')]
     for i in range(500):
         add(f'09-21 12:09:{(i // 25) % 60:02d}.{(i % 25) * 40:03d}  2983 4241 I Tail: after {i}')
+    meta['needle'] = add('09-21 12:10:00.000  2983 4241 I LongTail: ' + 'abcdefghij' * 2000 + ' NEEDLE ' + 'klmnopqrst' * 100)
     (root / 'record.log').write_bytes(''.join(t + b for t, b in out).encode())
     meta['rows'] = len(out)
     meta['lines'] = [t for t, _ in out]

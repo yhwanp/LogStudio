@@ -306,16 +306,17 @@ test('damaged byte marks survive columns, raw view, detail and normal replacemen
   await r.get('logsRows').children[0].dispatch('click');await settle();assert.match(r.get('largeDetailTitle').textContent,/손상/);assert.equal(r.get('largeDetailText').textContent,row.raw);assert.equal(collect(r.get('largeDetailText'),'encoding-damage').length,1);assert.match(collect(r.get('largeDetailText'),'encoding-damage')[0].title,/FF/);
 });
 
-test('detail title names repaired mojibake and clears the note for plain rows',async t=>{
+test('detail title names repaired mojibake and clears the note for plain rows, its tooltip holding the whole title',async t=>{
   const row={lineNumber:1,kind:'raw',raw:'text : 안녕'};
   let detail={text:row.raw,startByte:0,nextByte:22,totalBytes:22,complete:true,highlights:[],encodingRepaired:true};
   const r=await rig({rows:[row],detail:()=>detail});t.after(()=>r.controller.close());
   await r.get('logsRows').children[0].dispatch('click');await settle();
-  assert.match(r.get('largeDetailTitle').textContent,/깨진 문자 복원/);assert.match(r.get('largeDetailTitle').title,/Mac OS Roman/);
+  assert.match(r.get('largeDetailTitle').textContent,/깨진 문자 복원/);
+  assert.equal(r.get('largeDetailTitle').title.split('\n')[0],r.get('largeDetailTitle').textContent);assert.match(r.get('largeDetailTitle').title,/\nMac OS Roman/);
   assert.equal(r.get('largeDetailText').textContent,row.raw);
   detail={...detail,text:'plain',encodingRepaired:undefined};
   await r.controller.logs.loadDetail(1);await settle();
-  assert.doesNotMatch(r.get('largeDetailTitle').textContent,/복원/);assert.equal(r.get('largeDetailTitle').title,'');
+  assert.doesNotMatch(r.get('largeDetailTitle').textContent,/복원/);assert.equal(r.get('largeDetailTitle').title,r.get('largeDetailTitle').textContent);
 });
 
 test('unchanged detail nodes retain selection while new content, damage, query and lifecycle invalidate',async t=>{
@@ -1310,6 +1311,20 @@ test('one Escape closes the raw detail unless the filter panel or a menu already
   assert.equal(escape(true),false);await settle();assert.equal(r.get('largeDetail').hidden,false,'the panel closed instead');
   assert.equal(escape(false),true);await settle();assert.equal(r.get('largeDetail').hidden,true);
   assert.equal(escape(false),false,'nothing else to close');
+});
+
+test('the raw detail has its own splitter, the region splitter shows with results, and a hiding splitter hands focus to the upper logs',async t=>{
+  const rows=Array.from({length:3},(_,i)=>({lineNumber:i+1,kind:'raw',raw:`raw line ${i+1}`}));
+  const r=await rig({rows,detail:{text:'x',startByte:0,nextByte:1,totalBytes:1,complete:true,highlights:[]}});t.after(()=>r.controller.close());
+  const shown=()=>[r.get('paneSplitter').hidden,r.get('detailSplitter').hidden].map(hidden=>!hidden);
+  await r.get('logsRows').children[0].dispatch('click',{detail:1});await settle();
+  assert.deepEqual(shown(),[false,true],'a detail alone keeps its own height under its splitter');
+  r.get('searchInput').value='raw';await r.get('searchInput').dispatch('input');await settle();
+  assert.equal(r.get('largeSearchPane').hidden,false);assert.deepEqual(shown(),[true,true]);
+  r.get('detailSplitter').focus();
+  r.handlers.get('keydown')({key:'Escape',target:r.get('detailSplitter'),preventDefault(){}});await settle();
+  assert.equal(r.get('largeDetail').hidden,true);assert.deepEqual(shown(),[true,false]);
+  assert.equal(r.document.activeElement,r.get('logsViewport'));
 });
 
 test('level counts on partial summaries are never dimmed as empty',async t=>{

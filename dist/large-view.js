@@ -78,7 +78,7 @@ function fieldSpan(document, entry, value, className) {
 export function mountLargeLogView(native, {transport, tips=null, document=globalThis.document, window=globalThis.window}) {
   const $ = id => document.getElementById(id);
   $('largeLogPanel').hidden=false;
-  const ids = ['largeName','largeStatus','largeError','largeCount','largeTotal','largeRows','largeViewport','largeFirst','largeLast','largeJump','largeJumpForm','largeCancel','largeClose','largeColumns','largeRaw','largeHeaders','largeRange','largeDetail','largeDetailTitle','largeDetailText','largeDetailPrevious','largeDetailNext','largeDetailClose','levelFilters','allLevels','errorLevels','resetFilters','searchInput','tagFilter','pidFilter','tidFilter','caseSensitive','includeRaw','recognizeLineNumbers','logsCount','logsRows','logsViewport','logsHeaders','logsFirst','logsLast','logsJump','logsJumpForm','logsRange','largeSearchPane','filterBadge','activeFilters','filterRow','logsSelection','largeSelection','toast','largeDetailCopy','toggleFilters','emptyState','logContent','loadProgress','loadProgressBar','paneSplitter','idFilterError','tagFilterError','searchError','dropHint','filterPanel','largeRegex','rowMenu','largeSize','exportLogs','exportSearch','exportCancel','recentFiles','recentList','clearRecent','recentButton','timeFrom','timeTo','timeFilterError','lowerTabs','searchTab','bookmarkTab','bookmarkPane','bookmarkCount','bookmarkList','copyBookmarks','clearBookmarks','searchPosition','logsPending','reopenFile','errorBar','errorReopen','followFile','messageFilter','messageRegex','messageFilterError','messageLabel'];
+  const ids = ['largeName','largeStatus','largeError','largeCount','largeTotal','largeRows','largeViewport','largeFirst','largeLast','largeJump','largeJumpForm','largeCancel','largeClose','largeColumns','largeRaw','largeHeaders','largeRange','largeDetail','largeDetailTitle','largeDetailText','largeDetailPrevious','largeDetailNext','largeDetailClose','levelFilters','allLevels','errorLevels','resetFilters','searchInput','tagFilter','pidFilter','tidFilter','caseSensitive','includeRaw','recognizeLineNumbers','logsCount','logsRows','logsViewport','logsHeaders','logsFirst','logsLast','logsJump','logsJumpForm','logsRange','largeSearchPane','filterBadge','activeFilters','filterRow','logsSelection','largeSelection','toast','largeDetailCopy','largeDetailMore','largeDetailHint','toggleFilters','emptyState','logContent','loadProgress','loadProgressBar','paneSplitter','idFilterError','tagFilterError','searchError','dropHint','filterPanel','largeRegex','rowMenu','largeSize','exportLogs','exportSearch','exportCancel','recentFiles','recentList','clearRecent','recentButton','timeFrom','timeTo','timeFilterError','lowerTabs','searchTab','bookmarkTab','bookmarkPane','bookmarkCount','bookmarkList','copyBookmarks','clearBookmarks','searchPosition','logsPending','reopenFile','errorBar','errorReopen','followFile','messageFilter','messageRegex','messageFilterError','messageLabel'];
   for (const id of ['extrasButton','deviceButton','emptyDevice','captureBar','captureState','captureText','captureHint','captureApp','captureAppStatus','captureStop','captureSave','captureLeftovers','leftoverList','openFile']) ids.push(id);
   const ui = Object.fromEntries(ids.map(id => [id,$(id)]));
   // Device captures (devices.js) mount once the menu and toasts exist.
@@ -480,7 +480,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
   // Every press sequence starts by clearing the target; only the first press
   // on a search result or a bookmark sets it, and the double-click jumps to
   // that row.
-  const panel=$('largeLogPanel'),lowerPane=$('largeLowerPane');
+  const panel=$('largeLogPanel'),lowerPane=$('largeLowerPane'),detailSplitter=$('detailSplitter');
   panel.addEventListener('mousedown',event=>{if(event.detail<=1)doubleClickLine=null;},true);
   ui.bookmarkList.addEventListener('mousedown',event=>{
     const row=event.target?.closest?.('.bookmark-row');
@@ -490,7 +490,8 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
   panel.addEventListener('dblclick',()=>{const line=doubleClickLine;doubleClickLine=null;if(line!==null){window.getSelection?.()?.removeAllRanges?.();jumpTo(line);}});
   // Search results and bookmarks share the lower region as tabs; the
   // bookmark tab exists only while there are bookmarks. The region takes its
-  // resizable share only while it has content.
+  // resizable share only while it shows them; a raw detail alone keeps its
+  // own height.
   let lowerTab='search',bookmarkCount=0;
   function updateLowerPane(){
     // Focus inside a closing bookmark tab returns to the upper logs.
@@ -503,7 +504,10 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     ui.searchTab.setAttribute('aria-selected',String(!marks));ui.searchTab.tabIndex=marks?-1:0;
     ui.bookmarkTab.setAttribute('aria-selected',String(marks));ui.bookmarkTab.tabIndex=marks?0:-1;
     ui.largeSearchPane.hidden=marks||!ui.searchInput.value;ui.bookmarkPane.hidden=!marks;
-    const expanded=!ui.largeSearchPane.hidden||marks||!ui.largeDetail.hidden;lowerPane.classList.toggle('expanded',expanded);ui.paneSplitter.hidden=!expanded;
+    const lists=!ui.largeSearchPane.hidden||marks;lowerPane.classList.toggle('expanded',lists);
+    // The detail has its own splitter above it. A splitter that hides hands
+    // its focus to the upper logs.
+    for(const [splitter,shown] of [[ui.paneSplitter,lists],[detailSplitter,!ui.largeDetail.hidden]]){if(!shown&&splitter.contains(document.activeElement))ui.logsViewport.focus({preventScroll:true});splitter.hidden=!shown;}
     if(ready)renderPosition();
   }
   // The selected result's place among the results shows in the search box
@@ -532,10 +536,10 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
   });
   // A detail shows the whole log entry of the selected row; `line` is the
   // entry row's number in its own file.
+  const entryRows=d=>Number.isSafeInteger(d.first)&&Number.isSafeInteger(d.last)?d.last-d.first+1:1;
   function recordTitle(d,line){
-    const rows=Number.isSafeInteger(d.first)&&Number.isSafeInteger(d.last)?d.last-d.first+1:1;
-    if(rows<2)return `${formatNumber(line)}행 원문`;
-    return `${formatNumber(line)}–${formatNumber(line+rows-1)}행 원문${d.recordComplete===false?' · 앞부분 1 MiB':''}`;
+    const rows=entryRows(d);
+    return rows<2?`${formatNumber(line)}행 원문`:`${formatNumber(line)}–${formatNumber(line+rows-1)}행 원문`;
   }
   // While the other pane selects a different row, the title names the pane
   // whose row the detail shows.
@@ -544,10 +548,19 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     const source=rowSource(d,logs.getState().files),other=(owner===logs?search:logs).getState().selectedLine;
     // With no results the anchor's detail stays, named as out of them.
     const state=owner.getState(),missing=state.selectedLine!==d.lineNumber&&state.anchor===d.lineNumber;
-    const text=`${other&&other!==d.lineNumber?owner===logs?'로그 · ':'검색 결과 · ':''}${source?`${source.name} · `:''}${recordTitle(d,source?source.line:d.first??d.lineNumber)}${missing?' · 현재 결과에 없음':''}${d.encodingDamage?.bytes ? ' · 손상 바이트 표시' : ''}${d.encodingRepaired ? ' · 깨진 문자 복원' : ''}`;
-    if(ui.largeDetailTitle.textContent!==text)ui.largeDetailTitle.textContent=text;
+    const from=`${other&&other!==d.lineNumber?owner===logs?'로그 · ':'검색 결과 · ':''}${source?`${source.name} · `:''}`,range=recordTitle(d,source?source.line:d.first??d.lineNumber);
+    const notes=[[entryRows(d)>1&&d.recordComplete===false,'앞부분 1 MiB',''],[missing,'현재 결과에 없음',''],[d.encodingDamage?.bytes,'손상 바이트 표시',' damage'],[d.encodingRepaired,'깨진 문자 복원',' damage']].filter(([on])=>on);
+    const text=[from+range,...notes.map(([,note])=>note)].join(' · ');
+    // The title keeps to one line, so a narrow detail never grows taller:
+    // where the row comes from may be cut short, never its range or notes.
+    // The tooltip holds all of it; the separators are for screen readers.
+    if(ui.largeDetailTitle.textContent!==text)ui.largeDetailTitle.replaceChildren(...(from?[textSpan(document,from,'detail-from')]:[]),textSpan(document,range,'detail-range'),
+      ...notes.flatMap(([,note,tone])=>[textSpan(document,' · ','visually-hidden'),textSpan(document,note,`detail-note${tone}`)]));
     const hint=d.encodingRepaired?'Mac OS Roman으로 잘못 읽혀 깨진 UTF-8 문자(예: ÏïàÎÖï → 안녕)를 복원해 표시했습니다. 원본 파일과 내보내기 결과는 바뀌지 않습니다.':'';
-    if(ui.largeDetailTitle.title!==hint)ui.largeDetailTitle.title=hint;
+    const tip=hint?`${text}\n${hint}`:text;
+    if(ui.largeDetailTitle.title!==tip)ui.largeDetailTitle.title=tip;
+    // A screen reader in the text hears the repair note the tooltip shows.
+    if(ui.largeDetailHint.textContent!==hint)ui.largeDetailHint.textContent=hint;
   }
   // Every list keeps its selected row, but one draws it as primary: the list
   // with keyboard focus (a row menu counts as the list it was opened from),
@@ -562,6 +575,47 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
   // Focus leaving with the window keeps the marks until it comes back.
   for(const list of [ui.logsViewport,ui.largeViewport,ui.bookmarkList]){list.addEventListener('focusin',()=>markSelections());list.addEventListener('focusout',event=>{if(event.relatedTarget||document.hasFocus?.()!==false)markSelections(event.relatedTarget);});}
   function clearDetail(){detailRender=null;ui.largeDetailText.replaceChildren();ui.largeDetail.hidden=true;updateLowerPane();}
+  // A new text opens at the selected row, at its first search hit if it has
+  // one: with a few lines shown, a later row of a multi-line entry, or a hit
+  // deep in a long row, would be out of view. The entry starts the first
+  // window; a later window holds part of one row. An empty inline marker
+  // measures where that place starts, wrapped lines included.
+  function revealDetailLine(d){
+    const text=ui.largeDetailText;text.scrollTop=0;
+    if(d.loading)return;
+    let start=0;
+    for(let rows=d.startByte===0&&Number.isSafeInteger(d.first)?d.lineNumber-d.first:0;rows>0&&start>=0;rows--)start=d.text.indexOf('\n',start)+1||-1;
+    if(start<0)return;
+    const end=d.text.indexOf('\n',start),hit=(Array.isArray(d.highlights)?d.highlights:[]).find(p=>Number.isSafeInteger(p?.[0])&&p[0]>=start&&(end<0||p[0]<end));
+    let place=hit?hit[0]:start;
+    const walker=place>0?document.createTreeWalker?.(text,4):null;
+    for(let node=walker?.nextNode();node;node=walker.nextNode()){
+      if(place>=node.data.length){place-=node.data.length;continue;}
+      const marker=document.createElement('span'),parent=node.parentNode;
+      node.splitText(place).before(marker);
+      text.scrollTop=marker.getBoundingClientRect().top-text.getBoundingClientRect().top;
+      marker.remove();parent.normalize();return;
+    }
+  }
+  // Shades mark the edges of the text with more of it past them.
+  function renderEdges(){
+    const text=ui.largeDetailText,above=text.scrollTop;
+    text.classList.toggle('more-above',above>1);text.classList.toggle('more-below',text.scrollHeight-text.clientHeight-above>1);
+  }
+  ui.largeDetailText.addEventListener('scroll',renderEdges,{passive:true});
+  // How many lines of the text are out of view, on a button that fits the
+  // detail to them as a double-click on its splitter does.
+  function renderHiddenLines(){
+    renderEdges();
+    const text=ui.largeDetailText,line=parseFloat(window.getComputedStyle?.(text)?.lineHeight);
+    const hidden=!ui.largeDetail.hidden&&line>0?Math.round((text.scrollHeight-text.clientHeight)/line):0;
+    ui.largeDetailMore.hidden=!(hidden>0);
+    if(hidden>0&&ui.largeDetailMore.textContent!==`+${formatNumber(hidden)}줄`){ui.largeDetailMore.textContent=`+${formatNumber(hidden)}줄`;ui.largeDetailMore.setAttribute('aria-label',`${formatNumber(hidden)}줄 더 보기`);}
+  }
+  // Focus on the button, which hides once nothing is out of view, moves to
+  // the text it revealed.
+  ui.largeDetailMore.addEventListener('click',()=>{const focused=document.activeElement===ui.largeDetailMore;layout.fitDetail();renderHiddenLines();if(focused&&ui.largeDetailMore.hidden)ui.largeDetailText.focus({preventScroll:true});});
+  if(window.ResizeObserver)new window.ResizeObserver(renderHiddenLines).observe(ui.largeDetailText);
   function detail(state,owner){
     if(detailOwner!==owner)return;
     ui.largeDetail.hidden=!state.detail;updateLowerPane();
@@ -573,6 +627,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     const identity=[owner,state.datasetId,state.queryId,d.lineNumber,d.startByte,d.loading,d.text,d.highlights,d.encodingDamage];
     if(!detailRender||identity.some((value,i)=>value!==detailRender[i])){
       ui.largeDetailText.replaceChildren(highlightedSpan(document,d.loading?'원문 구간을 읽는 중…':d.text,'',d.highlights,d.encodingDamage));detailRender=identity;
+      revealDetailLine(d);renderHiddenLines();
     }
     ui.largeDetailPrevious.disabled=d.loading||d.startByte===0;ui.largeDetailNext.disabled=d.loading||d.complete;ui.largeDetailCopy.disabled=d.loading;
   }
