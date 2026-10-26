@@ -858,9 +858,11 @@ async fn reopen_source(
         .map_err(|_| "Request failed".to_string())?
 }
 /// The page's app extensions, which only `extras` builds have
-/// (`logstudio_extras::request`): `list` lists none in other builds.
+/// (`logstudio_extras::request`): `list` lists none in other builds. It is
+/// async so it runs off the main thread: `open` builds a window, which on
+/// Windows waits for the main thread and hangs a command running on it.
 #[tauri::command]
-fn extras(window: tauri::WebviewWindow, request: Value) -> Result<Value, String> {
+async fn extras(window: tauri::WebviewWindow, request: Value) -> Result<Value, String> {
     main_window(&window)?;
     extras_request(window.app_handle(), request)
 }
