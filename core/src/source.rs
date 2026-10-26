@@ -333,14 +333,23 @@ impl Source {
     /// following accepts more. Anything else needs reopening; rewriting
     /// other bytes without changing those is not detected.
     fn appended(&self, a: &mut Accepted, f: &File, m: &Metadata, path: bool) -> io::Result<()> {
-        if same_file(&a.stamp, m) && m.len() < a.len {
+        // The path is read after the handle `m` came from: a file cut
+        // shorter in between shows it only there, and is still truncated
+        // rather than replaced.
+        let named = path
+            .then(|| self.parts[0].path.as_ref())
+            .flatten()
+            .map(|p| std::fs::symlink_metadata(p).ok().filter(Metadata::is_file));
+        let shorter = |n: &Metadata| same_file(&a.stamp, n) && n.len() < a.len;
+        if shorter(m)
+            || named
+                .as_ref()
+                .is_some_and(|n| n.as_ref().is_some_and(shorter))
+        {
             return Err(error("Source truncated"));
         }
-        let at_path = !path
-            || self.parts[0].path.as_ref().is_none_or(|p| {
-                std::fs::symlink_metadata(p)
-                    .is_ok_and(|n| n.is_file() && same_file(&a.stamp, &n) && n.len() >= a.len)
-            });
+        let at_path =
+            named.is_none_or(|n| n.is_some_and(|n| same_file(&a.stamp, &n) && n.len() >= a.len));
         if !same_file(&a.stamp, m) || !at_path {
             return Err(error("Source changed; reopen the file"));
         }
@@ -591,5 +600,52 @@ impl<'a> Iterator for ByteLines<'a> {
             end + 1
         };
         Some((start, &self.data[start..end]))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The handle's metadata is read before the path's. A followed file cut
+    /// shorter between the two still reports truncation, and a file
+    /// replaced at the path still reports the change.
+    #[test]
+    fn a_followed_file_changed_between_its_checks_keeps_its_reason() {
+        let dir = tempfile::tempdir().unwrap();
+        // A followed file changed by `change` right after its handle's
+        // metadata was read, and what checking it then reports.
+        let reason = |name: &str, change: &dyn Fn(&Path)| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, b"one\ntwo\n").unwrap();
+            let source = Source::granted(&path).unwrap();
+            let guard = source.files.lock().unwrap();
+            let f = &guard.as_ref().unwrap()[0];
+            let before = f.metadata().unwrap();
+            change(&path);
+            let follow = source.follow.as_ref().unwrap();
+            let outcome = source.appended(&mut follow.lock().unwrap(), f, &before, true);
+            outcome.unwrap_err().to_string()
+        };
+        let truncate = |path: &Path| {
+            let f = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+            f.set_len(3).unwrap();
+        };
+        assert_eq!(reason("cut.log", &truncate), "Source truncated");
+        // Replacing a file at its path is another file. Windows refuses to
+        // rename over a file held open; `tests/follow.rs` also runs its
+        // rotation case on Unix only.
+        #[cfg(unix)]
+        {
+            let replace = |path: &Path| {
+                let other = path.with_extension("new");
+                std::fs::write(&other, b"one\ntwo\nthree\n").unwrap();
+                std::fs::rename(&other, path).unwrap();
+            };
+            assert_eq!(
+                reason("replaced.log", &replace),
+                "Source changed; reopen the file"
+            );
+        }
     }
 }
