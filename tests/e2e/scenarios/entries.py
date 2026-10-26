@@ -11,6 +11,12 @@ CELLS = """const r=document.querySelector(`#logsRows [data-line-number="${argume
   bg:s.backgroundColor,height:Math.round(r.getBoundingClientRect().height)};"""
 DETAIL = """const $=id=>document.getElementById(id);return {title:$('largeDetailTitle').textContent,text:$('largeDetailText').textContent,
   loading:$('largeDetailText').textContent==='원문 구간을 읽는 중…',navigation:!$('largeDetailNavigation').hidden,next:!$('largeDetailNext').disabled};"""
+# The first line the detail shows, from its top left corner to the line end.
+FIRST_SHOWN = """const t=document.getElementById('largeDetailText'),b=t.getBoundingClientRect(),c=document.caretRangeFromPoint(b.left+2,b.top+2);
+  if(!c||!t.contains(c.startContainer))return null;const r=document.createRange();r.setStart(c.startContainer,c.startOffset);r.setEnd(t,t.childNodes.length);return r.toString().split('\\n')[0];"""
+MORE = """const m=document.getElementById('largeDetailMore'),t=document.getElementById('largeDetailText'),s=JSON.parse(localStorage.getItem('logstudio.layout.v1')||'{}');
+  return {shown:!m.hidden,label:m.textContent,name:m.getAttribute('aria-label'),fits:t.scrollHeight<=t.clientHeight+1,lines:s.detailLines,shades:['more-above','more-below'].filter(c=>t.classList.contains(c)),shadow:getComputedStyle(t).boxShadow};"""
+MARK_SEEN = "const t=document.getElementById('largeDetailText').getBoundingClientRect(),m=document.querySelector('#largeDetailText mark')?.getBoundingClientRect();return !!m&&m.top>=t.top-1&&m.bottom<=t.bottom+1;"
 CLEAR = 'rgba(0, 0, 0, 0)'
 
 
@@ -22,6 +28,15 @@ def run(ctx):
         js, check = app.js, ctx.check
         cells = lambda n: js(CELLS, n)
         detail = lambda title: app.wait(lambda: (lambda v: v['title'] == title and not v['loading'] and v)(js(DETAIL)), 10, what=title)
+
+        def first_shown(want):
+            """The detail's first shown line, once it is `want` or after 2 s."""
+            for _ in range(20):
+                got = js(FIRST_SHOWN)
+                if got == want:
+                    break
+                time.sleep(.1)
+            return got
         app.open_fixture('record.log')
         app.wait_count(meta['rows'])
         a, b = meta['ios']
@@ -45,7 +60,24 @@ def run(ctx):
             app.click_row(n)
             d = detail(f'{a}–{b}행 원문')
             check(f'selecting the {label} shows the whole entry without CR', d['text'] == entry(a, b) and '\r' not in d['text'] and not d['navigation'], d['title'])
+            # A one-line detail opens at the selected row's line.
+            shown = first_shown(lines[n - 1])
+            check(f'the one-line detail opens at the {label}', shown == lines[n - 1], {'shown': shown, 'row': lines[n - 1]})
         app.capture('02-detail')
+        # A one-line detail says how many lines are out of view; its button
+        # fits the detail to the whole entry, and Home on the splitter goes
+        # back to one line.
+        rows = b - a + 1
+        more = js(MORE)
+        check('a one-line detail of a multi-line entry counts its hidden lines and shades the edge', more['shown'] and more['label'] == f'+{rows - 1}줄'
+              and more['name'] == f'{rows - 1}줄 더 보기' and more['shades'] == ['more-above', 'more-below'] and 'inset' in more['shadow'], more)
+        js("document.getElementById('largeDetailMore').click();return true;")
+        fitted = app.wait(lambda: (lambda v: v['fits'] and v)(js(MORE)), what='detail fitted')
+        check('the hidden-lines button fits the detail to the whole entry, unshaded, and saves it', not fitted['shown'] and fitted['lines'] == rows and fitted['shades'] == [] and fitted['shadow'] == 'none', fitted)
+        app.capture('02a-detail-fitted')
+        js("const s=document.getElementById('detailSplitter');s.focus();s.dispatchEvent(new KeyboardEvent('keydown',{key:'Home',bubbles:true,cancelable:true}));return true;")
+        back = app.wait(lambda: (lambda v: v['shown'] and v)(js(MORE)), what='one line again')
+        check('Home on the detail splitter goes back to one line', back['lines'] == 1, back)
         app.capture_clipboard()
         app.click('largeDetailCopy')
         check('detail copy writes the whole entry', app.captured() == entry(a, b) and app.wait(lambda: app.text('toast') == f'{a}–{b}행 원문을 복사했습니다.', what='copy toast'))
@@ -68,6 +100,8 @@ def run(ctx):
         check('a long entry opens at its first window with paging',
               d['navigation'] and d['next'] and big.startswith(d['text']) and len(d['text'].encode()) <= 65536,
               {'bytes': len(big.encode()), 'window': len(d['text'].encode()), 'seconds': round(time.monotonic() - started, 3)})
+        shown = first_shown(lines[ba + 1199])
+        check('the long entry opens at the selected row inside its first window', shown == lines[ba + 1199], shown)
         app.capture_clipboard()
         app.click('largeDetailCopy')
         check('copying the long entry joins every window', app.captured() == big, {'bytes': len(big.encode())})
@@ -83,8 +117,19 @@ def run(ctx):
         app.click_row(sa + 3, pane='largeRows')
         d = detail(f'{sa}–{sb}행 원문')
         check('the hit detail shows the whole entry with the hit highlighted', d['text'] == entry(sa, sb) and js("return document.querySelector('#largeDetailText mark')?.textContent") == 'Worker2')
+        shown = first_shown(lines[sa + 2])
+        seen = js("const t=document.getElementById('largeDetailText').getBoundingClientRect(),m=document.querySelector('#largeDetailText mark').getBoundingClientRect();return m.top>=t.top-1&&m.bottom<=t.bottom+1;")
+        check('the one-line hit detail opens at the hit row with its mark in view', shown == lines[sa + 2] and seen, {'shown': shown, 'seen': seen})
         app.capture('04-search')
 
+        # A word deep inside a long row: the one-line detail opens at the hit.
+        app.type('searchInput', 'NEEDLE')
+        app.wait(lambda: js("return document.querySelectorAll('#largeRows .log-row').length") == 1, what='needle hit')
+        app.click_row(meta['needle'], pane='largeRows')
+        detail(f"{meta['needle']:,}행 원문")
+        seen = app.wait(lambda: js(MARK_SEEN), 3, what='hit in view')
+        check('a hit deep inside a long row opens the one-line detail at the hit', seen)
+        app.capture('04a-deep-hit')
         app.type('searchInput', '')
         app.jump(1)
         time.sleep(.3)

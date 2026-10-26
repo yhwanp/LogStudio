@@ -120,14 +120,15 @@ def run(ctx):
         app.click_row(15, pane='bookmarkList', meta=True)
         s = app.wait(lambda: (lambda v: v['upper'] == '15' and v)({**st(), **js(MARKED)}), what='reveal 15')
         check('Shift+click and Cmd+click select bookmarks apart; the focus row is revealed above', s['marked'] == ['8', '11', '12', '15'] and s['current'] == '15' and s['focus'] == '15' and s['info'] == '4행 선택 · ⌘C 복사', s)
-        # A shrinking list keeps its cursor row in view.
-        js("document.getElementById('bookmarkList').scrollTop=0;return true;")
+        # A shrinking list keeps its cursor row in view; the row starts at the
+        # list's bottom edge, as the raw detail may leave it below.
+        js("const l=document.getElementById('bookmarkList'),r=l.querySelector('[aria-current=true]');l.scrollTop+=r.getBoundingClientRect().bottom-l.getBoundingClientRect().bottom;return true;")
         time.sleep(.1)
         js("document.getElementById('bookmarkList').style.maxHeight='70px';return true;")
         k = app.wait(lambda: (lambda v: v['seen'] and v)(js("const l=document.getElementById('bookmarkList').getBoundingClientRect(),r=document.querySelector('#bookmarkList [aria-current=true]').getBoundingClientRect();"
                                                             "return {seen:r.top>=l.top-1&&r.bottom<=l.bottom+1,list:l.height,current:document.querySelector('#bookmarkList [aria-current=true]').dataset.lineNumber};")), timeout=5, what='cursor kept in view')
         check('a bookmark list that shrinks keeps its cursor row in view', k['current'] == '15' and k['list'] < 6 * 28, k)
-        js("document.getElementById('bookmarkList').style.maxHeight='';return true;")
+        js("const l=document.getElementById('bookmarkList');l.style.maxHeight='';l.scrollTop=0;return true;")
         time.sleep(.2)
         app.capture('03-bookmark-multi')
         app.capture_clipboard()

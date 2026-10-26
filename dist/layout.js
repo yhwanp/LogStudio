@@ -4,9 +4,14 @@ import {PROFILES} from './columns.js';
 // DLT columns existed; other profiles keep theirs under their name.
 const STORAGE_KEY = 'logstudio.layout.v1';
 const MESSAGE_MIN = 160;
-// Share of the log area given to search results and the raw detail.
-const LOWER_DEFAULT = 0.42, LOWER_MIN = 0.15, LOWER_MAX = 0.8;
-const clampRatio = value => Math.round(Math.max(LOWER_MIN, Math.min(LOWER_MAX, value)) * 1000) / 1000;
+// The two splitters' values, neither following the length of the row the
+// raw detail shows: the log area's share for search results or bookmarks,
+// and the lines the raw detail shows, one by default. Keys step by the
+// first step, or the second with Shift.
+const LOWER = {fallback: 0.42, min: 0.15, max: 0.8, steps: [0.03, 0.1], round: value => Math.round(value * 1000) / 1000};
+const DETAIL = {fallback: 1, min: 1, max: 100, steps: [1, 5], round: Math.round};
+const clampTo = (value, {min, max, round}) => round(Math.max(min, Math.min(max, value)));
+const savedTo = (value, limits) => Number.isFinite(value) ? clampTo(value, limits) : limits.fallback;
 const clampWidth = (value, index, p) => Math.round(Math.max(p.min[index], Math.min(p.max[index], value)));
 // The widest row number a log can show: its row count so far, or in a
 // combined log, whose rows are numbered per file, the most rows of one file.
@@ -24,7 +29,7 @@ export function mountLogLayout({document = globalThis.document, window = globalT
   const $ = id => document.getElementById(id);
   const workspace = $('workspace'), panel = $('filterPanel'), toggle = $('toggleFilters');
   // Controller-only environments need no browser layout.
-  if (!workspace?.style || !panel || !toggle) return {setRawMode() {}, setMultiFile() {}, setProfile() {}, fitColumns() {}, resetColumns() {}, fitTimestamp() {}, fitLines() {}, setAvailable() { return false; }, closePanel() { return false; }, hold() {}};
+  if (!workspace?.style || !panel || !toggle) return {setRawMode() {}, setMultiFile() {}, setProfile() {}, fitColumns() {}, resetColumns() {}, fitTimestamp() {}, fitLines() {}, setAvailable() { return false; }, closePanel() { return false; }, hold() {}, fitDetail() {}};
   const autoHideInput = $('autoHideFilters');
   const headers = [$('logsHeaders'), $('largeHeaders'), $('bookmarkHeaders')];
   const tables = [$('logsTable'), $('largeTable'), $('bookmarkTable')];
@@ -44,8 +49,8 @@ export function mountLogLayout({document = globalThis.document, window = globalT
   let profile = 'text', {widths, custom} = columns.text;
   const P = () => PROFILES[profile];
   let autoHide = typeof saved?.autoHide === 'boolean' ? saved.autoHide : true;
-  let lowerRatio = Number.isFinite(saved?.lowerRatio) ? clampRatio(saved.lowerRatio) : LOWER_DEFAULT;
-  let open = !autoHide && saved?.open !== false, available = true, rawMode = false, multiFile = false, hideTimer = null, drag = null, split = null, timestampFor = null;
+  let lowerRatio = savedTo(saved?.lowerRatio, LOWER), detailLines = savedTo(saved?.detailLines, DETAIL);
+  let open = !autoHide && saved?.open !== false, available = true, rawMode = false, multiFile = false, hideTimer = null, drag = null, timestampFor = null;
   // While a tip points into the panel, auto-hide leaves it open.
   let held = false;
   // A combined log adds a file badge to the row column without changing the
@@ -54,7 +59,7 @@ export function mountLogLayout({document = globalThis.document, window = globalT
   const lineWidth = () => widths[0] + (multiFile ? FILE_BADGE : 0);
   function persist() {
     columns[profile] = {widths, custom};
-    try { window.localStorage.setItem(STORAGE_KEY, JSON.stringify({autoHide, open: !autoHide && open, widths: columns.text.widths, custom: columns.text.custom, dlt: columns.dlt, lowerRatio})); } catch {}
+    try { window.localStorage.setItem(STORAGE_KEY, JSON.stringify({autoHide, open: !autoHide && open, widths: columns.text.widths, custom: columns.text.custom, dlt: columns.dlt, lowerRatio, detailLines})); } catch {}
   }
   function cancelHide() {
     if (hideTimer !== null) window.clearTimeout(hideTimer);
@@ -263,55 +268,90 @@ export function mountLogLayout({document = globalThis.document, window = globalT
     }
     applyWidths();
   }
-  const splitter = $('paneSplitter'), content = $('logContent'), lowerPane = $('largeLowerPane');
-  function applyLower() {
+  // A splitter resizes the region below it; dragging up grows it. Drags and
+  // keys start from the shown size, which other regions' minimum heights can
+  // make differ from the saved one, and a size those minimums leave no room
+  // for is not kept: it would show later, all at once, when they let go.
+  // `unit` is the pixels of one step of the value. A double-click or Enter
+  // takes the value that shows everything, `fill`, where there is one (as a
+  // column edge fits its column), or else the default.
+  function mountSplitter(splitter, {limits, get, set, shown, unit, fill = null}) {
+    let moving = null;
+    function fit(value) {
+      set(value);
+      const room = shown();
+      if (room < get() - limits.steps[0] / 2) set(room);
+    }
+    function finish(event, cancelled = false) {
+      if (!moving || (event && event.pointerId !== moving.pointerId)) return;
+      const current = moving; moving = null;
+      workspace.classList.remove('resizing-panes'); splitter.classList.remove('dragging');
+      if (cancelled) set(current.value);
+      if (splitter.hasPointerCapture?.(current.pointerId)) splitter.releasePointerCapture(current.pointerId);
+      persist();
+    }
+    splitter.addEventListener('pointerdown', event => {
+      if (event.button !== 0 || moving) return;
+      event.preventDefault();
+      moving = {value: get(), base: shown(), unit: Math.max(1, unit() || 1), y: event.clientY, pointerId: event.pointerId};
+      splitter.setPointerCapture?.(event.pointerId); splitter.focus({preventScroll: true});
+      workspace.classList.add('resizing-panes'); splitter.classList.add('dragging');
+    });
+    splitter.addEventListener('pointermove', event => {
+      if (moving?.pointerId === event.pointerId) fit(moving.base - (event.clientY - moving.y) / moving.unit);
+    });
+    splitter.addEventListener('pointerup', event => finish(event));
+    splitter.addEventListener('pointercancel', event => finish(event, true));
+    splitter.addEventListener('lostpointercapture', event => finish(event));
+    function fitAll() { if (fill) fit(fill()); else set(limits.fallback); persist(); }
+    splitter.addEventListener('dblclick', fitAll);
+    splitter.addEventListener('keydown', event => {
+      if (event.key === 'Escape' && moving) { event.preventDefault(); finish(null, true); return; }
+      if (event.key === 'Enter' && fill) { event.preventDefault(); fitAll(); return; }
+      if (!['ArrowUp', 'ArrowDown', 'Home'].includes(event.key)) return;
+      const step = limits.steps[event.shiftKey ? 1 : 0], from = shown();
+      event.preventDefault(); fit({ArrowUp: from + step, ArrowDown: from - step, Home: limits.fallback}[event.key]); persist();
+    });
+    return {cancel: () => finish(null, true), fitAll};
+  }
+  const paneSplitter = $('paneSplitter'), content = $('logContent'), lowerPane = $('largeLowerPane');
+  const detailSplitter = $('detailSplitter'), detailText = $('largeDetailText');
+  const height = element => element?.getBoundingClientRect?.().height;
+  function setLower(value) {
+    lowerRatio = clampTo(value, LOWER);
     workspace.style.setProperty('--lower-ratio', String(lowerRatio));
     const percent = Math.round(lowerRatio * 100);
-    splitter.setAttribute('aria-valuenow', String(percent));
-    splitter.setAttribute('aria-valuetext', `하단 영역 ${percent}%`);
+    paneSplitter.setAttribute('aria-valuenow', String(percent));
+    paneSplitter.setAttribute('aria-valuetext', `하단 영역 ${percent}%`);
   }
-  function setLower(value) { lowerRatio = clampRatio(value); applyLower(); }
-  // A short detail alone is shorter than the saved share, and results with a
-  // detail can be taller; drags and keys start from the shown height.
-  function shownRatio() {
-    const total = content.getBoundingClientRect?.().height, height = lowerPane?.getBoundingClientRect?.().height;
-    return total > 0 && height > 0 ? height / total : lowerRatio;
+  // A detail shows whole lines unless other regions' minimums leave less room.
+  const lineHeight = () => parseFloat(window.getComputedStyle?.(detailText)?.lineHeight);
+  function setDetail(value) {
+    detailLines = clampTo(value, DETAIL);
+    workspace.style.setProperty('--detail-lines', String(detailLines));
+    detailSplitter.setAttribute('aria-valuenow', String(detailLines));
+    detailSplitter.setAttribute('aria-valuetext', `원문 상세 ${detailLines}줄`);
   }
-  function finishSplit(event, cancelled = false) {
-    if (!split || (event && event.pointerId !== split.pointerId)) return;
-    const current = split; split = null;
-    workspace.classList.remove('resizing-panes');
-    if (cancelled) setLower(current.ratio);
-    if (splitter.hasPointerCapture?.(current.pointerId)) splitter.releasePointerCapture(current.pointerId);
-    persist();
-  }
-  splitter.setAttribute('aria-valuemin', String(LOWER_MIN * 100));
-  splitter.setAttribute('aria-valuemax', String(LOWER_MAX * 100));
-  splitter.addEventListener('pointerdown', event => {
-    if (event.button !== 0 || split) return;
-    event.preventDefault();
-    split = {ratio: lowerRatio, base: shownRatio(), y: event.clientY, height: Math.max(1, content.getBoundingClientRect?.().height || 1), pointerId: event.pointerId};
-    splitter.setPointerCapture?.(event.pointerId); splitter.focus({preventScroll: true});
-    workspace.classList.add('resizing-panes');
-  });
-  // Dragging up grows the lower region.
-  splitter.addEventListener('pointermove', event => {
-    if (split?.pointerId === event.pointerId) setLower(split.base - (event.clientY - split.y) / split.height);
-  });
-  splitter.addEventListener('pointerup', event => finishSplit(event));
-  splitter.addEventListener('pointercancel', event => finishSplit(event, true));
-  splitter.addEventListener('lostpointercapture', event => finishSplit(event));
-  splitter.addEventListener('dblclick', () => { setLower(LOWER_DEFAULT); persist(); });
-  splitter.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && split) { event.preventDefault(); finishSplit(null, true); return; }
-    const step = event.shiftKey ? 0.1 : 0.03;
-    if (!['ArrowUp', 'ArrowDown', 'Home'].includes(event.key)) return;
-    const shown = shownRatio(), next = {ArrowUp: shown + step, ArrowDown: shown - step, Home: LOWER_DEFAULT}[event.key];
-    event.preventDefault(); setLower(next); persist();
-  });
-  window.addEventListener('blur', () => { finishDrag(null, true); finishSplit(null, true); cancelHide(); });
-  window.addEventListener('pagehide', () => { finishDrag(null, true); finishSplit(null, true); cancelHide(); }, {once: true});
-  renderPanel(); renderHeaders(); applyLower();
+  paneSplitter.setAttribute('aria-valuemin', String(LOWER.min * 100));
+  paneSplitter.setAttribute('aria-valuemax', String(LOWER.max * 100));
+  detailSplitter.setAttribute('aria-valuemin', String(DETAIL.min));
+  detailSplitter.setAttribute('aria-valuemax', String(DETAIL.max));
+  const splits = [
+    mountSplitter(paneSplitter, {limits: LOWER, get: () => lowerRatio, set: setLower, unit: () => height(content),
+      shown: () => { const total = height(content), shown = height(lowerPane); return total > 0 && shown > 0 ? shown / total : lowerRatio; }}),
+    // Filling the detail shows all of its current text, once: later rows
+    // keep that many lines. The text's inline box spans its lines but
+    // leaves out the leading of the last, so it measures a fraction short;
+    // its scroll height never measures less than the box around it.
+    mountSplitter(detailSplitter, {limits: DETAIL, get: () => detailLines, set: setDetail, unit: lineHeight,
+      shown: () => { const line = lineHeight(), shown = height(detailText); return line > 0 && shown > 0 ? shown / line : detailLines; },
+      fill: () => { const all = Math.ceil((height(detailText.firstElementChild) ?? detailText.scrollHeight) / lineHeight() - 0.05); return all > 0 ? all : detailLines; }}),
+  ];
+  setLower(lowerRatio); setDetail(detailLines);
+  function cancelDrags() { finishDrag(null, true); for (const split of splits) split.cancel(); cancelHide(); }
+  window.addEventListener('blur', cancelDrags);
+  window.addEventListener('pagehide', cancelDrags, {once: true});
+  renderPanel(); renderHeaders();
   return {setAvailable(value) {
     // Returns whether focus was in the controls that just became unavailable.
     value = !!value;
@@ -339,5 +379,5 @@ export function mountLogLayout({document = globalThis.document, window = globalT
     if (profile === name) return;
     columns[profile] = {widths, custom}; profile = name; ({widths, custom} = columns[name]);
     lineFit = 0; renderHeaders(); fitLines();
-  }, fitColumns, resetColumns, fitTimestamp, fitLines};
+  }, fitDetail: splits[1].fitAll, fitColumns, resetColumns, fitTimestamp, fitLines};
 }

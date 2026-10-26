@@ -1,12 +1,31 @@
 """Empty state, opening, filter chips, levels, ID validation, selection and
 copy (Shift, drag, Cmd+click, text inside the selected row, a drag held past
 the edge, Cmd+A in search results), the long-row detail, search stepping,
-the pane splitter, the row menu, a drag on a scaled scrollbar, raw view and
+a detail's height between short and long rows, the pane and detail splitters,
+the row menu, a drag on a scaled scrollbar, raw view and
 closing (ui.log, scaled.log)."""
+import math
 import time
 
 import fixtures
 
+
+# A splitter's aria-valuenow, rounded half up as Math.round does (Python's
+# round() takes 60.5 to 60).
+def percent(ratio):
+    return str(math.floor(ratio * 100 + .5))
+
+
+# Heights and places in the lower region that a detail must not move.
+BOXES = ("const r=id=>document.getElementById(id).getBoundingClientRect();"
+         "return {lower:Math.round(r('largeLowerPane').height),box:Math.round(r('largeSearchTools').top),results:Math.round(r('largeSearchPane').height),"
+         "detail:Math.round(r('largeDetail').height),logs:Math.round(r('logsViewport').height)};")
+# Drags splitter arguments[0] by arguments[1] pixels (down when positive).
+DRAG = """const s=document.getElementById(arguments[0]),b=s.getBoundingClientRect(),y=b.top+3,x=b.left+200,to=y+arguments[1];let error=null;
+try{s.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true,pointerId:1,button:0,clientX:x,clientY:y,isPrimary:true}));
+s.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,pointerId:1,clientX:x,clientY:to}));
+s.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:1,clientX:x,clientY:to}));}catch(e){error=String(e);}
+return {error,resizing:document.getElementById('workspace').classList.contains('resizing-panes'),dragging:s.classList.contains('dragging')};"""
 VISIBLE = "const v=id=>{const e=document.getElementById(id);return !!e&&!e.hidden&&getComputedStyle(e).display!=='none'&&e.getClientRects().length>0;};"
 CHIPS = "return [...document.querySelectorAll('#activeFilters .filter-chip')].map(e=>e.textContent)"
 SELECTION = """return {range:[...document.querySelectorAll('#logsRows .in-selection')].map(e=>Number(e.dataset.lineNumber)),
@@ -269,18 +288,33 @@ document.activeElement.dispatchEvent(event);return {before:before.defaultPrevent
         app.wait(lambda: app.row_exists(50), what='row 50')
         app.click_row(50)
         app.wait(lambda: js("return document.getElementById('largeDetailTitle').textContent.startsWith('50행')&&!document.getElementById('largeDetailText').textContent.includes('읽는 중')"), what='row 50 detail')
+        long_alone = js(BOXES)
+        # Too narrow for its title and buttons, the detail keeps one heading
+        # line, so its height: the title is cut short and its tooltip whole.
+        narrow = js("const d=document.getElementById('largeDetail'),h=d.querySelector('.detail-heading'),t=document.getElementById('largeDetailTitle');d.style.maxWidth='300px';"
+                    "const r={heading:h.getBoundingClientRect().height,detail:Math.round(d.getBoundingClientRect().height),cut:[t,...t.children].some(e=>e.scrollWidth>e.clientWidth),tip:t.title===t.textContent};d.style.maxWidth='';return r;")
+        check('a narrow detail keeps its title on one line and its height', abs(narrow['heading'] - 26) < 1 and narrow['detail'] == long_alone['detail'] and narrow['cut'] and narrow['tip'], narrow)
         app.capture_clipboard()
         js("const e=new Event('copy',{bubbles:true,cancelable:true});Object.defineProperty(e,'clipboardData',{value:{setData(){throw Error('sync path used for a truncated row');}}});document.activeElement.dispatchEvent(e);return true;")
         got = app.captured()
         check('a truncated long row copies its full raw text', got == lines[49], {'length': len(got), 'expected': len(lines[49])})
-        nav = js(VISIBLE + "return {nav:v('largeDetailNavigation'),next:!document.getElementById('largeDetailNext').disabled,height:document.getElementById('largeDetailText').getBoundingClientRect().height};")
-        check('the long-row detail pages through the row at a usable height', nav['nav'] and nav['next'] and nav['height'] > 120, nav)
+        nav = js(VISIBLE + "const t=document.getElementById('largeDetailText');return {nav:v('largeDetailNavigation'),next:!document.getElementById('largeDetailNext').disabled,"
+                 "height:t.getBoundingClientRect().height,line:parseFloat(getComputedStyle(t).lineHeight),splitters:[v('paneSplitter'),v('detailSplitter')]};")
+        check('the long-row detail pages through the row and shows one line under its own splitter by default',
+              nav['nav'] and nav['next'] and abs(nav['height'] - nav['line']) < 1 and nav['splitters'] == [False, True], nav)
         app.click('largeDetailNext')
         app.wait(lambda: js("return !document.getElementById('largeDetailPrevious').disabled&&!document.getElementById('largeDetailText').textContent.includes('읽는 중')"), what='next detail window')
         app.capture_clipboard()
         app.click('largeDetailCopy')
         check('detail copy from a later window copies the whole row', app.captured() == lines[49])
         app.capture('05-long-detail')
+        # A short row's detail has the long row's height: the search box and
+        # the upper logs stay where they are.
+        app.click_row(51)
+        app.wait(lambda: js("return document.getElementById('largeDetailTitle').textContent.startsWith('51행')&&!document.getElementById('largeDetailText').textContent.includes('읽는 중')"), what='row 51 detail')
+        short_alone = js(BOXES)
+        check('a detail alone keeps its height between a long and a short row', short_alone == long_alone, {'long': long_alone, 'short': short_alone})
+        app.capture('05a-short-detail')
 
         # Search: Enter/Shift+Enter step through results, reveal them above and keep focus.
         app.enter('searchInput', 'timeout')
@@ -346,7 +380,7 @@ document.activeElement.dispatchEvent(event);return {before:before.defaultPrevent
         k = app.wait(lambda: (lambda v: v['height'] > lower['lower'] and v)(js(
             "return {ratio:Number(getComputedStyle(document.getElementById('workspace')).getPropertyValue('--lower-ratio')),now:document.getElementById('paneSplitter').getAttribute('aria-valuenow'),"
             "height:document.getElementById('largeLowerPane').getBoundingClientRect().height,stored:JSON.parse(localStorage.getItem('logstudio.layout.v1')||'{}').lowerRatio};")), what='splitter keys')
-        check('splitter arrow keys grow the lower region and persist', abs(k['ratio'] - (shown + 0.09)) < 0.02 and k['now'] == str(round(k['ratio'] * 100)) and k['stored'] == k['ratio'], {**k, 'shownBefore': round(shown, 3)})
+        check('splitter arrow keys grow the lower region and persist', abs(k['ratio'] - (shown + 0.09)) < 0.02 and k['now'] == percent(k['ratio']) and k['stored'] == k['ratio'], {**k, 'shownBefore': round(shown, 3)})
         p = js("""const s=document.getElementById('paneSplitter'),b=s.getBoundingClientRect(),y=b.top+3,x=b.left+200;let error=null;
 try{s.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true,pointerId:1,button:0,clientX:x,clientY:y,isPrimary:true}));
 s.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,pointerId:1,clientX:x,clientY:y+80}));
@@ -354,6 +388,46 @@ s.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:1,clientX:x
 return {error,ratio:getComputedStyle(document.getElementById('workspace')).getPropertyValue('--lower-ratio').trim(),resizing:document.getElementById('workspace').classList.contains('resizing-panes')};""")
         check('dragging the splitter down shrinks the lower region', p['error'] is None and float(p['ratio']) < k['ratio'] and not p['resizing'], p)
         js("document.getElementById('paneSplitter').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}));return true;")
+
+        # Beside the results the detail has a splitter of its own and keeps
+        # its height whether it shows the long row or a short result.
+        app.jump(50)
+        app.click_row(50)
+        app.wait(lambda: js("return document.getElementById('largeDetailTitle').textContent.includes('50행 원문')&&!document.getElementById('largeDetailText').textContent.includes('읽는 중')"), what='long detail beside results')
+        long_beside = js(BOXES)
+        first = int(s1['search'])
+        app.click_row(first, pane='largeRows')
+        app.wait(lambda: js("return document.getElementById('largeDetailTitle').textContent.includes(arguments[0])&&!document.getElementById('largeDetailText').textContent.includes('읽는 중')", f'{first:,}행 원문'), what='short result detail')
+        short_beside = {**js(BOXES), **js(VISIBLE + "return {splitter:v('detailSplitter')};")}
+        check('a detail beside results has its own splitter and keeps its height between a long row and a short result',
+              short_beside.pop('splitter') and short_beside == long_beside and short_beside['results'] > 0, {'long': long_beside, 'short': short_beside})
+        # Its keys and a drag add and remove lines against the results, saved
+        # apart from the lower region's share.
+        LINES = ("const s=JSON.parse(localStorage.getItem('logstudio.layout.v1')||'{}'),w=getComputedStyle(document.getElementById('workspace')),t=document.getElementById('largeDetailText');"
+                 "return {lines:Number(w.getPropertyValue('--detail-lines')),stored:s.detailLines,lowerStored:s.lowerRatio,now:document.getElementById('detailSplitter').getAttribute('aria-valuenow'),"
+                 "shown:t.getBoundingClientRect().height/parseFloat(getComputedStyle(t).lineHeight)};")
+        js("const s=document.getElementById('detailSplitter');s.focus();for(let i=0;i<3;i++)s.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowUp',bubbles:true,cancelable:true}));return true;")
+        grown = app.wait(lambda: (lambda v: v['detail'] > short_beside['detail'] and v)({**js(BOXES), **js(LINES)}), what='detail splitter keys')
+        check('detail splitter keys add whole lines into the results and persist apart from the lower share',
+              grown['lines'] == 4 and abs(grown['shown'] - 4) < .05 and grown['results'] < short_beside['results'] and grown['lower'] == short_beside['lower'] and grown['box'] == short_beside['box']
+              and grown['stored'] == 4 and grown['now'] == '4' and grown['lowerStored'] == 0.42, {'before': short_beside, 'after': grown})
+        app.capture('06d-detail-splitter', hover='detailSplitter')
+        d = js(DRAG, 'detailSplitter', 40)
+        dragged = {**js(BOXES), **js(LINES)}
+        check('dragging the detail splitter down removes lines', d['error'] is None and not d['resizing'] and not d['dragging'] and dragged['detail'] < grown['detail']
+              and dragged['stored'] == dragged['lines'] == 2 and dragged['lower'] == grown['lower'], {**d, **dragged})
+        up = js(DRAG, 'detailSplitter', -400)
+        up = {**up, **js(BOXES), **js(LINES)}
+        check('a drag past the room the results leave keeps only the lines that show', up['error'] is None and up['stored'] == up['lines'] == round(up['shown'])
+              and up['shown'] < 6 and up['results'] >= 63 + 2 * 28 - 1 and up['lower'] == dragged['lower'], up)
+        js("document.getElementById('detailSplitter').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}));return true;")
+        reset = js(LINES)
+        check('double-clicking the detail splitter fits it to the one-line result and saves that', reset['lines'] == 1 and reset['stored'] == 1, reset)
+        # In a log area too short for both, the results give way so the
+        # detail's line stays inside the region.
+        short = js("const c=document.getElementById('logContent'),r=id=>document.getElementById(id).getBoundingClientRect();c.style.flex='0 0 330px';"
+                   "const v={lower:r('largeLowerPane').bottom,detail:r('largeDetail').bottom,text:r('largeDetailText').height,results:r('largeSearchPane').height};c.style.flex='';return v;")
+        check('a short log area keeps the detail line inside the region beside results', short['detail'] <= short['lower'] + 1 and short['text'] >= 21 and short['results'] > 0, short)
         app.enter('searchInput', '')
 
         # Row menu: inside the window, keyboard navigation, Escape, an action, outside click.
