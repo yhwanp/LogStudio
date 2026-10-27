@@ -77,10 +77,10 @@ export class Points {
 }
 
 // How reading the shown log's points stands: the status line, whether it
-// is an error, a fuller version for its tooltip and for screen readers,
-// and the note over the map when there is nothing to draw.
-// `markers` lists each source's marker in priority order; a fallback
-// source shows its rank and marker on the status line.
+// is an error, and the note over the map when there is nothing to draw.
+// `markers` lists each source's marker in priority order; a source after
+// the first shows its rank and marker on the status line. Sources may share
+// a marker, which the note names once.
 export function describeTrack(status, {markers = []} = {}) {
   const count = Number.isSafeInteger(status?.count) ? status.count : 0;
   const skipped = Number.isSafeInteger(status?.skipped) ? status.skipped : 0;
@@ -88,7 +88,7 @@ export function describeTrack(status, {markers = []} = {}) {
     ? ` · ${status.source + 1}순위 “${markers[status.source]}”` : '';
   const points = `지점 ${formatNumber(count)}개`;
   const unread = skipped ? ` · 좌표를 읽지 못한 행 ${formatNumber(skipped)}개` : '';
-  const quoted = markers.map(m => `“${m}”`);
+  const quoted = [...new Set(markers)].map(m => `“${m}”`);
   switch (status?.phase) {
     case 'reading':
       return {text:`읽는 중… ${points}${source}${unread}`, failed:false, note:null};

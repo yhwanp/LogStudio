@@ -202,8 +202,8 @@ async function follow(id, run) {
     try {
       next = await api('status', {dataset:id});
       if (run !== generation) return;
-      // The settings' own points replace a fallback's: a track never mixes
-      // them.
+      // A higher source's points replace a lower one's: a track never
+      // mixes them.
       if (status && next.source !== status.source) {
         points.clear();cycle = null;
         hideHover();
