@@ -320,6 +320,36 @@ def track(root: Path):
     return points
 
 
+def track_fallback(root: Path):
+    """track-fallback.log and track-both.log: 600 Android threadtime rows
+    each. From row 5, every fourth row is a GpsSample position in
+    `name : value` text (`LocationReport` and degrees); track-both.log
+    also has a NavSample position (as in track.log) every fifth row from
+    row 300. Returns how many points each log draws: the fallback's in
+    track-fallback.log, then the settings' own in track-both.log."""
+    import math
+    counts = []
+    for name, own_from in (('track-fallback.log', None), ('track-both.log', 300)):
+        rows, gps, nav = [], 0, 0
+        for i in range(600):
+            line = i + 1
+            time = f'10-26 14:{i // 600:02d}:{(i // 10) % 60:02d}.{(i % 10) * 100:03d}'
+            if own_from and line >= own_from and line % 5 == 0:
+                lat, lon = round((52.52 + 0.003 * math.sin(nav / 20)) * 1e7), round((13.405 + nav * 0.00003) * 1e7)
+                rows.append(f'{time}  4100  4120 D NavSample           : onPositionChanged {{"fix":{{"lat":{lat},"lon":{lon},"alt":0}},"seq":{nav}}}')
+                nav += 1
+            elif line >= 5 and line % 4 == 0:
+                a = gps / 30 * math.pi
+                rows.append(f'{time}  4200  4230 I GpsSample           : LocationReport(source : simulated, time : {1761487200000 + i * 100}, '
+                            f'lat : {52.515 + 0.005 * math.sin(a):.6f}, lon : {13.40 + 0.007 * math.cos(a):.6f}, accuracy : 5.000000)')
+                gps += 1
+            else:
+                rows.append(f'{time}  4100  4121 {"ID"[i % 2]} ExampleApp          : synthetic step {i}')
+        (root / name).write_text('\n'.join(rows) + '\n', encoding='utf-8')
+        counts.append(nav or gps)
+    return counts
+
+
 def tile_png(x, y):
     """A synthetic 256 px map tile: a light checkerboard square with a
     border, so tiles show where they meet. No real map data."""

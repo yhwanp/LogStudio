@@ -4,9 +4,10 @@ track window (its title from the start, points and the rows without one,
 synthetic tiles from a local tile server, the selected row's place and
 coordinates, hovering and clicking the track's end, [ and ] stepping
 between points, a row picked there selected in the main window, the place
-it opened at next time), closing it without closing the log, a broken
-settings file listed with what is wrong, and the app ending with the main
-window while the track window is open (track.log)."""
+it opened at next time, a fallback's points only for a log without the
+settings' own), closing it without closing the log, a broken settings file
+listed with what is wrong, and the app ending with the main window while
+the track window is open (track.log, track-fallback.log, track-both.log)."""
 import http.server
 import json
 import subprocess
@@ -68,12 +69,14 @@ def serve_tiles():
 def run(ctx):
     points = {line: (lat, lon) for line, lat, lon in fixtures.track(ctx.fixtures)}
     where = lambda line: '{:.5f}, {:.5f}'.format(*points[line])
+    fallback, own = fixtures.track_fallback(ctx.fixtures)
     check = ctx.check
     server = serve_tiles()
     settings = ctx.data / 'extras' / 'track.json'
     good = json.dumps({
         'title': '테스트 궤적', 'marker': 'onPositionChanged', 'latitude': 'fix.lat', 'longitude': 'fix.lon', 'scale': 1e-7,
         'tiles': f'http://127.0.0.1:{server.server_address[1]}/{{z}}/{{x}}/{{y}}.png', 'attribution': '합성 타일 · 테스트 전용',
+        'fallback': {'marker': 'LocationReport', 'format': 'text', 'latitude': 'lat', 'longitude': 'lon'},
     }, ensure_ascii=False)
     try:
         with ctx.launch() as app:
@@ -202,6 +205,27 @@ return {chip:document.getElementById('selection').textContent,apart:t.top>=c.bot
             again = app.rect()
             same = all(abs(again[k] - placed[k]) <= 2 for k in ('x', 'y', 'width', 'height'))
             check('the track window opens again where it was, at its size', same and 'track' in saved, {'placed': placed, 'again': again, 'saved': saved})
+
+            # A log without the settings' own rows draws its fallback's; a
+            # log with both draws its own alone.
+            switch('main')
+            app.open_fixture('track-fallback.log')
+            app.wait_count(600)
+            switch('extra-track')
+            s = until(lambda v: v['status'].startswith(f'지점 {fallback}개'), 'fallback points', 30)
+            check("a log without the settings' own rows draws the fallback's points, and says so",
+                  s['status'] == f'지점 {fallback}개 · 2순위 “LocationReport”' and s['note'] is None and not s['fit'], s)
+            js("document.getElementById('fit').click();return true;")
+            app.capture('08-fallback')
+            switch('main')
+            app.open_fixture('track-both.log')
+            app.wait_count(600)
+            app.jump(100)
+            app.wait(lambda: js(SELECTED) == '100', what='row 100 selected')
+            switch('extra-track')
+            s = until(lambda v: v['status'] == f'지점 {own}개' and (v['selection'] or '').startswith('100행'), "a log with both sources' points", 30)
+            check("a log with both draws the settings' own points alone, none of the fallback's before them",
+                  s['selection'] == '100행 앞에는 지점이 없습니다' and not s['here'], s)
             app.call(f'/session/{app.sid}/window', method='DELETE', timeout=10)
             app.wait(lambda: 'extra-track' not in handles(), what='track window closed again')
             switch('main')

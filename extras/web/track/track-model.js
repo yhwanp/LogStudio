@@ -79,29 +79,34 @@ export class Points {
 // How reading the shown log's points stands: the status line, whether it
 // is an error, a fuller version for its tooltip and for screen readers,
 // and the note over the map when there is nothing to draw.
-export function describeTrack(status, {marker = ''} = {}) {
+// `markers` lists each source's marker in priority order; a fallback
+// source shows its rank and marker on the status line.
+export function describeTrack(status, {markers = []} = {}) {
   const count = Number.isSafeInteger(status?.count) ? status.count : 0;
   const skipped = Number.isSafeInteger(status?.skipped) ? status.skipped : 0;
+  const source = Number.isSafeInteger(status?.source) && status.source > 0 && markers[status.source] !== undefined
+    ? ` · ${status.source + 1}순위 “${markers[status.source]}”` : '';
   const points = `지점 ${formatNumber(count)}개`;
   const unread = skipped ? ` · 좌표를 읽지 못한 행 ${formatNumber(skipped)}개` : '';
+  const quoted = markers.map(m => `“${m}”`);
   switch (status?.phase) {
     case 'reading':
-      return {text:`읽는 중… ${points}${unread}`, failed:false, note:null};
+      return {text:`읽는 중… ${points}${source}${unread}`, failed:false, note:null};
     case 'following':
-      return {text:`새 줄을 기다리는 중 · ${points}${unread}`, failed:false, note:null};
+      return {text:`새 줄을 기다리는 중 · ${points}${source}${unread}`, failed:false, note:null};
     case 'full':
-      return {text:`${points}에서 멈춤 · 한 로그에 최대 ${formatNumber(count)}개까지 표시합니다${unread}`, failed:false, note:null};
+      return {text:`${points}에서 멈춤${source} · 한 로그에 최대 ${formatNumber(count)}개까지 표시합니다${unread}`, failed:false, note:null};
     case 'failed':
       return {text:status.error || '로그를 읽지 못했습니다.', failed:true, note:null};
     case 'stopped':
-      return {text:`${points}${unread}`, failed:false, note:null};
+      return {text:`${points}${source}${unread}`, failed:false, note:null};
     case 'complete':
       return {
-        text:`${points}${unread}`,
+        text:`${points}${source}${unread}`,
         failed:false,
         note:count ? null : skipped
-          ? `“${marker}”가 있는 행 ${formatNumber(skipped)}개에서 좌표를 읽지 못했습니다. 설정 파일의 latitude·longitude 경로를 확인해 주세요.`
-          : `이 로그에는 “${marker}”가 있는 행이 없습니다.`,
+          ? `${quoted.join(' 또는 ')}가 있는 행 ${formatNumber(skipped)}개에서 좌표를 읽지 못했습니다. 설정 파일의 latitude·longitude를 확인해 주세요.`
+          : `이 로그에는 ${quoted.join(' 또는 ')}가 있는 행이 없습니다.`,
       };
     default:
       return {text:'', failed:false, note:null};
