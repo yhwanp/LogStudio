@@ -1,18 +1,20 @@
 //! Track: draws on a map the coordinates that rows of the shown log carry,
 //! and links the map's points with their rows.
 //!
-//! A row holds a point when it contains the settings' `marker` followed by
-//! a JSON object whose `latitude` and `longitude` paths are numbers; the
-//! numbers times `scale` are degrees. The points are read in the background
-//! as the page asks for them, block by block in row order, so the page
-//! draws them while the log is still being read, and a followed log's new
-//! rows add points as they arrive.
+//! A row holds a point when it contains a source's `marker` followed by
+//! its latitude and longitude numbers: along paths of the first JSON object
+//! there, or after their names in `name : value` text. The numbers times
+//! `scale` are degrees. A log's points all come from one source: the
+//! settings' own, or, while the log has none of those, its `fallback`'s.
+//! The points are read in the background as the page asks for them, block
+//! by block in row order, so the page draws them while the log is still
+//! being read, and a followed log's new rows add points as they arrive.
 use crate::{Extra, File, Host, Query, Reply, CSS, HTML, JS};
 use logstudio_core::{dataset::Dataset, source::ByteLines, Engine};
 use memchr::memmem::Finder;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc, Mutex,
 };
 use std::time::Duration;
@@ -27,15 +29,16 @@ const OSM_TILES: &str = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 const OSM_ATTRIBUTION: &str = "© OpenStreetMap contributors";
 /// How often a followed log's new rows are read.
 const FOLLOW_POLL: Duration = Duration::from_millis(500);
+/// Keys of a `Source`; `fallback` accepts only these.
+const SOURCE_KEYS: [&str; 5] = ["marker", "format", "latitude", "longitude", "scale"];
 
 /// What a settings file `track.json` says.
 #[derive(Debug, PartialEq)]
 pub struct Settings {
     pub title: String,
-    pub marker: Vec<u8>,
-    pub latitude: Vec<String>,
-    pub longitude: Vec<String>,
-    pub scale: f64,
+    /// Where points come from, in priority order: the settings' own source,
+    /// then its `fallback` if there is one.
+    pub sources: Vec<Source>,
     pub tiles: String,
     pub attribution: String,
 }
@@ -44,50 +47,22 @@ impl Settings {
         let object = value
             .as_object()
             .ok_or("설정 파일은 JSON 객체({ … })여야 합니다.")?;
-        const KEYS: [&str; 7] = [
-            "title",
-            "marker",
-            "latitude",
-            "longitude",
-            "scale",
-            "tiles",
-            "attribution",
-        ];
-        if let Some(key) = object.keys().find(|k| !KEYS.contains(&k.as_str())) {
-            return Err(format!("알 수 없는 항목입니다 ({}).", clip(key)));
+        let own = Fields { object, prefix: "" };
+        own.known(&["title", "tiles", "attribution", "fallback"])?;
+        let mut sources = vec![Source::from_fields(&own)?];
+        if let Some(fallback) = object.get("fallback") {
+            let object = fallback
+                .as_object()
+                .ok_or("fallback 값은 JSON 객체({ … })여야 합니다.")?;
+            let fallback = Fields {
+                object,
+                prefix: "fallback.",
+            };
+            fallback.known(&[])?;
+            sources.push(Source::from_fields(&fallback)?);
         }
-        let text = |key: &str, max: usize| -> Result<Option<String>, String> {
-            match object.get(key) {
-                None => Ok(None),
-                Some(Value::String(s)) if s.chars().count() <= max => Ok(Some(s.clone())),
-                Some(Value::String(_)) => Err(format!("{key} 값은 {max}자까지입니다.")),
-                Some(_) => Err(format!("{key} 값은 문자열이어야 합니다.")),
-            }
-        };
-        let marker = text("marker", 200)?
-            .filter(|m| !m.is_empty())
-            .ok_or("marker(좌표가 있는 행을 찾을 문자열)를 적어 주세요.")?;
-        let path = |key: &str| -> Result<Vec<String>, String> {
-            let path = text(key, 200)?.ok_or(format!(
-                "{key}(JSON 안에서 숫자가 있는 경로)를 적어 주세요."
-            ))?;
-            let parts: Vec<String> = path.split('.').map(str::to_string).collect();
-            if parts.iter().any(String::is_empty) || parts.len() > 16 {
-                return Err(format!(
-                    "{key} 값은 점(.)으로 나눈 경로여야 합니다 (예: position.lat)."
-                ));
-            }
-            Ok(parts)
-        };
-        let scale = match object.get("scale") {
-            None => 1.0,
-            Some(v) => v
-                .as_f64()
-                .filter(|s| s.is_finite() && *s > 0.0)
-                .ok_or("scale 값은 0보다 큰 수여야 합니다.")?,
-        };
-        let tiles = text("tiles", 300)?;
-        let attribution = text("attribution", 200)?;
+        let tiles = own.text("tiles", 300)?;
+        let attribution = own.text("attribution", 200)?;
         let (tiles, attribution) = match tiles {
             None => (
                 OSM_TILES.to_string(),
@@ -99,42 +74,185 @@ impl Settings {
             }
         };
         Ok(Self {
-            title: text("title", 40)?
+            title: own
+                .text("title", 40)?
                 .filter(|t| !t.trim().is_empty())
                 .unwrap_or_else(|| NAME.into()),
-            marker: marker.into_bytes(),
-            latitude: path("latitude")?,
-            longitude: path("longitude")?,
-            scale,
+            sources,
             tiles,
             attribution,
         })
     }
-    /// The coordinates in the text after a row's marker: the first JSON
-    /// object there, read to its end. None when there is none, a path is not
-    /// a number, or the degrees are out of range or 0, 0.
-    pub fn point(&self, after: &[u8]) -> Option<(f64, f64)> {
-        let start = memchr::memchr(b'{', after)?;
-        let value = serde_json::Deserializer::from_slice(&after[start..])
-            .into_iter::<Value>()
-            .next()?
-            .ok()?;
-        let number = |path: &[String]| {
-            path.iter()
-                .try_fold(&value, |v, key| match v {
-                    Value::Array(a) => a.get(key.parse::<usize>().ok()?),
-                    _ => v.get(key),
-                })?
-                .as_f64()
+}
+
+/// A JSON object in the settings; errors prefix its keys with `prefix`.
+struct Fields<'a> {
+    object: &'a Map<String, Value>,
+    prefix: &'static str,
+}
+impl Fields<'_> {
+    /// Rejects any key that is neither a source key nor in `more`.
+    fn known(&self, more: &[&str]) -> Result<(), String> {
+        let known = |k: &String| SOURCE_KEYS.contains(&k.as_str()) || more.contains(&k.as_str());
+        match self.object.keys().find(|k| !known(k)) {
+            Some(key) => Err(format!(
+                "알 수 없는 항목입니다 ({}{}).",
+                self.prefix,
+                clip(key)
+            )),
+            None => Ok(()),
+        }
+    }
+    fn text(&self, key: &str, max: usize) -> Result<Option<String>, String> {
+        let name = format!("{}{key}", self.prefix);
+        match self.object.get(key) {
+            None => Ok(None),
+            Some(Value::String(s)) if s.chars().count() <= max => Ok(Some(s.clone())),
+            Some(Value::String(_)) => Err(format!("{name} 값은 {max}자까지입니다.")),
+            Some(_) => Err(format!("{name} 값은 문자열이어야 합니다.")),
+        }
+    }
+}
+
+/// Rows that hold points, and how to read their numbers.
+#[derive(Debug, PartialEq)]
+pub struct Source {
+    pub marker: Vec<u8>,
+    pub format: Format,
+    pub scale: f64,
+}
+/// Where a source's numbers are in the text after its marker.
+#[derive(Debug, PartialEq)]
+pub enum Format {
+    /// Along dotted paths of the first JSON object there.
+    Json {
+        latitude: Vec<String>,
+        longitude: Vec<String>,
+    },
+    /// After their names and `:` or `=`, as in `lat : 52.5, lon=13.4`.
+    Text {
+        latitude: Vec<u8>,
+        longitude: Vec<u8>,
+    },
+}
+impl Source {
+    fn from_fields(f: &Fields) -> Result<Self, String> {
+        let p = f.prefix;
+        let marker = f
+            .text("marker", 200)?
+            .filter(|m| !m.is_empty())
+            .ok_or(format!(
+                "{p}marker(좌표가 있는 행을 찾을 문자열)를 적어 주세요."
+            ))?;
+        let format = match f.object.get("format") {
+            None => "json",
+            Some(Value::String(s)) if s == "json" || s == "text" => s.as_str(),
+            Some(_) => return Err(format!("{p}format 값은 \"json\"이나 \"text\"여야 합니다.")),
         };
-        let latitude = number(&self.latitude)? * self.scale;
-        let longitude = number(&self.longitude)? * self.scale;
+        let format = if format == "json" {
+            let path = |key: &str| -> Result<Vec<String>, String> {
+                let path = f.text(key, 200)?.ok_or(format!(
+                    "{p}{key}(JSON 안에서 숫자가 있는 경로)를 적어 주세요."
+                ))?;
+                let parts: Vec<String> = path.split('.').map(str::to_string).collect();
+                if parts.iter().any(String::is_empty) || parts.len() > 16 {
+                    return Err(format!(
+                        "{p}{key} 값은 점(.)으로 나눈 경로여야 합니다 (예: position.lat)."
+                    ));
+                }
+                Ok(parts)
+            };
+            Format::Json {
+                latitude: path("latitude")?,
+                longitude: path("longitude")?,
+            }
+        } else {
+            let name = |key: &str| -> Result<Vec<u8>, String> {
+                f.text(key, 200)?
+                    .filter(|n| !n.trim().is_empty())
+                    .map(String::into_bytes)
+                    .ok_or(format!("{p}{key}(숫자 앞의 항목 이름)를 적어 주세요."))
+            };
+            Format::Text {
+                latitude: name("latitude")?,
+                longitude: name("longitude")?,
+            }
+        };
+        let scale = match f.object.get("scale") {
+            None => 1.0,
+            Some(v) => v
+                .as_f64()
+                .filter(|s| s.is_finite() && *s > 0.0)
+                .ok_or(format!("{p}scale 값은 0보다 큰 수여야 합니다."))?,
+        };
+        Ok(Self {
+            marker: marker.into_bytes(),
+            format,
+            scale,
+        })
+    }
+    /// The coordinates in the text after a row's marker. None when a number
+    /// is missing, or the degrees are out of range or 0, 0.
+    pub fn point(&self, after: &[u8]) -> Option<(f64, f64)> {
+        let (latitude, longitude) = match &self.format {
+            Format::Json {
+                latitude,
+                longitude,
+            } => {
+                // The first JSON object there, read to its end.
+                let start = memchr::memchr(b'{', after)?;
+                let value = serde_json::Deserializer::from_slice(&after[start..])
+                    .into_iter::<Value>()
+                    .next()?
+                    .ok()?;
+                let number = |path: &[String]| {
+                    path.iter()
+                        .try_fold(&value, |v, key| match v {
+                            Value::Array(a) => a.get(key.parse::<usize>().ok()?),
+                            _ => v.get(key),
+                        })?
+                        .as_f64()
+                };
+                (number(latitude)?, number(longitude)?)
+            }
+            Format::Text {
+                latitude,
+                longitude,
+            } => (named(after, latitude)?, named(after, longitude)?),
+        };
+        let (latitude, longitude) = (latitude * self.scale, longitude * self.scale);
         // 0, 0 is what a position without a fix reads as.
         let place = latitude.abs() <= 90.0
             && longitude.abs() <= 180.0
             && !(latitude == 0.0 && longitude == 0.0);
         place.then_some((latitude, longitude))
     }
+}
+
+/// The number after the first `name` in `text` that `:` or `=` follows,
+/// with spaces or tabs around it; a name inside a longer word does not
+/// count. None when that value is not a number.
+fn named(text: &[u8], name: &[u8]) -> Option<f64> {
+    let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b >= 0x80;
+    let blanks = |s: &[u8]| s.iter().take_while(|b| matches!(b, b' ' | b'\t')).count();
+    for at in memchr::memmem::find_iter(text, name) {
+        if at > 0 && word(text[at - 1]) && word(name[0]) {
+            continue;
+        }
+        let rest = &text[at + name.len()..];
+        let rest = &rest[blanks(rest)..];
+        let Some(rest) = rest.strip_prefix(b":").or_else(|| rest.strip_prefix(b"=")) else {
+            continue;
+        };
+        let rest = &rest[blanks(rest)..];
+        let end = rest
+            .iter()
+            .take_while(|b| b.is_ascii_digit() || matches!(b, b'.' | b'-' | b'+' | b'e' | b'E'))
+            .count();
+        let number: f64 = std::str::from_utf8(&rest[..end]).ok()?.parse().ok()?;
+        return number.is_finite().then_some(number);
+    }
+    None
 }
 
 fn clip(s: &str) -> String {
@@ -183,14 +301,14 @@ pub struct Point {
 
 /// The points of a block's rows, whose first is row `first`, and how many
 /// rows with the marker hold none.
-pub fn points(text: &[u8], first: u64, settings: &Settings, marker: &Finder) -> (Vec<Point>, u32) {
+pub fn points(text: &[u8], first: u64, source: &Source, marker: &Finder) -> (Vec<Point>, u32) {
     let (mut found, mut skipped) = (vec![], 0);
     if marker.find(text).is_none() {
         return (found, skipped);
     }
     for (j, (_, row)) in ByteLines::new(text).enumerate() {
         let Some(at) = marker.find(row) else { continue };
-        match settings.point(&row[at + marker.needle().len()..]) {
+        match source.point(&row[at + marker.needle().len()..]) {
             Some((latitude, longitude)) => found.push(Point {
                 line: first + j as u64,
                 latitude,
@@ -228,47 +346,84 @@ impl Phase {
     }
 }
 
-/// The points read so far, by block.
+/// One source's points read so far, by block.
 #[derive(Default)]
-pub struct Found {
-    pub points: Vec<Point>,
+struct Seen {
+    points: Vec<Point>,
     /// The first point of each block read.
     starts: Vec<usize>,
+    skipped: Vec<u32>,
+}
+
+/// The points read so far, by block. Each source's stay apart, and once one
+/// has points the sources after it are dropped: a log's track never mixes
+/// them, and its settings' own points replace a fallback's.
+#[derive(Default)]
+pub struct Found {
+    /// The sources still read, in priority order. None but the last can
+    /// have points.
+    seen: Vec<Seen>,
     /// The last row of each block read.
     ends: Vec<u64>,
-    skipped: Vec<u32>,
     pub phase: Phase,
     error: String,
 }
 impl Found {
-    fn add(&mut self, block: usize, points: Vec<Point>, skipped: u32, last: u64) {
-        debug_assert_eq!(block, self.starts.len());
-        self.starts.push(self.points.len());
+    fn new(sources: usize) -> Self {
+        Self {
+            seen: (0..sources).map(|_| Seen::default()).collect(),
+            ..Self::default()
+        }
+    }
+    /// Adds a block's points and rows without one, by source in priority
+    /// order; `found` may hold sources dropped meanwhile.
+    fn add(&mut self, block: usize, found: Vec<(Vec<Point>, u32)>, last: u64) {
+        debug_assert_eq!(block, self.ends.len());
+        debug_assert!(found.len() >= self.seen.len());
         self.ends.push(last);
-        self.skipped.push(skipped);
-        let room = MAX_POINTS - self.points.len();
-        if points.len() >= room {
-            self.points.extend_from_slice(&points[..room]);
-            self.phase = Phase::Full;
-        } else {
-            self.points.extend(points);
+        for (seen, (points, skipped)) in self.seen.iter_mut().zip(found) {
+            seen.starts.push(seen.points.len());
+            seen.skipped.push(skipped);
+            let room = MAX_POINTS - seen.points.len();
+            seen.points
+                .extend_from_slice(&points[..points.len().min(room)]);
+        }
+        if let Some(k) = self.seen.iter().position(|s| !s.points.is_empty()) {
+            self.seen.truncate(k + 1);
+            // A full fallback ends reading too: its points stay shown.
+            if self.seen[k].points.len() == MAX_POINTS {
+                self.phase = Phase::Full;
+            }
         }
     }
     /// Forgets the points of blocks `block..`, which are read again.
     fn forget(&mut self, block: usize) {
-        if let Some(&start) = self.starts.get(block) {
-            self.points.truncate(start);
-            self.starts.truncate(block);
+        if block < self.ends.len() {
             self.ends.truncate(block);
-            self.skipped.truncate(block);
+            for seen in &mut self.seen {
+                seen.points.truncate(seen.starts[block]);
+                seen.starts.truncate(block);
+                seen.skipped.truncate(block);
+            }
         }
+    }
+    /// The source whose points are shown: the one with any, else the first.
+    fn source(&self) -> usize {
+        self.seen
+            .iter()
+            .position(|s| !s.points.is_empty())
+            .unwrap_or(0)
+    }
+    pub fn points(&self) -> &[Point] {
+        &self.seen[self.source()].points
     }
     /// Points that stay as they are: a followed log's last block may be
     /// read again.
     fn stable(&self) -> usize {
+        let seen = &self.seen[self.source()];
         match self.phase {
-            Phase::Reading | Phase::Following => self.starts.last().copied().unwrap_or(0),
-            _ => self.points.len(),
+            Phase::Reading | Phase::Following => seen.starts.last().copied().unwrap_or(0),
+            _ => seen.points.len(),
         }
     }
     /// The last row read, after which a selected row has no point yet.
@@ -276,13 +431,21 @@ impl Found {
         self.ends.last().copied().unwrap_or(0)
     }
     pub fn json(&self, dataset: u64) -> Value {
+        let source = self.source();
+        let skipped = |s: &Seen| s.skipped.iter().map(|&n| u64::from(n)).sum::<u64>();
+        // Before any point, the rows without one count for every source.
+        let skipped = match self.points() {
+            [] => self.seen.iter().map(skipped).sum(),
+            _ => skipped(&self.seen[source]),
+        };
         json!({
             "datasetId":dataset,
             "phase":self.phase.as_str(),
-            "count":self.points.len(),
+            "source":source,
+            "count":self.points().len(),
             "stable":self.stable(),
             "through":self.through(),
-            "skipped":self.skipped.iter().map(|&s| u64::from(s)).sum::<u64>(),
+            "skipped":skipped,
             "error":self.error,
         })
     }
@@ -292,9 +455,19 @@ impl Found {
 pub struct Job {
     pub dataset: u64,
     stop: AtomicBool,
+    /// How many sources are still being read (`Found::seen.len()`).
+    sources: AtomicUsize,
     pub found: Mutex<Found>,
 }
 impl Job {
+    fn new(dataset: u64, sources: usize) -> Self {
+        Self {
+            dataset,
+            stop: AtomicBool::new(false),
+            sources: AtomicUsize::new(sources),
+            found: Mutex::new(Found::new(sources)),
+        }
+    }
     fn end(&self, phase: Phase, error: String) {
         let mut found = self.found.lock().unwrap();
         found.phase = phase;
@@ -308,19 +481,29 @@ impl Job {
     /// Reads `d`'s points until its rows end, or, while it is followed,
     /// until another log is shown or the job stops.
     pub fn run(&self, engine: &Engine, d: &Dataset, settings: &Settings) {
-        let marker = Finder::new(&settings.marker);
+        let markers: Vec<Finder> = settings
+            .sources
+            .iter()
+            .map(|s| Finder::new(&s.marker))
+            .collect();
         let mut from = 0;
         loop {
             let read = d.read_blocks(
                 from,
                 &self.stop,
                 |b, rows| {
-                    let (points, skipped) = points(&rows.text, b.first, settings, &marker);
-                    (points, skipped, b.first + (b.rows as u64).saturating_sub(1))
+                    let sources = self.sources.load(Ordering::Acquire);
+                    let found = settings.sources[..sources]
+                        .iter()
+                        .zip(&markers)
+                        .map(|(source, marker)| points(&rows.text, b.first, source, marker))
+                        .collect();
+                    (found, b.first + (b.rows as u64).saturating_sub(1))
                 },
-                |i, (points, skipped, last)| {
+                |i, (points, last)| {
                     let mut found = self.found.lock().unwrap();
-                    found.add(i, points, skipped, last);
+                    found.add(i, points, last);
+                    self.sources.store(found.seen.len(), Ordering::Release);
                     // Later blocks would find points that cannot be kept.
                     if found.phase == Phase::Full {
                         self.stop.store(true, Ordering::Release);
@@ -388,11 +571,7 @@ impl Track {
         if let Some(old) = slot.take() {
             old.stop.store(true, Ordering::Release);
         }
-        let job = Arc::new(Job {
-            dataset: id,
-            stop: AtomicBool::new(false),
-            found: Mutex::new(Found::default()),
-        });
+        let job = Arc::new(Job::new(id, self.settings.sources.len()));
         *slot = Some(job.clone());
         let (running, engine, settings) =
             (job.clone(), host.engine().clone(), self.settings.clone());
@@ -423,7 +602,9 @@ impl Extra for Track {
                 "title":self.settings.title,
                 "tiles":self.settings.tiles,
                 "attribution":self.settings.attribution,
-                "marker":String::from_utf8_lossy(&self.settings.marker),
+                "markers":self.settings.sources.iter()
+                    .map(|s| String::from_utf8_lossy(&s.marker))
+                    .collect::<Vec<_>>(),
             })),
             // Where reading the points of dataset `dataset` stands.
             "status" => {
@@ -435,11 +616,16 @@ impl Extra for Track {
                     None => Reply::error(409, "메인 창의 로그가 바뀌었습니다."),
                 }
             }
-            // Points `from..` as little-endian f64 triples of row,
-            // latitude and longitude, with how many points there are and
-            // how many of them stay (`Found::stable`).
+            // Points `from..` of source `source` as little-endian f64
+            // triples of row, latitude and longitude, with how many points
+            // there are and how many of them stay (`Found::stable`). None
+            // once another source's points are shown instead.
             "points" => {
-                let (Some(id), Some(from)) = (query.number("dataset"), query.number("from")) else {
+                let (Some(id), Some(source), Some(from)) = (
+                    query.number("dataset"),
+                    query.number("source"),
+                    query.number("from"),
+                ) else {
                     return Reply::error(400, "잘못된 요청입니다.");
                 };
                 let job = self.job.lock().unwrap().clone();
@@ -447,14 +633,19 @@ impl Extra for Track {
                     return Reply::error(409, "메인 창의 로그가 바뀌었습니다.");
                 };
                 let found = job.found.lock().unwrap();
-                let from = (from as usize).min(found.points.len());
-                let mut body = Vec::with_capacity((found.points.len() - from) * 24);
-                for p in &found.points[from..] {
+                let points = if found.source() as u64 == source {
+                    found.points()
+                } else {
+                    &[]
+                };
+                let from = (from as usize).min(points.len());
+                let mut body = Vec::with_capacity((points.len() - from) * 24);
+                for p in &points[from..] {
                     body.extend_from_slice(&(p.line as f64).to_le_bytes());
                     body.extend_from_slice(&p.latitude.to_le_bytes());
                     body.extend_from_slice(&p.longitude.to_le_bytes());
                 }
-                let (count, stable) = (found.points.len(), found.stable());
+                let (count, stable) = (points.len(), found.stable().min(points.len()));
                 drop(found);
                 Reply::bytes("application/octet-stream", body)
                     .header("X-Count", count.to_string())
@@ -490,7 +681,23 @@ mod tests {
         assert_eq!(s.title, "좌표 궤적");
         assert_eq!(s.tiles, OSM_TILES);
         assert_eq!(s.attribution, OSM_ATTRIBUTION);
-        assert_eq!(s.latitude, ["fix", "lat"]);
+        assert_eq!(
+            s.sources,
+            [Source {
+                marker: b"onPositionChanged".to_vec(),
+                format: Format::Json {
+                    latitude: vec!["fix".into(), "lat".into()],
+                    longitude: vec!["fix".into(), "lon".into()],
+                },
+                scale: 1e-7,
+            }]
+        );
+        let own = || json!({"marker":"m","latitude":"a","longitude":"b"});
+        let with = |fallback: Value| {
+            let mut v = own();
+            v["fallback"] = fallback;
+            v
+        };
         for (bad, why) in [
             (json!([]), "객체"),
             (json!({"latitude":"a","longitude":"b"}), "marker"),
@@ -516,6 +723,28 @@ mod tests {
                 "https",
             ),
             (json!({"marker":7,"latitude":"a","longitude":"b"}), "문자열"),
+            (
+                json!({"marker":"m","format":"csv","latitude":"a","longitude":"b"}),
+                "format",
+            ),
+            (with(json!("m")), "fallback 값은 JSON 객체"),
+            (
+                with(json!({"latitude":"a","longitude":"b"})),
+                "fallback.marker",
+            ),
+            (
+                with(json!({"marker":"g","format":"text","latitude":" ","longitude":"b"})),
+                "fallback.latitude",
+            ),
+            // A fallback is a source alone, one level deep.
+            (
+                with(json!({"marker":"g","latitude":"a","longitude":"b","title":"t"})),
+                "fallback.title",
+            ),
+            (
+                with(json!({"marker":"g","latitude":"a","longitude":"b","fallback":{}})),
+                "fallback.fallback",
+            ),
         ] {
             let error = Settings::from_json(&bad).unwrap_err();
             assert!(error.contains(why), "{bad}: {error}");
@@ -540,18 +769,38 @@ mod tests {
         assert!(tile_origin("http://tiles.example.org/{z}/{x}/{y}.png").is_err());
         assert!(tile_origin("http://localhost.example.org/{z}/{x}/{y}.png").is_err());
         assert!(tile_origin("ftp://localhost/{z}/{x}/{y}.png").is_err());
+        // A fallback has its own format and scale.
+        let two = Settings::from_json(&with(
+            json!({"marker":"Fix","format":"text","latitude":"lat","longitude":"lon"}),
+        ))
+        .unwrap();
+        assert_eq!(two.sources.len(), 2);
+        assert_eq!(
+            two.sources[1],
+            Source {
+                marker: b"Fix".to_vec(),
+                format: Format::Text {
+                    latitude: b"lat".to_vec(),
+                    longitude: b"lon".to_vec(),
+                },
+                scale: 1.0,
+            }
+        );
     }
 
     #[test]
     fn a_point_is_the_first_object_after_the_marker() {
-        let s = settings();
+        let s = &settings().sources[0];
         let row = br#" {"fix":{"lat":374512345,"lon":1270123456,"alt":0},"t":5} trailing"#;
         let (lat, lon) = s.point(row).unwrap();
         assert!((lat - 37.4512345).abs() < 1e-9 && (lon - 127.0123456).abs() < 1e-9);
         // Arrays are indexed by number.
         let arrays =
             Settings::from_json(&json!({"marker":"m","latitude":"p.0","longitude":"p.1"})).unwrap();
-        assert_eq!(arrays.point(br#"{"p":[48.5,-2.25]}"#), Some((48.5, -2.25)));
+        assert_eq!(
+            arrays.sources[0].point(br#"{"p":[48.5,-2.25]}"#),
+            Some((48.5, -2.25))
+        );
         for none in [
             &br#" no object"#[..],
             br#" {"fix":{"lat":"374512345","lon":1270123456}}"#,
@@ -565,17 +814,51 @@ mod tests {
     }
 
     #[test]
+    fn a_text_point_is_the_numbers_after_their_names() {
+        let s = Settings::from_json(
+            &json!({"marker":"Fix","format":"text","latitude":"lat","longitude":"lon"}),
+        )
+        .unwrap();
+        let s = &s.sources[0];
+        let row = b"source : sim, time : 1700000000000, latAccuracy : 3.5, lat : 52.500000, lon : 13.400000, alt : 9.0)";
+        assert_eq!(s.point(row), Some((52.5, 13.4)));
+        for (some, at) in [
+            (&b"lat=-33.8568,lon=151.2153"[..], (-33.8568, 151.2153)),
+            (b"lat\t:\t1.5e1, lon :-2", (15.0, -2.0)),
+            // A name inside a longer word, or without : or =, is not it.
+            (
+                b"rawlat : 1, lat_ok : 2, lat 3, lat : 4, lon : 5",
+                (4.0, 5.0),
+            ),
+        ] {
+            assert_eq!(s.point(some), Some(at), "{}", String::from_utf8_lossy(some));
+        }
+        for none in [
+            &b"lat : 52.5"[..],
+            b"lat : , lon : 13.4",
+            b"lat : \"52.5\", lon : 13.4",
+            b"lat : north, lat : 52.5, lon : 13.4",
+            b"lat : 0.0, lon : 0.0",
+            b"lat : 1e999, lon : 1",
+            b"latitude : 52.5, longitude : 13.4",
+        ] {
+            assert_eq!(s.point(none), None, "{}", String::from_utf8_lossy(none));
+        }
+    }
+
+    #[test]
     fn points_keep_physical_rows_across_line_endings() {
-        let s = settings();
+        let settings = settings();
+        let s = &settings.sources[0];
         let marker = Finder::new(&s.marker);
         let text = b"10-25 09:00:00.000  100  101 D Nav: start\r\n\
 10-25 09:00:00.100  100  101 D Nav: onPositionChanged {\"fix\":{\"lat\":374512345,\"lon\":1270123456}}\r\
 10-25 09:00:00.200  100  101 D Nav: onPositionChanged {\"fix\":{\"lat\":\"bad\"}}\n\
 10-25 09:00:00.300  100  101 D Nav: onPositionChanged {\"fix\":{\"lat\":374512400,\"lon\":1270123500}}";
-        let (found, skipped) = points(text, 41, &s, &marker);
+        let (found, skipped) = points(text, 41, s, &marker);
         assert_eq!(skipped, 1);
         assert_eq!(found.iter().map(|p| p.line).collect::<Vec<_>>(), [42, 44]);
-        assert_eq!(points(b"no marker here\n", 1, &s, &marker), (vec![], 0));
+        assert_eq!(points(b"no marker here\n", 1, s, &marker), (vec![], 0));
     }
 
     fn wait(what: &str, mut done: impl FnMut() -> bool) {
@@ -604,11 +887,7 @@ mod tests {
         (dir, engine, d)
     }
     fn job(d: &Dataset) -> Arc<Job> {
-        Arc::new(Job {
-            dataset: d.id,
-            stop: AtomicBool::new(false),
-            found: Mutex::new(Found::default()),
-        })
+        Arc::new(Job::new(d.id, 1))
     }
     fn start(
         job: &Arc<Job>,
@@ -635,9 +914,9 @@ mod tests {
         start(&job, &engine, &d).join().unwrap();
         let found = job.found.lock().unwrap();
         assert_eq!(found.phase, Phase::Complete, "{}", found.error);
-        assert_eq!(found.points.len(), 3_000);
+        assert_eq!(found.points().len(), 3_000);
         assert!(found
-            .points
+            .points()
             .iter()
             .enumerate()
             .all(|(k, p)| p.line == 10 * k as u64 + 1));
@@ -654,7 +933,7 @@ mod tests {
         let running = start(&job, &engine, &d);
         wait("following", || {
             let f = job.found.lock().unwrap();
-            f.phase == Phase::Following && f.points.len() == 5
+            f.phase == Phase::Following && f.points().len() == 5
         });
         // Rows written meanwhile, the last one completed later.
         let mut file = std::fs::OpenOptions::new()
@@ -666,10 +945,10 @@ mod tests {
         file.write_all((position(5) + &position(6) + &late[..20]).as_bytes())
             .unwrap();
         file.flush().unwrap();
-        wait("two more", || job.found.lock().unwrap().points.len() == 7);
+        wait("two more", || job.found.lock().unwrap().points().len() == 7);
         file.write_all(&late.as_bytes()[20..]).unwrap();
         wait("the completed row", || {
-            job.found.lock().unwrap().points.len() == 8
+            job.found.lock().unwrap().points().len() == 8
         });
         {
             let f = job.found.lock().unwrap();
@@ -677,7 +956,7 @@ mod tests {
                 f.stable() < 8,
                 "a followed log's last block may be read again"
             );
-            let lines: Vec<u64> = f.points.iter().map(|p| p.line).collect();
+            let lines: Vec<u64> = f.points().iter().map(|p| p.line).collect();
             assert_eq!(lines, (1..=8).collect::<Vec<_>>());
         }
         // Showing another log ends the job.
@@ -727,7 +1006,7 @@ mod tests {
             if indexed.is_none() && d.index.lock().unwrap().done {
                 indexed = Some(started.elapsed());
             }
-            if first.is_none() && !job.found.lock().unwrap().points.is_empty() {
+            if first.is_none() && !job.found.lock().unwrap().points().is_empty() {
                 first = Some(started.elapsed());
             }
             std::thread::sleep(Duration::from_millis(1));
@@ -740,10 +1019,10 @@ mod tests {
             bytes as f64 / 1048576.0,
             first.unwrap(),
             indexed,
-            found.points.len(),
+            found.points().len(),
             read,
             bytes as f64 / 1048576.0 / read.as_secs_f64(),
-            found.points.len() as f64 * 24.0 / 1048576.0
+            found.points().len() as f64 * 24.0 / 1048576.0
         );
     }
 
@@ -754,23 +1033,84 @@ mod tests {
             latitude: 1.0,
             longitude: 2.0,
         };
-        let mut f = Found::default();
-        f.add(0, vec![p(1), p(2)], 1, 100);
-        f.add(1, vec![p(9)], 0, 200);
+        let mut f = Found::new(1);
+        f.add(0, vec![(vec![p(1), p(2)], 1)], 100);
+        f.add(1, vec![(vec![p(9)], 0)], 200);
         assert_eq!(f.json(5)["count"], 3);
         assert_eq!(f.json(5)["stable"], 2);
         assert_eq!(f.json(5)["skipped"], 1);
         assert_eq!(f.json(5)["through"], 200);
         f.forget(1);
         assert_eq!(f.json(5)["through"], 100);
-        assert_eq!(f.points.len(), 2);
-        f.add(1, vec![p(9), p(10)], 2, 210);
+        assert_eq!(f.points().len(), 2);
+        f.add(1, vec![(vec![p(9), p(10)], 2)], 210);
         assert_eq!(f.json(5)["skipped"], 3);
         f.phase = Phase::Complete;
         assert_eq!(f.json(5)["stable"], 4);
-        let mut full = Found::default();
-        full.add(0, vec![p(1); MAX_POINTS + 3], 0, 9);
-        assert_eq!(full.points.len(), MAX_POINTS);
+        let mut full = Found::new(1);
+        full.add(0, vec![(vec![p(1); MAX_POINTS + 3], 0)], 9);
+        assert_eq!(full.points().len(), MAX_POINTS);
         assert_eq!(full.phase, Phase::Full);
+    }
+
+    #[test]
+    fn a_fallback_is_shown_until_the_own_source_has_points_and_never_mixed() {
+        let p = |line| Point {
+            line,
+            latitude: 1.0,
+            longitude: 2.0,
+        };
+        let mut f = Found::new(2);
+        f.add(0, vec![(vec![], 1), (vec![], 2)], 100);
+        // Before any point, the rows without one count for every source.
+        assert_eq!(f.json(5)["source"], 0);
+        assert_eq!(f.json(5)["skipped"], 3);
+        f.add(1, vec![(vec![], 0), (vec![p(150), p(160)], 0)], 200);
+        assert_eq!(f.json(5)["source"], 1);
+        assert_eq!(f.json(5)["skipped"], 2);
+        assert_eq!(f.json(5)["stable"], 0);
+        // The own source's first point drops the fallback's.
+        f.add(2, vec![(vec![p(250)], 0), (vec![p(240), p(260)], 0)], 300);
+        assert_eq!(f.json(5)["source"], 0);
+        assert_eq!(f.points(), [p(250)]);
+        assert_eq!(f.seen.len(), 1);
+        // A block read for both then adds the own source's alone.
+        f.add(3, vec![(vec![p(350)], 0), (vec![p(340)], 0)], 400);
+        assert_eq!(f.points(), [p(250), p(350)]);
+        f.forget(3);
+        assert_eq!(f.points(), [p(250)]);
+        // A full fallback stops reading.
+        let mut full = Found::new(2);
+        full.add(0, vec![(vec![], 0), (vec![p(1); MAX_POINTS], 0)], 9);
+        assert_eq!((full.phase, full.source()), (Phase::Full, 1));
+    }
+
+    #[test]
+    fn a_job_draws_a_fallback_only_for_a_log_without_its_own_points() {
+        let fallback = |i: u64| {
+            format!("10-25 09:00:01.000  100  103 I Gps: Fix(lat : 48.{i:06}, lon : 2.{i:06})\n")
+        };
+        let two = Settings::from_json(&json!({"marker":"onPositionChanged","latitude":"fix.lat","longitude":"fix.lon","scale":1e-7,
+            "fallback":{"marker":"Fix","format":"text","latitude":"lat","longitude":"lon"}})).unwrap();
+        let read = |text: &str| {
+            let (_dir, engine, d) = shown(text);
+            let job = Arc::new(Job::new(d.id, 2));
+            job.run(&engine, &d, &two);
+            let found = job.found.lock().unwrap();
+            assert_eq!(found.phase, Phase::Complete, "{}", found.error);
+            (
+                found.source(),
+                found.points().iter().map(|p| p.line).collect::<Vec<_>>(),
+            )
+        };
+        let only = (0..20_000).map(fallback).collect::<String>();
+        let (source, lines) = read(&only);
+        assert_eq!((source, lines.len(), lines[0]), (1, 20_000, 1));
+        // Own points later in the log replace every fallback point.
+        let both = only.clone()
+            + &(0..3)
+                .map(|i| position(i) + &fallback(i))
+                .collect::<String>();
+        assert_eq!(read(&both), (0, vec![20_001, 20_003, 20_005]));
     }
 }

@@ -162,13 +162,23 @@ test('a place the track passes several times is one pass per visit, nearest poin
 });
 
 test('the status line says how reading stands', () => {
-  const marker = 'onPositionChanged';
-  assert.deepEqual(describeTrack({phase:'reading', count:1200, skipped:0}, {marker}), {text:'읽는 중… 지점 1,200개', failed:false, note:null});
-  assert.equal(describeTrack({phase:'following', count:5, skipped:1}, {marker}).text, '새 줄을 기다리는 중 · 지점 5개 · 좌표를 읽지 못한 행 1개');
-  assert.equal(describeTrack({phase:'complete', count:0, skipped:0}, {marker}).note, '이 로그에는 “onPositionChanged”가 있는 행이 없습니다.');
-  assert.match(describeTrack({phase:'complete', count:0, skipped:4}, {marker}).note, /행 4개에서 좌표를 읽지 못했습니다/);
-  assert.deepEqual(describeTrack({phase:'failed', error:'로그를 읽지 못했습니다.'}, {marker}), {text:'로그를 읽지 못했습니다.', failed:true, note:null});
-  assert.equal(describeTrack({phase:'full', count:2000000, skipped:0}, {marker}).text, '지점 2,000,000개에서 멈춤 · 한 로그에 최대 2,000,000개까지 표시합니다');
+  const markers = ['onPositionChanged'];
+  assert.deepEqual(describeTrack({phase:'reading', source:0, count:1200, skipped:0}, {markers}), {text:'읽는 중… 지점 1,200개', failed:false, note:null});
+  assert.equal(describeTrack({phase:'following', source:0, count:5, skipped:1}, {markers}).text, '새 줄을 기다리는 중 · 지점 5개 · 좌표를 읽지 못한 행 1개');
+  assert.equal(describeTrack({phase:'complete', source:0, count:0, skipped:0}, {markers}).note, '이 로그에는 “onPositionChanged”가 있는 행이 없습니다.');
+  assert.equal(describeTrack({phase:'complete', source:0, count:0, skipped:4}, {markers}).note, '“onPositionChanged”가 있는 행 4개에서 좌표를 읽지 못했습니다. 설정 파일의 latitude·longitude를 확인해 주세요.');
+  assert.deepEqual(describeTrack({phase:'failed', error:'로그를 읽지 못했습니다.'}, {markers}), {text:'로그를 읽지 못했습니다.', failed:true, note:null});
+  assert.equal(describeTrack({phase:'full', source:0, count:2000000, skipped:0}, {markers}).text, '지점 2,000,000개에서 멈춤 · 한 로그에 최대 2,000,000개까지 표시합니다');
+});
+
+test("the status line names a fallback's points, and both markers when neither has any", () => {
+  const markers = ['onPositionChanged', 'Fix'];
+  assert.equal(describeTrack({phase:'reading', source:0, count:0, skipped:0}, {markers}).text, '읽는 중… 지점 0개');
+  assert.equal(describeTrack({phase:'reading', source:1, count:300, skipped:2}, {markers}).text, '읽는 중… 지점 300개 · 2순위 “Fix” · 좌표를 읽지 못한 행 2개');
+  assert.deepEqual(describeTrack({phase:'complete', source:1, count:300, skipped:0}, {markers}), {text:'지점 300개 · 2순위 “Fix”', failed:false, note:null});
+  assert.equal(describeTrack({phase:'full', source:1, count:2000000, skipped:0}, {markers}).text, '지점 2,000,000개에서 멈춤 · 2순위 “Fix” · 한 로그에 최대 2,000,000개까지 표시합니다');
+  assert.equal(describeTrack({phase:'complete', source:0, count:0, skipped:0}, {markers}).note, '이 로그에는 “onPositionChanged” 또는 “Fix”가 있는 행이 없습니다.');
+  assert.equal(describeTrack({phase:'complete', source:0, count:0, skipped:3}, {markers}).note, '“onPositionChanged” 또는 “Fix”가 있는 행 3개에서 좌표를 읽지 못했습니다. 설정 파일의 latitude·longitude를 확인해 주세요.');
 });
 
 test('the selected row says where it was logged, and when that is not known yet', () => {

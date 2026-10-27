@@ -24,7 +24,7 @@ const MISSING = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://w
 
 const ui = {status:$('status'), selection:$('selection'), empty:$('empty'), alert:$('alert'), tip:$('tip'), announce:$('announce'), fit:$('fit'), follow:$('follow'), title:$('title')};
 const points = new Points();
-let settings = {marker:'', tiles:'', attribution:'', title:''};
+let settings = {markers:[], tiles:'', attribution:'', title:''};
 let datasetId = null, generation = 0, selected = null, picked = null, status = null;
 let moved = false, fitting = false, lastFit = 0, drawnKey = '', cycle = null;
 let notice = '', noticeTimer = null, announced = '', failedTiles = 0;
@@ -202,10 +202,16 @@ async function follow(id, run) {
     try {
       next = await api('status', {dataset:id});
       if (run !== generation) return;
+      // The settings' own points replace a fallback's: a track never mixes
+      // them.
+      if (status && next.source !== status.source) {
+        points.clear();cycle = null;
+        hideHover();
+      }
       // Points after `stable` may be read again (a followed log's last rows).
       if (points.count > next.stable) points.truncate(next.stable);
       if (next.count > points.count) {
-        const response = await api('points', {dataset:id, from:points.count}, {raw:true});
+        const response = await api('points', {dataset:id, source:next.source, from:points.count}, {raw:true});
         const triples = new Float64Array(await response.arrayBuffer());
         if (run !== generation) return;
         points.append(triples);
@@ -219,7 +225,7 @@ async function follow(id, run) {
       await sleep(2000);
       continue;
     }
-    const first = !status?.count && points.count > 0, ended = next.phase !== status?.phase && FINAL.has(next.phase);
+    const first = (!status?.count || next.source !== status.source) && points.count > 0, ended = next.phase !== status?.phase && FINAL.has(next.phase);
     status = next;
     showSelected(false);
     render();
