@@ -171,7 +171,7 @@ test('the status line says how reading stands', () => {
   assert.equal(describeTrack({phase:'full', source:0, count:2000000, skipped:0}, {markers}).text, '지점 2,000,000개에서 멈춤 · 한 로그에 최대 2,000,000개까지 표시합니다');
 });
 
-test("the status line names a fallback's points, and both markers when neither has any", () => {
+test("the status line names a lower source's points, and each distinct marker when none has any", () => {
   const markers = ['onPositionChanged', 'Fix'];
   assert.equal(describeTrack({phase:'reading', source:0, count:0, skipped:0}, {markers}).text, '읽는 중… 지점 0개');
   assert.equal(describeTrack({phase:'reading', source:1, count:300, skipped:2}, {markers}).text, '읽는 중… 지점 300개 · 2순위 “Fix” · 좌표를 읽지 못한 행 2개');
@@ -179,6 +179,10 @@ test("the status line names a fallback's points, and both markers when neither h
   assert.equal(describeTrack({phase:'full', source:1, count:2000000, skipped:0}, {markers}).text, '지점 2,000,000개에서 멈춤 · 2순위 “Fix” · 한 로그에 최대 2,000,000개까지 표시합니다');
   assert.equal(describeTrack({phase:'complete', source:0, count:0, skipped:0}, {markers}).note, '이 로그에는 “onPositionChanged” 또는 “Fix”가 있는 행이 없습니다.');
   assert.equal(describeTrack({phase:'complete', source:0, count:0, skipped:3}, {markers}).note, '“onPositionChanged” 또는 “Fix”가 있는 행 3개에서 좌표를 읽지 못했습니다. 설정 파일의 latitude·longitude를 확인해 주세요.');
+  // Sources sharing a marker: the rank tells them apart, the note names it once.
+  const three = ['onPositionChanged', 'Fix', 'Fix'];
+  assert.equal(describeTrack({phase:'complete', source:2, count:10, skipped:0}, {markers:three}).text, '지점 10개 · 3순위 “Fix”');
+  assert.equal(describeTrack({phase:'complete', source:0, count:0, skipped:0}, {markers:three}).note, '이 로그에는 “onPositionChanged” 또는 “Fix”가 있는 행이 없습니다.');
 });
 
 test('the selected row says where it was logged, and when that is not known yet', () => {

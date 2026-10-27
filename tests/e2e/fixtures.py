@@ -320,21 +320,21 @@ def track(root: Path):
     return points
 
 
-def track_fallback(root: Path):
-    """track-fallback.log and track-both.log: 600 Android threadtime rows
+def track_second(root: Path):
+    """track-second.log and track-both.log: 600 Android threadtime rows
     each. From row 5, every fourth row is a GpsSample position in
     `name : value` text (`LocationReport` and degrees); track-both.log
     also has a NavSample position (as in track.log) every fifth row from
-    row 300. Returns how many points each log draws: the fallback's in
-    track-fallback.log, then the settings' own in track-both.log."""
+    row 300. Returns how many points each log draws: the second source's
+    in track-second.log, then the first source's in track-both.log."""
     import math
     counts = []
-    for name, own_from in (('track-fallback.log', None), ('track-both.log', 300)):
+    for name, first_from in (('track-second.log', None), ('track-both.log', 300)):
         rows, gps, nav = [], 0, 0
         for i in range(600):
             line = i + 1
             time = f'10-26 14:{i // 600:02d}:{(i // 10) % 60:02d}.{(i % 10) * 100:03d}'
-            if own_from and line >= own_from and line % 5 == 0:
+            if first_from and line >= first_from and line % 5 == 0:
                 lat, lon = round((52.52 + 0.003 * math.sin(nav / 20)) * 1e7), round((13.405 + nav * 0.00003) * 1e7)
                 rows.append(f'{time}  4100  4120 D NavSample           : onPositionChanged {{"fix":{{"lat":{lat},"lon":{lon},"alt":0}},"seq":{nav}}}')
                 nav += 1
@@ -348,6 +348,27 @@ def track_fallback(root: Path):
         (root / name).write_text('\n'.join(rows) + '\n', encoding='utf-8')
         counts.append(nav or gps)
     return counts
+
+
+def track_places(root: Path):
+    """track-places.log: 600 Android threadtime rows. From row 3, every
+    third row is a GpsSample position whose values have no names
+    (`LocationReport(simulated <time> <lat> <lon> <accuracy>)`, degrees).
+    Returns how many there are."""
+    import math
+    rows, count = [], 0
+    for i in range(600):
+        line = i + 1
+        time = f'10-26 15:{i // 600:02d}:{(i // 10) % 60:02d}.{(i % 10) * 100:03d}'
+        if line >= 3 and line % 3 == 0:
+            a = count / 40 * math.pi
+            rows.append(f'{time}  4200  4230 I GpsSample           : LocationReport(simulated {1761490800000 + i * 100} '
+                        f'{52.53 + 0.004 * math.cos(a):.6f} {13.38 + 0.006 * math.sin(a):.6f} 5.000000)')
+            count += 1
+        else:
+            rows.append(f'{time}  4100  4121 {"ID"[i % 2]} ExampleApp          : synthetic step {i}')
+    (root / 'track-places.log').write_text('\n'.join(rows) + '\n', encoding='utf-8')
+    return count
 
 
 def tile_png(x, y):

@@ -4,10 +4,11 @@ track window (its title from the start, points and the rows without one,
 synthetic tiles from a local tile server, the selected row's place and
 coordinates, hovering and clicking the track's end, [ and ] stepping
 between points, a row picked there selected in the main window, the place
-it opened at next time, a fallback's points only for a log without the
-settings' own), closing it without closing the log, a broken settings file
-listed with what is wrong, and the app ending with the main window while
-the track window is open (track.log, track-fallback.log, track-both.log)."""
+it opened at next time, the second source's points only for a log without
+the first's, a third source read by places), closing it without closing
+the log, broken settings files listed with what is wrong, and the app
+ending with the main window while the track window is open (track.log,
+track-second.log, track-both.log, track-places.log)."""
 import http.server
 import json
 import subprocess
@@ -69,14 +70,17 @@ def serve_tiles():
 def run(ctx):
     points = {line: (lat, lon) for line, lat, lon in fixtures.track(ctx.fixtures)}
     where = lambda line: '{:.5f}, {:.5f}'.format(*points[line])
-    fallback, own = fixtures.track_fallback(ctx.fixtures)
+    second, first = fixtures.track_second(ctx.fixtures)
+    unnamed = fixtures.track_places(ctx.fixtures)
     check = ctx.check
     server = serve_tiles()
     settings = ctx.data / 'extras' / 'track.json'
     good = json.dumps({
-        'title': '테스트 궤적', 'marker': 'onPositionChanged', 'latitude': 'fix.lat', 'longitude': 'fix.lon', 'scale': 1e-7,
+        'title': '테스트 궤적',
         'tiles': f'http://127.0.0.1:{server.server_address[1]}/{{z}}/{{x}}/{{y}}.png', 'attribution': '합성 타일 · 테스트 전용',
-        'fallback': {'marker': 'LocationReport', 'format': 'text', 'latitude': 'lat', 'longitude': 'lon'},
+        'sources': [{'marker': 'onPositionChanged', 'latitude': 'fix.lat', 'longitude': 'fix.lon', 'scale': 1e-7},
+                    {'marker': 'LocationReport', 'format': 'text', 'latitude': 'lat', 'longitude': 'lon'},
+                    {'marker': 'LocationReport', 'format': 'text', 'latitude': 3, 'longitude': 4}],
     }, ensure_ascii=False)
     try:
         with ctx.launch() as app:
@@ -206,26 +210,36 @@ return {chip:document.getElementById('selection').textContent,apart:t.top>=c.bot
             same = all(abs(again[k] - placed[k]) <= 2 for k in ('x', 'y', 'width', 'height'))
             check('the track window opens again where it was, at its size', same and 'track' in saved, {'placed': placed, 'again': again, 'saved': saved})
 
-            # A log without the settings' own rows draws its fallback's; a
-            # log with both draws its own alone.
+            # A log without the first source's rows draws the second's; a
+            # log with both draws the first's alone.
             switch('main')
-            app.open_fixture('track-fallback.log')
+            app.open_fixture('track-second.log')
             app.wait_count(600)
             switch('extra-track')
-            s = until(lambda v: v['status'].startswith(f'지점 {fallback}개'), 'fallback points', 30)
-            check("a log without the settings' own rows draws the fallback's points, and says so",
-                  s['status'] == f'지점 {fallback}개 · 2순위 “LocationReport”' and s['note'] is None and not s['fit'], s)
+            s = until(lambda v: v['status'].startswith(f'지점 {second}개'), 'second source points', 30)
+            check("a log without the first source's rows draws the second's points, and says so",
+                  s['status'] == f'지점 {second}개 · 2순위 “LocationReport”' and s['note'] is None and not s['fit'], s)
             js("document.getElementById('fit').click();return true;")
-            app.capture('08-fallback')
+            app.capture('08-second-source')
             switch('main')
             app.open_fixture('track-both.log')
             app.wait_count(600)
             app.jump(100)
             app.wait(lambda: js(SELECTED) == '100', what='row 100 selected')
             switch('extra-track')
-            s = until(lambda v: v['status'] == f'지점 {own}개' and (v['selection'] or '').startswith('100행'), "a log with both sources' points", 30)
-            check("a log with both draws the settings' own points alone, none of the fallback's before them",
+            s = until(lambda v: v['status'] == f'지점 {first}개' and (v['selection'] or '').startswith('100행'), "a log with both sources' points", 30)
+            check("a log with both draws the first source's points alone, none of the second's before them",
                   s['selection'] == '100행 앞에는 지점이 없습니다' and not s['here'], s)
+            # Rows whose values have no names are read by their places.
+            switch('main')
+            app.open_fixture('track-places.log')
+            app.wait_count(600)
+            switch('extra-track')
+            s = until(lambda v: v['status'].startswith(f'지점 {unnamed}개'), 'points read by places', 30)
+            check('a log with only unnamed values draws the third source, read by places',
+                  s['status'] == f'지점 {unnamed}개 · 3순위 “LocationReport”' and s['note'] is None, s)
+            js("document.getElementById('fit').click();return true;")
+            app.capture('09-third-source')
             app.call(f'/session/{app.sid}/window', method='DELETE', timeout=10)
             app.wait(lambda: 'extra-track' not in handles(), what='track window closed again')
             switch('main')
@@ -239,6 +253,15 @@ return {chip:document.getElementById('selection').textContent,apart:t.top>=c.bot
                   broken.get('label') == '좌표 궤적 · 설정 오류' and broken.get('disabled')
                   and broken.get('note') == 'extras/track.json · 설정 파일이 올바른 JSON이 아닙니다 (1행).', items)
             app.capture('06-broken-settings')
+            app.key('Escape', target='rowMenu')
+            # A source written beside the list says where it belongs.
+            settings.write_text('{"marker": "onPositionChanged", "latitude": "fix.lat", "longitude": "fix.lon"}', encoding='utf-8')
+            app.click('extrasButton')
+            items = app.wait(lambda: js(MENU), what='menu with a source outside sources')
+            check('a source outside the sources list is a settings error that says where it goes',
+                  (items[0] if items else {}).get('note')
+                  == 'extras/track.json · marker·latitude·longitude 같은 좌표 항목은 sources 배열 안에 적어 주세요.', items)
+            app.capture('10-source-outside-list')
             app.key('Escape', target='rowMenu')
 
             # The app ends with the main window, the track window open or not.
