@@ -1562,12 +1562,9 @@ impl Dataset {
                             fuse_from.store(state.levels.len(), Ordering::Release);
                             collect.store(state.fields.is_some(), Ordering::Release);
                             held = Some(state);
-                            for (j, block) in std::mem::take(&mut early).into_iter().enumerate() {
-                                if !self.fuse(&mut held, from + j, block) {
-                                    stop_wanting(&mut held);
-                                    wanting = false;
-                                    break;
-                                }
+                            if !self.fuse_early(&mut held, from, std::mem::take(&mut early)) {
+                                stop_wanting(&mut held);
+                                wanting = false;
                             }
                         }
                         None if early.len() < EARLY_BLOCKS => early.push(analyzed.take()),
@@ -1601,6 +1598,40 @@ impl Dataset {
                 }
             },
         );
+        let halted = || {
+            q.stop.load(Ordering::Acquire)
+                || self.stop.load(Ordering::Acquire)
+                || self.hold.load(Ordering::Acquire)
+        };
+        // A pass that took the state before this scan wanted it, such as one
+        // started by indexing before the scan's thread ran, hands it over at
+        // its next block: it yields while this scan runs and wants it. The
+        // analyses kept meanwhile then complete the state, instead of the
+        // query completing first and a pass parsing every block again.
+        if wanting && held.is_none() && !early.is_empty() && result.is_ok() {
+            let taken = loop {
+                if halted() {
+                    break None;
+                }
+                if let Some(state) = self.analysis.lock().unwrap().take() {
+                    break Some(state);
+                }
+                thread::sleep(Duration::from_millis(1));
+            };
+            match taken {
+                // It lacks blocks before this scan's first.
+                Some(state) if state.levels.len() < from => {
+                    *self.analysis.lock().unwrap() = Some(state);
+                }
+                Some(state) => {
+                    held = Some(state);
+                    if !self.fuse_early(&mut held, from, early) {
+                        *self.analysis.lock().unwrap() = held.take();
+                    }
+                }
+                None => {}
+            }
+        }
         if wanting {
             self.wanted.fetch_sub(1, Ordering::AcqRel);
         }
@@ -1608,11 +1639,7 @@ impl Dataset {
         // analysis pass does; a followed file's blocks indexed meanwhile
         // get the next pass (`analyze_later`).
         if let Some(state) = held {
-            let stopped = result.is_err()
-                || q.stop.load(Ordering::Acquire)
-                || self.stop.load(Ordering::Acquire)
-                || self.hold.load(Ordering::Acquire);
-            if stopped {
+            if result.is_err() || halted() {
                 *self.analysis.lock().unwrap() = Some(state);
             } else {
                 self.publish_analysis(state);
@@ -1622,6 +1649,19 @@ impl Dataset {
             self.analyze_later();
         }
         result
+    }
+    /// Adds the analyses of blocks `from..` that a scan kept while it waited
+    /// for the state; false when one cannot continue it (see `fuse`).
+    fn fuse_early(
+        &self,
+        held: &mut Option<Analysis>,
+        from: usize,
+        early: Vec<Option<Box<Analyzed>>>,
+    ) -> bool {
+        early
+            .into_iter()
+            .enumerate()
+            .all(|(j, block)| self.fuse(held, from + j, block))
     }
     /// Adds block `i`'s analysis to the held state when the state needs it
     /// next. False when the block was analyzed without the field values the
