@@ -217,7 +217,7 @@ test('a capture with unsaved rows asks; others close without a question', async 
   answer = r.devices.guard(); await settle(); r.$('captureCancel').fire('click');
   assert.equal(await answer, 'cancel');
   assert.equal(r.calls.some(c => c[0] === 'discard_capture'), false);
-  // 저장… saves first; a cancelled save dialog keeps the log.
+  // 저장 saves first; a cancelled save dialog keeps the log.
   r = rig({state:{capture:unsaved}, answers:{save_capture:{cancelled:true}}});
   answer = r.devices.guard(); await settle(); r.$('captureForm').fire('submit');
   assert.equal(await answer, 'cancel');
@@ -300,7 +300,7 @@ test('saving a capture can be stopped while it copies', async () => {
   assert.equal(await saved, false);
   assert.deepEqual(r.notes, ['저장을 취소했습니다.'], 'a stopped save is news, not an error');
   assert.deepEqual(r.reports, []);
-  assert.equal(r.ui.captureSave.textContent, '저장…');
+  assert.equal(r.ui.captureSave.textContent, '저장');
 });
 
 test('files left by an earlier run open, or go after a second press', async () => {

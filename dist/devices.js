@@ -239,7 +239,7 @@ export const PLATFORM_TOOLS_URL = 'https://developer.android.com/tools/releases/
 // Native code's word for a save the user stopped.
 const SAVE_CANCELLED = 'Save cancelled';
 
-// One modal question: 저장… (focused), 저장 안 함, or 취소 (also Escape and a
+// One modal question: 저장 (focused), 저장 안 함, or 취소 (also Escape and a
 // press on the backdrop). Resolves 'save', 'discard' or 'cancel'.
 export function mountCaptureDialog({document = globalThis.document} = {}) {
   const $ = id => document.getElementById(id);
@@ -513,7 +513,7 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
     }
   }
   // Saves a copy of the rows so far; false when the user cancelled. While it
-  // copies, 저장… becomes 저장 취소: a capture can be gigabytes.
+  // copies, 저장 becomes 저장 취소: a capture can be gigabytes.
   async function save(datasetId = logs.getState().datasetId) {
     if (saving || !logs.getState().capture) return false;
     saving = true;
@@ -582,7 +582,7 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
     ui.captureApp.textContent = launching ? '앱 실행 중…' : '앱 실행…';
     ui.captureApp.title = launching ? `${launching} 앱을 실행하는 중입니다` : '개발용 서명 앱을 다시 실행해 그 앱의 로그를 <private> 없이 기록합니다';
     ui.captureSave.classList.toggle('primary', unsaved && !saving);
-    ui.captureSave.textContent = saving ? '저장 취소' : '저장…';
+    ui.captureSave.textContent = saving ? '저장 취소' : '저장';
     if (saving) ui.captureSave.title = '저장을 멈춥니다. 저장하던 파일은 남기지 않습니다';
     else if (capture.unsaved) ui.captureSave.title = `지금까지 기록한 로그를 원본 그대로 파일로 저장합니다 (${mod}S)`;
     else ui.captureSave.title = `기록한 로그를 이미 저장했습니다 · 다시 저장할 수 있습니다 (${mod}S)`;
