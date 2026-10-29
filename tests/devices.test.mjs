@@ -155,6 +155,7 @@ class Element {
   addEventListener(name, fn) {(this.listeners.get(name) ?? this.listeners.set(name, []).get(name)).push(fn);}
   fire(name, event = {}) {let prevented = false; const full = {target:this, preventDefault() {prevented = true;}, stopPropagation() {}, ...event}; for (const fn of this.listeners.get(name) ?? []) fn(full); return {prevented};}
   focus() {this.ownerDocument.activeElement = this;}
+  contains(node) {return node === this || this.children.includes(node);}
   setAttribute(name, value) {(this.attributes ??= {})[name] = String(value);}
   getAttribute(name) {return this.attributes?.[name] ?? null;}
   get classList() {
@@ -184,7 +185,7 @@ function rig({state = {}, answers = {}, platform = 'MacIntel', unreport = null, 
   document.createElement = tag => new Element(document, tag);
   document.body = new Element(document, 'body');
   const ui = Object.fromEntries(['deviceButton', 'emptyDevice', 'captureBar', 'captureState', 'captureText', 'captureHint', 'captureClear', 'captureClearHint', 'captureApp', 'captureAppStatus', 'captureStop', 'captureSave', 'captureLeftovers', 'leftoverList', 'rowMenu', 'openFile'].map(id => [id, document.getElementById(id)]));
-  const calls = [], listeners = {}, menus = [], notes = [], reports = [];
+  const calls = [], listeners = {}, menus = [], notes = [], reports = [], waited = [];
   const native = {
     core:{invoke:async (command, args) => {
       calls.push([command, args]);
@@ -196,12 +197,17 @@ function rig({state = {}, answers = {}, platform = 'MacIntel', unreport = null, 
     event:{listen:async (name, fn) => {listeners[name] = fn;}},
   };
   const logs = {state:{datasetId:7, closed:false, capture:null, ...state}, getState() {return this.state;}, start:async () => calls.push(['poll'])};
-  const menu = {show:(items, x, y, label) => {ui.rowMenu.hidden = false; menus.push({items, x, y, label});}, close:() => {ui.rowMenu.hidden = true;}};
+  // As in menu.js: every show and close changes the menu's version, an open
+  // menu has focus, and a close that restores gives it back to the opener.
+  let version = 0, opener = null;
+  ui.rowMenu.hidden = true;
+  const menu = {show:(items, x, y, label) => {if (ui.rowMenu.hidden) opener = document.activeElement; ui.rowMenu.hidden = false; ui.rowMenu.focus(); menus.push({items, x, y, label}); return ++version;},
+    close:(restore = false) => {if (ui.rowMenu.hidden) return; version++; ui.rowMenu.hidden = true; if (restore) opener?.focus(); opener = null;}, version:() => version};
   const timers = [];
   const window = {navigator:{platform}, setTimeout:(fn, ms) => {timers.push(fn); return timers.length;}, clearTimeout:() => {}};
   const unreported = [];
-  const devices = mountDevices({ui, document, window, native, menu, logs, isGone:() => false, report:m => reports.push(m), unreport:unreport ?? (m => unreported.push(m)), notify:m => notes.push(m), keepInput});
-  return {document, ui, calls, listeners, menus, notes, reports, unreported, logs, devices, dialog:document.getElementById('captureDialog'), $:document.getElementById, timers};
+  const devices = mountDevices({ui, document, window, native, menu, logs, isGone:() => false, report:m => reports.push(m), unreport:unreport ?? (m => unreported.push(m)), notify:(m, action, options) => {notes.push(m); if (options?.wait) waited.push(m);}, keepInput});
+  return {document, ui, calls, listeners, menu, menus, notes, waited, reports, unreported, logs, devices, dialog:document.getElementById('captureDialog'), $:document.getElementById, timers};
 }
 const unsaved = {state:'recording', device:'Pixel 8', bytes:4096, unsaved:true, breaks:[]};
 
@@ -434,7 +440,7 @@ test('a device waiting on the person is listed again while the menu is open', as
   listed = {devices:[ipad], androidError:null, iosError:null};
   const again = r.devices.openMenu(r.ui.deviceButton);
   await settle();
-  r.ui.rowMenu.hidden = true;
+  r.menu.close();
   const calls = r.calls.filter(c => c[0] === 'list_devices').length;
   r.timers.shift()(); await settle(); await again;
   assert.equal(r.calls.filter(c => c[0] === 'list_devices').length, calls);
@@ -510,6 +516,8 @@ test('an iPhone being recorded on a Mac offers to start an app, which runs once 
   r.timers.at(-1)();
   assert.equal(r.notes.at(-1), 'SampleApp 앱을 실행하는 중입니다. 기기 잠금이 풀려 있는지 확인해 주세요.');
   finish({name:'SampleApp'}); await settle();
+  // Both notices come on their own, so they wait for a toast offering an undo.
+  assert.deepEqual(r.waited, ['SampleApp 앱을 실행하는 중입니다. 기기 잠금이 풀려 있는지 확인해 주세요.', 'SampleApp 앱을 실행했습니다. 이번 실행의 로그는 <private> 없이 기록합니다.']);
   assert.equal(r.ui.captureApp.getAttribute('aria-disabled'), 'false');
   assert.equal(r.ui.captureAppStatus.textContent, '');
   assert.equal(r.notes.at(-1), 'SampleApp 앱을 실행했습니다. 이번 실행의 로그는 <private> 없이 기록합니다.');
@@ -563,4 +571,49 @@ test('a device menu answer that comes after the app menu opened is dropped', asy
   await r.devices.openAppMenu(r.ui.captureApp);
   listed({devices:[], androidError:null, iosError:null}); await devices;
   assert.equal(r.menus.at(-1).label, '앱 실행');
+});
+
+test('a late device menu answer leaves a menu opened since alone, and stops listing', async () => {
+  const ipad = {serial:'QA0UDID0000000000000002', state:'untrusted', model:'QA iPad', product:'iPad0,0', platform:'ios', version:'27.0'};
+  let answer;
+  const r = rig({answers:{adb_status:{found:true, origin:'studio', version:'37.0.1'}, list_devices:() => new Promise(resolve => {answer = resolve;})}});
+  const opening = r.devices.openMenu(r.ui.deviceButton);
+  // The person closes it and right-clicks a row before the devices answer.
+  r.menu.close();
+  r.menu.show([['행 원문 복사', () => {}]], 0, 0, '행 작업');
+  answer({devices:[ipad], androidError:null, iosError:null}); await opening; await settle();
+  assert.deepEqual(r.menus.map(m => m.label), ['기기 로그', '행 작업']);
+  assert.equal(r.timers.length, 0, 'a device waiting on the person is not listed again for a closed menu');
+});
+
+test('a focused bar button that hides hands focus on, and the app menu goes with its button', async () => {
+  const r = rig({state:{capture:unsaved}});
+  r.ui.captureBar.children = [r.ui.captureSave];
+  r.devices.render();
+  r.ui.captureClear.focus();
+  r.devices.render({datasetId:7, closed:false, capture:{...unsaved, state:'stopped'}});
+  assert.equal(r.document.activeElement, r.ui.captureSave, 'the trash button hid; saving stays');
+  r.devices.render({datasetId:7, closed:true, capture:unsaved});
+  assert.equal(r.document.activeElement, r.ui.deviceButton, 'the bar hid; the device button stays');
+  // An iPhone that leaves takes its app button and the menu it opened.
+  const iphone = {...unsaved, device:'QA iPhone', platform:'ios'};
+  const phone = rig({state:{capture:iphone}, answers:{capture_apps:[{bundle:'com.example.sample', name:'SampleApp'}]}});
+  phone.devices.render();
+  phone.ui.captureApp.focus();
+  phone.ui.captureApp.fire('click'); await settle();
+  assert.equal(phone.ui.rowMenu.hidden, false);
+  phone.devices.render({datasetId:7, closed:false, capture:{...iphone, state:'waiting'}});
+  assert.equal(phone.ui.captureApp.hidden, true);
+  assert.equal(phone.ui.rowMenu.hidden, true);
+  assert.equal(phone.document.activeElement, phone.ui.captureSave, 'focus left the menu for saving');
+  // A bar that goes (the log closed) takes the app menu too.
+  const gone = rig({state:{capture:iphone}, answers:{capture_apps:[{bundle:'com.example.sample', name:'SampleApp'}]}});
+  gone.ui.captureBar.children = [gone.ui.captureApp, gone.ui.captureSave];
+  gone.devices.render();
+  gone.ui.captureApp.focus();
+  gone.ui.captureApp.fire('click'); await settle();
+  assert.equal(gone.document.activeElement, gone.ui.rowMenu);
+  gone.devices.render({datasetId:7, closed:true, capture:iphone});
+  assert.equal(gone.ui.rowMenu.hidden, true, 'no app starts for a log that is gone');
+  assert.equal(gone.document.activeElement, gone.ui.deviceButton);
 });

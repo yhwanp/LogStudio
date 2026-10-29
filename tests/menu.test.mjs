@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createPopupMenu} from '../dist/menu.js';
+import {focusOwner} from '../dist/dom.js';
 
 class Element {
   constructor(document, tag='div') {this.document = document; this.tagName = tag.toUpperCase(); this.children = []; this.attributes = {}; this.listeners = {}; this.style = {}; this.dataset = {}; this.hidden = true; this._text = ''; this.className = '';}
@@ -168,4 +169,23 @@ test('an open menu moves with what it was opened on, inside the window', () => {
   r.popup.close();
   r.popup.moveBy(30);
   assert.equal(r.menu.style.top, '4px', 'a closed menu stays put');
+});
+
+test('every show and close changes the version, so a late answer can tell its menu was closed or replaced', () => {
+  const r = rig();
+  const shown = r.popup.show([['Looking…', null]], 0, 0, 'Devices');
+  assert.equal(r.popup.version(), shown);
+  assert.equal(r.menu.popupOpener, r.opener, 'the open menu names its opener');
+  const again = r.popup.show([['Pixel 8', () => {}]], 0, 0, 'Devices');
+  assert.notEqual(again, shown, 'a menu shown in its place is another');
+  r.popup.close();
+  assert.notEqual(r.popup.version(), again);
+  assert.equal(r.menu.popupOpener, null);
+});
+
+test('a dialog opened from inside a popup menu returns focus to the menu opener', () => {
+  const opener = {}, popup = {popupOpener:opener}, item = {closest:selector => selector === '[role=menu]' ? popup : null}, field = {closest:() => null};
+  assert.equal(focusOwner({activeElement:item}), opener);
+  assert.equal(focusOwner({activeElement:field}), field);
+  assert.equal(focusOwner({activeElement:null}), null);
 });

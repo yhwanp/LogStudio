@@ -45,6 +45,27 @@ test('a new filter keeps the selected row where it was on screen, with its detai
   await c.close({remote:false});
 });
 
+test('a kept row found before the count reaches it keeps its place, not one clamped to the count', async () => {
+  // The scan finds row 80 (result 7) while the query has counted only 2 results.
+  const e = engine();
+  let narrow = false;
+  const transport = async b => {
+    const answer = await e.transport(b);
+    if (!narrow || !answer.query) return answer;
+    return {...answer, status:'ready', complete:false, query:{...answer.query, status:'running', count:2, complete:false}};
+  };
+  const c = createLargeLogController({transport, setTimer:e.setTimer, clearTimer:e.clearTimer});
+  await c.start(); await settle();
+  c.selectLine(80);
+  narrow = true;
+  await c.setFilters({include:[{levels:['W']}]}, {place:{line:80, select:true, offset:3}}); await settle();
+  const s = c.getState();
+  assert.equal(s.selectedLine, 80);
+  assert.equal(s.viewportStart, 7); assert.equal(s.selectedIndex, 7);
+  assert.equal(s.count >= 8, true, 'the results reach the found row');
+  await c.close({remote:false});
+});
+
 test('a selected row the new results leave out gives its place to the next result, or the last', async () => {
   const e = engine(), moved = [];
   const c = createLargeLogController({transport:e.transport, setTimer:e.setTimer, clearTimer:e.clearTimer, onRelocate:r => moved.push(r)});
@@ -138,6 +159,17 @@ test('a place the query cannot find leaves the list at its start; the anchor and
   const s = c.getState();
   assert.equal(s.selectedLine, null); assert.equal(s.viewportStart, 0); assert.equal(c.relocating(), null);
   assert.equal(s.anchor, 40); assert.equal(s.anchorOffset, 1); assert.equal(s.detail.lineNumber, 40, 'the detail waits for the row');
+  assert.equal(s.count, 0, 'no result is made up');
+  await c.close({remote:false});
+});
+
+test('a kept top row past every result moves the list to the end without adding a result', async () => {
+  const e = engine();
+  const c = createLargeLogController({transport:e.transport, setTimer:e.setTimer, clearTimer:e.clearTimer});
+  await c.start(); await settle();
+  await c.setFilters({include:[{levels:['W']}]}, {place:{line:5000, select:false}}); await settle();
+  const s = c.getState();
+  assert.equal(s.count, 10); assert.equal(s.viewportStart, 10);
   await c.close({remote:false});
 });
 

@@ -28,8 +28,7 @@ STATE = """const bar=document.getElementById('captureBar'),rows=[...document.que
 # Shows the first row after a break near the middle of the logs pane.
 SHOW_BREAK = """const v=document.getElementById('logsViewport');const r=[...document.querySelectorAll('#logsRows .capture-break')].find(r=>r.dataset.captureBreak.includes('연결 끊김'));
 if(!r)return false;v.scrollTop+=r.getBoundingClientRect().top-v.getBoundingClientRect().top-v.clientHeight/2;v.dispatchEvent(new Event('scroll'));return true;"""
-# Brings the logs pane to its end: a hidden window runs no animation frames,
-# so following does not keep up with rows after the pane was resized.
+# Brings the logs pane to its end, as scrolling down there does.
 AT_END = "const v=document.getElementById('logsViewport');v.scrollTop=v.scrollHeight;v.dispatchEvent(new Event('scroll'));return true;"
 # The top of the logs row with line arguments[0].
 ROW_TOP = "const r=document.querySelector(`#logsRows [data-line-number=\"${arguments[0]}\"]`);return r?Math.round(r.getBoundingClientRect().top):null"
@@ -168,7 +167,66 @@ def run(ctx):
         until(lambda v: v['count'] != count, 'rows after scrolling')
         time.sleep(.4)
         check('scrolling the list closes its row menu and the list stays where it was scrolled', gone and not js(END), {'closed': gone, 'end': js(END)})
-        # Later steps start from a followed log with no detail or selection.
+        # A click that opens the raw detail shortens the list; the log still
+        # follows its end.
+        app.key('Escape', target='logsViewport')
+        app.wait(lambda: app.hidden('largeDetail'), what='raw detail closed')
+        js(AT_END)
+        app.click_row(app.wait(lambda: js(NEAR_END), what='rows shown'))
+        app.wait(lambda: not app.hidden('largeDetail'), what='raw detail')
+        count = st()['count']
+        until(lambda v: v['count'] != count, 'rows after the detail opened')
+        time.sleep(.4)
+        check('a click that opens the raw detail leaves the log following its end', bool(js(END)), {'end': js(END)})
+        # So does a shorter window: a hidden window still resizes.
+        frame = app.rect()
+        tall = js("return document.getElementById('logsViewport').clientHeight")
+        app.rect(width=frame['width'], height=frame['height'] - 120)
+        # A window already at its smallest would test nothing.
+        short = app.wait(lambda: (lambda h: h < tall and h)(js("return document.getElementById('logsViewport').clientHeight")), what='shorter list')
+        count = st()['count']
+        until(lambda v: v['count'] != count, 'rows after the window got shorter')
+        time.sleep(.4)
+        shorter = js(END)
+        app.rect(width=frame['width'], height=frame['height'])
+        check('a shorter window leaves the log following its end', bool(shorter), {'end': shorter, 'height': [tall, short]})
+        # A press that drifts a few pixels while rows arrive selects nothing
+        # more: the list holds still until the press ends, then follows.
+        line = app.wait(lambda: js(NEAR_END), what='rows shown')
+        y = app.row_y(line)
+        app.press_row(line)
+        app.pointer('pointermove', y + 6)
+        top, count = js(ROW_TOP, line), st()['count']
+        until(lambda v: v['count'] != count, 'rows under the press')
+        time.sleep(.6)
+        pressed = {'top': js(ROW_TOP, line), 'selection': app.text('logsSelection'), 'selected': js(SELECTED)}
+        app.pointer('pointerup', y + 6)
+        check('a press held while rows arrive keeps its one row and the list still', pressed == {'top': top, 'selection': '', 'selected': str(line)}, {'was': top, 'now': pressed})
+        count = st()['count']
+        until(lambda v: v['count'] != count, 'rows after the press')
+        time.sleep(.4)
+        check('after the press the log follows its end again', bool(js(END)), {'end': js(END)})
+        # F2 under an open row menu steps to a bookmark and closes the menu,
+        # whose items act on the list's selection.
+        mark = app.wait(lambda: js(NEAR_END), what='rows shown')
+        app.click_row(mark)
+        app.key('b', meta=True, target='logsViewport')
+        app.wait(lambda: app.text('bookmarkTab') == '북마크 1', what='bookmark')
+        app.wait(lambda: (js(NEAR_END) or 0) > mark + 2, what='rows past the bookmark')
+        other = app.wait(lambda: js(NEAR_END), what='rows shown')
+        app.click_row(other, event='contextmenu')
+        menu(lambda v: '북마크 추가' in v, 'row menu before F2')
+        app.key('F2')
+        stepped = app.wait(lambda: js("return document.getElementById('rowMenu').hidden&&document.querySelector('#logsRows .selected-log-row')?.dataset.lineNumber"), what='menu closed by F2')
+        check('F2 under an open row menu steps to the bookmark and closes the menu', stepped == str(mark), {'mark': mark, 'other': other, 'selected': stepped})
+        # Focus leaves with the menu for the list, so the arrow keys go on.
+        focus = js("return document.getElementById('logsViewport').contains(document.activeElement)?'list':document.activeElement?.id||document.activeElement?.tagName")
+        check('focus goes back to the list when F2 closes the row menu', focus == 'list', focus)
+        # Later steps start from a followed log with no detail, selection or
+        # bookmark; the undo notice for the bookmark goes first.
+        app.key('b', meta=True, target='logsViewport')
+        app.wait(lambda: app.hidden('lowerTabs') or app.text('bookmarkTab') == '북마크 0', what='bookmark removed')
+        app.wait(lambda: app.hidden('toast'), 10, what='notice gone')
         app.key('Escape', target='logsViewport')
         app.wait(lambda: app.hidden('largeDetail'), what='raw detail closed')
         app.key('Escape', target='logsViewport')
@@ -216,6 +274,10 @@ def run(ctx):
         # next row shown.
         line = s['breaks'][0]['line']
         tag = js("const r=document.querySelector(`#logsRows [data-line-number=\"${arguments[0]}\"] .tag`);return r?r.textContent:null", line)
+        # The break's row is selected, so the filter keeps that row's place,
+        # not one an earlier step left selected: where the list lands then
+        # depends on this step alone.
+        app.click_row(line)
         app.exclude_tags(tag)
         s = until(lambda v: v['breaks'] and v['breaks'][0]['line'] != line, 'break under a filter')
         check('a filter that hides the row after a break keeps the break on the next row', s['breaks'][0]['line'] > line and '연결 끊김' in s['breaks'][0]['label'],
@@ -398,7 +460,23 @@ def run(ctx):
         toast = app.wait(lambda: (lambda t: '잠금' in t and t)(app.text('toast')), what='slow start hint')
         check('a start that takes long asks whether the device is unlocked', toast == 'SampleApp 앱을 실행하는 중입니다. 기기 잠금이 풀려 있는지 확인해 주세요.', toast)
         app.capture('11g-ios-app-starting', hover='captureApp')
+        # A notice that comes on its own waits for a toast offering an undo:
+        # the start ends while a filter from the row menu can still be undone.
+        hides = app.text('hideList')
+        app.click_row(app.wait(lambda: js(NEAR_END), what='rows shown'), event='contextmenu')
+        menu(lambda v: any(x.endswith(' 제외') for x in v), 'row menu while the app starts')
+        js("[...document.querySelectorAll('#rowMenu>button')].find(b=>b.textContent.endsWith(' 제외')).click();return true;")
+        undo = app.wait(lambda: (lambda t: '제외 조건' in t and t)(app.text('toast')), what='undo notice')
+        # The start must still be under way, or nothing waits.
+        check('the app is still starting when the undo is offered',
+              js("return document.getElementById('captureApp').getAttribute('aria-disabled')") == 'true')
         app.wait(lambda: js("return document.getElementById('captureApp').getAttribute('aria-disabled')==='false'"), 15, what='slow start done')
+        kept = app.text('toast')
+        js("document.querySelector('#toast .toast-action').click();return true;")
+        after = app.wait(lambda: (lambda t: '앱을 실행했습니다' in t and t)(app.text('toast')), what='start notice after the undo')
+        check('a start that ends while an undo is offered says so once the undo notice goes',
+              kept == undo and after == 'SampleApp 앱을 실행했습니다. 이번 실행의 로그는 <private> 없이 기록합니다.', {'undo': undo, 'kept': kept, 'after': after})
+        app.wait(lambda: app.text('hideList') == hides, what='filter undone')
         frame = app.rect()
         app.rect(width=900, height=frame['height'])
         time.sleep(.5)

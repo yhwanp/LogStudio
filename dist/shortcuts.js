@@ -3,6 +3,7 @@
 // the backdrop closes it and returns focus to the opener. Escape stops at the
 // dialog, so it does not also close the raw detail or the filter panel.
 import {isEditableTarget} from './clipboard.js';
+import {focusOwner} from './dom.js';
 
 export function mountShortcutHelp({document = globalThis.document} = {}) {
   const button = document.getElementById('shortcutHelp'), dialog = document.getElementById('shortcutDialog'), closeButton = document.getElementById('shortcutClose');
@@ -10,7 +11,7 @@ export function mountShortcutHelp({document = globalThis.document} = {}) {
   let opener = null;
   function open() {
     if (dialog.open) return;
-    opener = document.activeElement;
+    opener = focusOwner(document);
     if (typeof dialog.showModal === 'function') dialog.showModal(); else dialog.open = true;
     button.setAttribute('aria-expanded', 'true');
     closeButton?.focus({preventScroll: true});
@@ -21,7 +22,8 @@ export function mountShortcutHelp({document = globalThis.document} = {}) {
   }
   function restore() {
     button.setAttribute('aria-expanded', 'false');
-    const target = opener?.isConnected === false ? button : opener ?? button;
+    // A menu opened by mouse leaves no focused opener, only the body.
+    const target = opener?.isConnected === false || opener === document.body ? button : opener ?? button;
     opener = null;
     target?.focus?.({preventScroll: true});
   }

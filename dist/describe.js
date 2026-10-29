@@ -10,7 +10,8 @@ export const formatSize = n => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024)
 // whole-file statistics. Navigation is limited to currently found results.
 export function describeLargeProgress(state, {omitDuplicateFileCount=false, compactSearch=false}={}) {
   if (state.closed || state.datasetId === null || state.status === 'empty') {
-    return {exact:false, count:'0건', query:state.closed?'파일 닫힘':'', range:'', status:state.closed?'파일을 닫았습니다.':'파일을 열거나 로그를 붙여넣으세요.'};
+    const status = state.closed ? '파일을 닫았습니다.' : '파일을 열거나 로그를 붙여넣으세요.';
+    return {exact:false, count:'0건', query:state.closed?'파일 닫힘':'', range:'', status, note:status};
   }
   const inputPending = !!state.inputPending && !state.closed;
   const exact = !inputPending && !!state.queryComplete && !!state.textComplete && state.queryStatus === 'complete' && !state.closed && !state.error && !['error', 'cancelled', 'closed'].includes(state.status);
@@ -33,7 +34,11 @@ export function describeLargeProgress(state, {omitDuplicateFileCount=false, comp
   const analysis = state.following && state.textComplete ? '따라가는 중' : state.summaryComplete ? '' : summaryQueryStopped ? state.queryStatus === 'cancelled' ? '레벨 집계 취소됨' : '레벨 집계 미완료' : state.textComplete ? '레벨 집계 중' : '';
   // Rows appended after opening wait until following reads them.
   const appended = !state.following && state.grown && state.textComplete ? '새 줄 있음' : '';
-  return {exact, count, query, range, status:[source, analysis, appended].filter(Boolean).join(' · ')};
+  // `note` is what a screen reader is told as it changes: the status
+  // without the reading percentage, and without the row count while
+  // following, as both keep growing. It says the file's rows once read.
+  const told = state.textComplete ? state.following ? '' : `파일 ${formatNumber(state.total)}행` : source.replace(progress, '');
+  return {exact, count, query, range, status:[source, analysis, appended].filter(Boolean).join(' · '), note:[told, analysis, appended].filter(Boolean).join(' · ')};
 }
 
 // A row of a combined log names its file and its row within that file.

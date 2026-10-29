@@ -22,12 +22,14 @@ function rig(saved=null,setup=()=>{}){
   const canvas={getContext:()=>({font:'',measureText:text=>({width:text.length*7})})};
   const elements=new Map(),document={activeElement:null,listeners:new Map(),getElementById:id=>{if(!elements.has(id))elements.set(id,new Element(document));return elements.get(id);},createElement:tag=>tag==='canvas'?canvas:new Element(document),addEventListener(name,fn){this.listeners.set(name,fn);}};
   const timers=new Map(),writes=[];let seq=0;
-  const window={localStorage:{getItem:()=>JSON.stringify(saved),setItem:(_key,value)=>writes.push(JSON.parse(value))},setTimeout:(fn,ms)=>{timers.set(++seq,{fn,ms});return seq;},clearTimeout:id=>timers.delete(id),addEventListener(){},getComputedStyle:()=>({fontWeight:'400',fontSize:'12px',fontFamily:'mono',paddingLeft:'6px',paddingRight:'6px',lineHeight:'20px'})};
+  const window={localStorage:{getItem:()=>JSON.stringify(saved),setItem:(_key,value)=>writes.push(JSON.parse(value))},setTimeout:(fn,ms)=>{timers.set(++seq,{fn,ms});return seq;},clearTimeout:id=>timers.delete(id),listeners:new Map(),
+    addEventListener(name,fn){(this.listeners.get(name)??this.listeners.set(name,[]).get(name)).push(fn);},removeEventListener(name,fn){const list=this.listeners.get(name)??[];if(list.includes(fn))list.splice(list.indexOf(fn),1);},
+    fire(name,event={}){for(const fn of [...this.listeners.get(name)??[]])fn(event);},getComputedStyle:()=>({fontWeight:'400',fontSize:'12px',fontFamily:'mono',paddingLeft:'6px',paddingRight:'6px',lineHeight:'20px'})};
   const get=document.getElementById,panel=get('filterPanel'),input=get('pidFilter');panel.append(input);
   const main=get('logsRows'),selected=new Element(document);main.append(selected);selected.focus();
   setup({get,panel,document});
   const layout=mountLogLayout({document,window});
-  return {get,document,timers,writes,layout,selected,input,panel};
+  return {get,document,window,timers,writes,layout,selected,input,panel};
 }
 
 test('filter open/close allocates layout state without removing controls or changing selection/focus',()=>{
@@ -64,8 +66,43 @@ test('a held auto-hide panel stays open for a tip and is left open when released
   r.document.listeners.get('pointerdown')({target:r.selected});r.document.listeners.get('focusin')({target:r.selected});
   assert.equal(r.panel.inert,false,'presses and focus outside leave it open');
   r.layout.hold(false);assert.equal(r.panel.inert,false);assert.equal(r.timers.size,0);
-  r.document.listeners.get('pointerdown')({target:r.selected});
+  r.document.listeners.get('pointerdown')({target:r.selected});r.window.fire('pointerup');
+  const [id,timer]=[...r.timers][0];r.timers.delete(id);timer.fn();
   assert.equal(r.panel.inert,true,'the next press outside hides it as before');
+});
+
+test('a press outside hides the floating panel only once it and a double-click it begins are over',()=>{
+  // Hiding moves the log area, which must not slide under the pointer.
+  const r=rig();r.get('toggleFilters').fire('click');
+  const press=()=>{r.document.listeners.get('pointerdown')({target:r.selected});r.document.listeners.get('focusin')({target:r.selected});};
+  press();
+  assert.equal(r.panel.inert,false,'not while the press is down, nor for the focus it moves');assert.equal(r.timers.size,0);
+  r.window.fire('pointerup');
+  assert.equal(r.panel.inert,false);assert.deepEqual([...r.timers.values()].map(t=>t.ms),[500]);
+  // The second press of a double-click starts the wait again.
+  press();assert.equal(r.timers.size,0);
+  r.window.fire('pointerup');
+  const [id,timer]=[...r.timers][0];r.timers.delete(id);timer.fn();
+  assert.equal(r.panel.inert,true,'it hides once the presses settle');
+  // A window losing focus during a press ends it too.
+  r.get('toggleFilters').fire('click');press();r.window.fire('blur');
+  const [next,later]=[...r.timers][0];r.timers.delete(next);later.fn();
+  assert.equal(r.panel.inert,true);
+  // Nor does a blur during the wait (a file dialog the click opened) keep it.
+  r.get('toggleFilters').fire('click');press();r.window.fire('pointerup');r.window.fire('blur');
+  assert.equal(r.timers.size,1,'the close still comes');
+  const [blurred,close]=[...r.timers][0];r.timers.delete(blurred);close.fn();
+  assert.equal(r.panel.inert,true);
+  // A context menu, whose release may never come, ends the press.
+  r.get('toggleFilters').fire('click');press();r.window.fire('contextmenu');
+  assert.equal(r.timers.size,1);
+  const [menu,shut]=[...r.timers][0];r.timers.delete(menu);shut.fn();assert.equal(r.panel.inert,true);
+  // A release that lands in the panel keeps it.
+  r.get('toggleFilters').fire('click');press();r.window.fire('pointerup',{type:'pointerup',target:r.input});
+  assert.equal(r.timers.size,0);assert.equal(r.panel.inert,false);
+  // Other buttons hide it at once, as before.
+  r.document.listeners.get('pointerdown')({target:r.selected,button:2});
+  assert.equal(r.panel.inert,true);
 });
 
 test('pinned panel preference preserves the same layout/focus behavior and Escape accessibility',()=>{

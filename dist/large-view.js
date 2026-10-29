@@ -78,7 +78,7 @@ function fieldSpan(document, entry, value, className) {
 export function mountLargeLogView(native, {transport, tips=null, document=globalThis.document, window=globalThis.window}) {
   const $ = id => document.getElementById(id);
   $('largeLogPanel').hidden=false;
-  const ids = ['largeName','largeStatus','largeError','largeCount','largeTotal','largeRows','largeViewport','largeFirst','largeLast','largeJump','largeJumpForm','largeCancel','largeClose','largeColumns','largeRaw','largeHeaders','largeRange','largeDetail','largeDetailTitle','largeDetailText','largeDetailPrevious','largeDetailNext','largeDetailClose','levelFilters','allLevels','errorLevels','resetFilters','searchInput','tagFilter','pidFilter','tidFilter','caseSensitive','includeRaw','recognizeLineNumbers','logsCount','logsRows','logsViewport','logsHeaders','logsFirst','logsLast','logsJump','logsJumpForm','logsRange','largeSearchPane','filterBadge','activeFilters','filterRow','logsSelection','largeSelection','toast','largeDetailCopy','largeDetailMore','largeDetailHint','toggleFilters','emptyState','logContent','loadProgress','loadProgressBar','paneSplitter','idFilterError','tagFilterError','searchError','dropHint','filterPanel','largeRegex','rowMenu','largeSize','exportLogs','exportSearch','exportCancel','recentFiles','recentList','clearRecent','recentButton','timeFrom','timeTo','timeFilterError','lowerTabs','searchTab','bookmarkTab','bookmarkPane','bookmarkCount','bookmarkList','copyBookmarks','clearBookmarks','searchPosition','logsPending','reopenFile','errorBar','errorReopen','followFile','messageFilter','messageRegex','messageFilterError','messageLabel'];
+  const ids = ['largeName','largeStatus','largeStatusNote','largeError','largeCount','largeTotal','largeRows','largeViewport','largeFirst','largeLast','largeJump','largeJumpForm','largeCancel','largeClose','largeColumns','largeRaw','largeHeaders','largeRange','largeDetail','largeDetailTitle','largeDetailText','largeDetailPrevious','largeDetailNext','largeDetailClose','levelFilters','allLevels','errorLevels','resetFilters','searchInput','tagFilter','pidFilter','tidFilter','caseSensitive','includeRaw','recognizeLineNumbers','logsCount','logsRows','logsViewport','logsHeaders','logsFirst','logsLast','logsJump','logsJumpForm','logsRange','largeSearchPane','filterBadge','activeFilters','filterRow','logsSelection','largeSelection','toast','largeDetailCopy','largeDetailMore','largeDetailHint','toggleFilters','emptyState','logContent','loadProgress','loadProgressBar','paneSplitter','idFilterError','tagFilterError','searchError','dropHint','filterPanel','largeRegex','rowMenu','largeSize','exportLogs','exportSearch','exportCancel','recentFiles','recentList','clearRecent','recentButton','timeFrom','timeTo','timeFilterError','lowerTabs','searchTab','bookmarkTab','bookmarkPane','bookmarkCount','bookmarkList','copyBookmarks','clearBookmarks','searchPosition','logsPending','reopenFile','errorBar','errorReopen','followFile','messageFilter','messageRegex','messageFilterError','messageLabel'];
   for (const id of ['extrasButton','deviceButton','emptyDevice','captureBar','captureState','captureText','captureHint','captureClear','captureClearHint','captureApp','captureAppStatus','captureStop','captureSave','captureLeftovers','leftoverList','openFile']) ids.push(id);
   const ui = Object.fromEntries(ids.map(id => [id,$(id)]));
   // Device captures (devices.js) mount once the menu and toasts exist.
@@ -106,18 +106,25 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
   let conds={include:[emptyCondition()],exclude:[]},active={list:'include',index:0},conditionView=null;
   // The open log's format: its columns, level names and filter fields.
   let shownFormat = 'text', levelKey = 'text';
-  // The open row menu's pane, line and row top (keepMenuByRow).
+  // The open row menu's pane, line and row top (keepMenuByRow), and the
+  // selection and place its list had when it opened.
   let menuRow=null;
   const previousRows=new Map(), viewports=new Map(), focusedSelection=new Map(), navigationFocus=new Map(), selections=new Map(), selectedAt=new Map(), paintedSelection=new Map(), paintedMarks=new Map();
   const MOD=/Mac|iPhone|iPad/.test(window.navigator?.platform??'')?'⌘':'Ctrl+';
   // Only macOS reads a copied file from the native pasteboard.
   if(MOD!=='⌘'){$('searchShortcut').textContent='Ctrl+F';$('pasteHint').textContent='로그 텍스트 붙여넣기';for(const key of document.querySelectorAll?.('.mod-key')??[])key.textContent='Ctrl';}
-  let toastTimer=null,exporting=false,exportTotal=0;
+  let toastTimer=null,toastAction=false,toastNext=null,exporting=false,exportTotal=0;
   // A toast may offer one action, such as undoing what it reports; it then
-  // stays a little longer and takes pointer input.
-  function notify(message,action=null,{ms=action?6000:2500}={}){
+  // stays a little longer and takes pointer input. A notice that comes on
+  // its own (`wait`) shows after such a toast instead of replacing it.
+  function notify(message,action=null,{ms=action?6000:2500,wait=false}={}){
+    if(wait&&toastAction&&!ui.toast.hidden){toastNext=[message,action,{ms}];return;}
     if(toastTimer!==null)window.clearTimeout(toastTimer);
-    const hide=()=>{if(toastTimer!==null)window.clearTimeout(toastTimer);toastTimer=null;ui.toast.hidden=true;};
+    const hide=()=>{
+      if(toastTimer!==null)window.clearTimeout(toastTimer);toastTimer=null;ui.toast.hidden=true;toastAction=false;
+      const next=toastNext;toastNext=null;if(next&&!disposed)notify(...next);
+    };
+    toastAction=!!action;
     ui.toast.replaceChildren(textSpan(document,message));
     if(action){const button=document.createElement('button');button.type='button';button.className='toast-action';button.textContent=action.label;button.addEventListener('click',()=>{hide();void action.run();});ui.toast.append(button);}
     ui.toast.classList.toggle('has-action',!!action);ui.toast.hidden=false;
@@ -245,7 +252,10 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
       const gestures=rowGestures({list:realViewport,document,window,mac:MOD==='⌘',indexAt:y=>view.indexAt(y),scroll:delta=>view.scrollBy(delta),press,
         isTextRow:index=>{const current=owner.getState(),s=selectionOf(prefix,current);return s?.focus===index&&selectedCount(s,current.count)===1;},
         grab:index=>{realViewport.focus({preventScroll:true});dragFrom=selectOne(index);return true;},
-        drag:index=>{if(dragFrom)applySelection(prefix,extendTo(dragFrom,index,owner.getState().count,{keep:true}),{repeat:true});}});
+        drag:index=>{if(dragFrom)applySelection(prefix,extendTo(dragFrom,index,owner.getState().count,{keep:true}),{repeat:true});},
+        // A press holds a followed list; the text or rows it selected stay
+        // in view when it lets go.
+        hold:()=>{const release=view.hold();return ()=>{const current=owner.getState();release({stay:!!pickedText(ui[prefix+'Rows'],current.selectedLine)||selectedCount(selectionOf(prefix,current),current.count)>1});};}});
       const toggleKey=event=>!!(MOD==='⌘'?event.metaKey:event.ctrlKey);
       view=createContinuousViewport({viewport:realViewport,rowsElement:ui[prefix+'Rows'],document,window,
         fetchRows:start=>owner.fetchRows(start),onError:owner.reportError,onUserMove:()=>{stoppedFinding(owner);menu.moved();},
@@ -348,6 +358,10 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     // A capture's marks may arrive for rows already painted, as when an app
     // it started finishes starting after its first rows came.
     const marks=captureBreaks(state.capture).map(b=>`${b.kind}:${b.row}`).join(',');
+    // A row menu goes when its list moves to another row from outside the
+    // menu (F2 to a bookmark, a locate): its items act on the selection.
+    // Focus goes back to the list, and on to the row it moved to.
+    if(menuRow?.prefix===prefix&&!ui.rowMenu.hidden&&(state.selectedLine!==menuRow.selected||state.scrollRevision!==menuRow.revision||state.queryId!==menuRow.query)){menuRow.moved=true;menu.close(true);}
     view.update(state,{force:!previousRows.has(prefix)||previousRows.get(prefix)!==rawMode||paintedSelection.get(prefix)!==selectionRevision||paintedMarks.get(prefix)!==marks,stick:!isSearch&&!!state.following});previousRows.set(prefix,rawMode);paintedSelection.set(prefix,selectionRevision);paintedMarks.set(prefix,marks);updateSelectionInfo(prefix,state);
   }
   // Focuses a pane's newly selected row when the pane had focus, or when a
@@ -397,7 +411,8 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
   function showRange(prefix,owner,text,announce){
     const finding=findingText(owner),node=ui[prefix+'Range'];
     node.setAttribute('aria-live',announce?'polite':'off');
-    node.textContent=finding||text;node.classList?.toggle('finding',finding.trim()!=='');
+    // The same words again are no news to a screen reader.
+    const words=finding||text;if(node.textContent!==words)node.textContent=words;node.classList?.toggle('finding',finding.trim()!=='');
   }
   // The user moved a list whose anchor was still being found: the list stays,
   // and a toast offers to move there for a moment.
@@ -693,8 +708,9 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     const files=hasFile&&state.files?.length>1?state.files:null;layout.setMultiFile(!!files);if(hasFile){applyLevelNames(state.ios===true||state.capture?.platform==='ios');applyFormat(state.format);}if(hasFile)layout.fitLines(widestLine(state));
     ui.largeName.title=!hasFile?'':files?`${files.length}개 파일을 이 순서로 합쳤습니다\n${files.map((file,i)=>`${i+1}. ${file.name} · ${formatSize(file.size)}`).join('\n')}\n합계 ${formatSize(state.size)}`:`${state.name}\n${formatSize(state.size)}`;ui.largeSize.textContent=hasFile&&state.size>0?formatSize(state.size):'';
     const p=describeLargeProgress(state,{omitDuplicateFileCount:true});ui.logsCount.textContent=`로그 · ${p.count}`;
-    showRange('logs',logs,p.range.replaceAll('검색 결과','필터 결과'),true);
-    ui.logsLast.textContent=p.exact?'끝':'현재 끝';ui.largeStatus.textContent=p.status;updateLevels(state.summary,state.summaryComplete);
+    // Only a message is news; with rows, the viewport reports the range.
+    showRange('logs',logs,p.range.replaceAll('검색 결과','필터 결과'),!!p.range);
+    ui.logsLast.textContent=p.exact?'끝':'현재 끝';if(ui.largeStatus.textContent!==p.status)ui.largeStatus.textContent=p.status;if(ui.largeStatusNote.textContent!==p.note)ui.largeStatusNote.textContent=p.note;updateLevels(state.summary,state.summaryComplete);
     const empty=state.closed||!state.count;ui.logsFirst.disabled=empty||state.viewportStart===0;ui.logsLast.disabled=empty||state.viewportStart>=state.count-1;
     ui.logsJump.disabled=!state.count||state.closed;ui.logsJump.title=jumpTitle('현재 필터 결과',state);
     ui.exportLogs.disabled=exporting||!hasFile||!state.queryComplete||!state.count;
@@ -705,12 +721,19 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     // Cards and chips say when the engine finds no row for a condition, and
     // chips show the conditions kept when it rejects a message pattern.
     const marks=rowless(state),seen=JSON.stringify([[...marks.include],[...marks.exclude],marks.following,state.rejected]);
-    if(seen!==rowlessShown){rowlessShown=seen;renderFilterSummary();}
+    if(seen!==rowlessShown){rowlessShown=seen;if(chipPress)chipsStale=true;else renderFilterSummary();}
     if(hasFile&&state.count)tips?.offer('help');
   }
   // The conditions no row of the open log matches, as the logs pane's query
   // checked them; none while a file is closed.
   let rowlessShown='';
+  // Chips redrawn under a press would lose its click: a redraw for a
+  // condition's first row waits until the press is over.
+  let chipPress=false,chipsStale=false;
+  ui.activeFilters.addEventListener('pointerdown',()=>{
+    if(chipPress)return;chipPress=true;
+    afterPress(()=>{chipPress=false;if(chipsStale){chipsStale=false;renderFilterSummary();}});
+  });
   function rowless(state=logs.getState()){
     const open=state.datasetId!==null&&!state.closed&&state.status!=='empty';
     const marks=open?conditionsWithoutRows(conds,state.checkedConditions,state.conditions):{include:new Set(),exclude:new Set()};
@@ -759,7 +782,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     const queryText=p.query?` · ${p.query}${scanning?` ${Math.min(99,Math.floor(state.scannedBytes/state.size*100))}%`:''}`:'';
     if(ui.largeCount.textContent!==p.count)ui.largeCount.textContent=p.count;
     if(ui.largeTotal.textContent!==queryText)ui.largeTotal.textContent=queryText;
-    if(ui.largeRange.textContent!==(findingText(search)||p.range))showRange('large',search,p.range,true);
+    if(ui.largeRange.textContent!==(findingText(search)||p.range))showRange('large',search,p.range,!!p.range);
     ui.largeSearchPane.setAttribute('aria-busy',String(visible&&p.query==='검색 중'));
     if(inputPending)ui.largeRows.setAttribute('data-search-pending','true');else ui.largeRows.removeAttribute('data-search-pending');
     // An emptied search leaves an idle identity: there is nothing to cancel.
@@ -938,8 +961,9 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     // after the press does: the list must not move under the pointer, and a
     // row menu that press opens takes the hold over.
     const release=viewports.get(prefix)?.hold()??(()=>{});
-    menu.show(items,x,y,'행 작업',{onList:true,onClose:press=>{menuRow=null;if(press)afterPress(release);else release();}});
-    menuRow={prefix,line:entry.lineNumber,top:rowTop(prefix,entry.lineNumber)};
+    menu.show(items,x,y,'행 작업',{onList:true,onClose:press=>{const moved=!!menuRow?.moved;menuRow=null;if(press)afterPress(release);else release({stay:moved});}});
+    const shown=owner.getState();
+    menuRow={prefix,line:entry.lineNumber,top:rowTop(prefix,entry.lineNumber),selected:shown.selectedLine,revision:shown.scrollRevision,query:shown.queryId};
   }
   // The bookmark list's menu: the same conditions, then its selection's copy
   // and unmark.
@@ -1547,7 +1571,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     if(payload.status==='opened'){
       if(id<=lastSourceId)return;
       // The replaced file's work is saved, and its notice dropped, before the view switches.
-      saver.flush();saver.stop();if(toastTimer!==null)window.clearTimeout(toastTimer);toastTimer=null;ui.toast.hidden=true;
+      saver.flush();saver.stop();if(toastTimer!==null)window.clearTimeout(toastTimer);toastTimer=null;toastNext=null;ui.toast.hidden=true;
       lastSourceId=id;pendingSourceId=id;savedInput??=captureInput();inputError='';
       if(orderNote?.id===id)notify(orderNote.message);
       const sequence=++sourceEventSequence;updateInputCancellation();

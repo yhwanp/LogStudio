@@ -13,15 +13,21 @@
 // followed log close no menu. `onClose(press)` runs once when the menu
 // closes or another menu replaces it, after a chosen item's action, and gets
 // the outside press that closed it, if one did. `moveBy` moves an open menu
-// along with the row it was opened on.
+// along with the row it was opened on. `show` returns the menu's version,
+// which every show and close changes: an owner whose answer comes late
+// shows it only while `version()` is still the one it saw. The element
+// holds `popupOpener` while open, so a dialog opened from the menu returns
+// focus there (dom.js `focusOwner`).
 export function createPopupMenu({menu, document, window}) {
-  let opener = null, notes = 0, onList = false, onClose = null, at = null;
+  let opener = null, notes = 0, onList = false, onClose = null, at = null, version = 0;
   function close(restore = false, press = null) {
     if (menu.hidden) return;
     const told = take();
+    version++;
     menu.hidden = true;
     menu.replaceChildren();
     menu.removeAttribute('aria-describedby');
+    menu.popupOpener = null;
     if (restore) opener?.focus({preventScroll:true});
     opener = null;
     told?.(press);
@@ -99,9 +105,11 @@ export function createPopupMenu({menu, document, window}) {
     const again = !menu.hidden, focused = menu.contains(document.activeElement) ? document.activeElement.dataset?.key : undefined;
     onList = options.onList === true;
     if (!again) opener = document.activeElement;
+    menu.popupOpener = opener;
     // A menu shown again in place of another is a new one to its owner.
     take()?.(null);
     onClose = options.onClose ?? null;
+    version++;
     menu.setAttribute('aria-label', label);
     menu.replaceChildren(...items.map(entry));
     // Notes say what the items cannot: why a device is missing, for one.
@@ -122,6 +130,7 @@ export function createPopupMenu({menu, document, window}) {
       menu.tabIndex = -1;
       menu.focus();
     }
+    return version;
   }
   menu.addEventListener('keydown', event => {
     const items = [...menu.querySelectorAll('[role^=menuitem]')], at = items.indexOf(document.activeElement);
@@ -150,5 +159,5 @@ export function createPopupMenu({menu, document, window}) {
   window.addEventListener('resize', () => close(false));
   function moved() {if (onList) close(true);}
   // The element focused when the open menu was shown.
-  return {show, close, moved, moveBy, opener: () => opener};
+  return {show, close, moved, moveBy, opener: () => opener, version: () => version};
 }
