@@ -404,6 +404,26 @@ impl Engine {
         c.stop();
         Ok(c.json())
     }
+    /// Records again into the stopped capture that the shown dataset `id`
+    /// holds, which then follows its new rows.
+    pub fn resume_capture(&self, id: u64) -> io::Result<Value> {
+        let (d, c) = {
+            let s = self.state.lock().unwrap();
+            let d = s.active.clone().filter(|d| d.id == id);
+            let c = s
+                .captures
+                .iter()
+                .find(|(d, _)| *d == id)
+                .map(|(_, c)| c.clone());
+            (d, c)
+        };
+        let (Some(d), Some(c)) = (d, c) else {
+            return Err(error("No device capture is open"));
+        };
+        c.resume()?;
+        self.follow_capture(&d);
+        Ok(c.json())
+    }
     /// A dataset's status with its capture's.
     fn status_of(&self, d: &Dataset, pane: usize) -> Value {
         let mut status = d.status(pane);

@@ -6,7 +6,9 @@
 // files; the page names a device by the serial of the last listing (an
 // iPhone's UDID), an app by its bundle in the last app listing and a left
 // file by an ID. A capture's rows are a temporary file until the user saves
-// them; clearing them records into a new file from then on.
+// them; clearing them records into a new file from then on. One button stops
+// a capture and records on into the same log from the moment it is pressed
+// again.
 import {formatSize, describeLogError} from './describe.js';
 import {textSpan, writeClipboard, focusOwner} from './dom.js';
 
@@ -149,6 +151,8 @@ const WAITING_FOR = {
   'Unlock the device, then retry':{need:'기기 잠금을 풀어 주세요', hint:'기기 잠금을 풀어 주세요.', back:true},
 };
 const NOT_READY = {need:'기기가 준비되기를 기다리는 중', hint:'기기가 아직 로그를 보낼 준비가 되지 않았습니다.'};
+// Recording on brings back no rows the device logged while stopped.
+const STOPPED_ROWS = '멈춘 동안의 로그는 기록되지 않습니다.';
 // The capture bar's words for a capture; `tone` picks its color. Each state
 // leads with what the user should know or do, so a narrow bar cuts the
 // device name first.
@@ -167,6 +171,15 @@ export function describeCapture(capture) {
       // A device listed again may still need the user, such as approving
       // USB debugging after a reboot.
       const wait = capture.reason ? WAITING_FOR[capture.reason] ?? NOT_READY : null;
+      // A capture resumed after a stop waits for its device without saying
+      // the connection was lost: it never was while recording.
+      if (Number.isSafeInteger(capture.stopped)) {
+        return {
+          tone:'waiting',
+          text:`${wait ? wait.need : '기기 연결을 기다리는 중'} · ${device}`,
+          title:`${wait ? `${wait.hint} 준비되면` : '기기가 연결되면'} 이어서 기록합니다. ${STOPPED_ROWS}`,
+        };
+      }
       const lost = `${clockTime(capture.lost)}에 연결이 끊겼습니다.`;
       // An iPhone sends only new rows: what it logs while away is lost, and
       // the bar says so while nothing more is needed of the person.
@@ -193,15 +206,16 @@ export function describeCapture(capture) {
       return {
         tone:'stopped',
         text:`기록 중지됨${kept} · ${device}`,
-        title:capture.unsaved ? `기록을 멈췄습니다. 지금까지 기록한 로그(${size})를 저장할 수 있습니다.` : `기록을 멈췄습니다. 기록한 로그(${size})를 저장했습니다.`,
+        title:`기록을 멈췄습니다. ${STOPPED_ROWS} ${capture.unsaved ? `지금까지 기록한 로그(${size})를 저장할 수 있습니다.` : `기록한 로그(${size})를 저장했습니다.`}`,
       };
   }
 }
 // Where a capture was cleared, where it lost its device and found it again,
-// and where an app it started with its private values shown begins: the
-// first row after each, in row order. A clear marks the first row.
+// where the user stopped it and it recorded on, and where an app it started
+// with its private values shown begins: the first row after each, in row
+// order. A clear marks the first row.
 export function captureBreaks(capture) {
-  const away = (capture?.breaks ?? []).map(b => ({...b, kind:'away'})), launches = (capture?.launches ?? []).map(l => ({...l, kind:'launch'}));
+  const away = (capture?.breaks ?? []).map(b => ({...b, kind:b.stopped === true ? 'stop' : 'away'})), launches = (capture?.launches ?? []).map(l => ({...l, kind:'launch'}));
   const cleared = Number.isSafeInteger(capture?.cleared) ? [{row:1, at:capture.cleared, kind:'clear'}] : [];
   return [...cleared, ...away, ...launches].filter(b => Number.isSafeInteger(b?.row)).sort((a, b) => a.row - b.row);
 }
@@ -213,8 +227,15 @@ export function breakLabel(breaks, after, row) {
   if (!between.length) return '';
   // Each kind reads as one part, in the order its first mark came.
   const parts = [], away = between.filter(b => b.kind === 'away'), started = between.filter(b => b.kind === 'launch');
-  const cleared = between.find(b => b.kind === 'clear');
+  const cleared = between.find(b => b.kind === 'clear'), stops = between.filter(b => b.kind === 'stop');
   if (cleared) parts.push({row:cleared.row, text:`${clockTime(cleared.at)} 로그 비움`});
+  if (stops.length) {
+    // Rows the device logged while stopped were never recorded.
+    const first = stops[0], last = stops[stops.length - 1], reboot = stops.some(b => b.reboot) ? ' · 기기 재부팅' : '';
+    parts.push({row:first.row, text:stops.length === 1
+      ? `${clockTime(first.lost)} 기록 중지 → ${clockTime(first.resumed)} 이어서 기록${reboot}`
+      : `${clockTime(first.lost)}–${clockTime(last.resumed)} 기록 중지 ${stops.length}번${reboot}`});
+  }
   if (away.length) {
     const first = away[0], last = away[away.length - 1], reboot = away.some(b => b.reboot), gap = away.some(b => b.gap);
     const span = away.length === 1
@@ -243,12 +264,16 @@ export const PLATFORM_TOOLS_URL = 'https://developer.android.com/tools/releases/
 const SAVE_CANCELLED = 'Save cancelled';
 // What the trash button does, and the notice once it has, which stays as
 // long as a notice with an action: the rows it names are gone.
-const CLEAR_HINT = '지금까지 기록한 로그를 비우고 이어서 기록합니다';
+const CLEAR_HINT = '지금까지 기록한 로그를 비우고 계속 기록합니다';
 export const clearedNotice = bytes => `기록한 로그(${formatSize(bytes)})를 비웠습니다. 지금부터 들어오는 로그를 기록합니다.`;
 const CLEARED_MS = 6000;
 // A second press of a double click, after a clear that ended at once, is
 // not a second clear.
 const CLEAR_REPEAT_MS = 600;
+// What the stop button says and does in each state: while a capture
+// records it stops, and once stopped it records on into the same log.
+const STOP = {name:'기록 중지', hint:'기록을 멈춥니다 · 기록한 로그는 그대로 남고, 다시 누르면 이어서 기록합니다'};
+const RESUME = {name:'이어서 기록', hint:'같은 로그에 지금부터 들어오는 로그를 이어서 기록합니다 · 멈춘 동안의 로그는 기록되지 않습니다'};
 
 // One modal question: 저장 (focused), 저장 안 함, or 취소 (also Escape and a
 // press on the backdrop). Resolves 'save', 'discard' or 'cancel'.
@@ -321,6 +346,9 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
   // log that replaces its capture's when the capture is cleared.
   const starting = new Map();
   let adb = null, busy = false, saving = false, clearing = false, clearedAt = -Infinity, launchError = '';
+  // A stop or resume press still in flight. It lasts until the bar shows
+  // the new state, so the button stays unavailable while its name is old.
+  let toggling = null;
 
   // The device menu opens at once and fills in when adb and the devices
   // answer. `shownMenu` is the version of the menu this module last showed:
@@ -592,16 +620,20 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
     if (saving) void invoke('cancel_export').catch(() => {});
     else void save();
   });
-  ui.captureStop.addEventListener('click', async () => {
-    if (clearing) return;
-    const datasetId = logs.getState().datasetId;
-    ui.captureStop.disabled = true;
+  // Stops the capture, or records on into its log once stopped. The button
+  // keeps focus, so pressing it again turns it back; the second press of a
+  // double click is not a second turn.
+  ui.captureStop.addEventListener('click', async event => {
+    const {datasetId, capture} = logs.getState();
+    if (clearing || toggling || event.detail > 1 || !capture || isGone()) return;
+    const press = toggling = {datasetId, from:capture.state};
+    render();
     try {
-      await invoke('stop_capture', {datasetId});
+      await invoke(capture.state === 'stopped' ? 'resume_capture' : 'stop_capture', {datasetId});
       void logs.start();
     } catch (error) {
+      if (toggling === press) toggling = null;
       fail(error);
-    } finally {
       render();
     }
   });
@@ -614,6 +646,7 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
   // saving the main action; opening a log, which replaces them, steps back.
   function render(state = logs.getState()) {
     const capture = state.datasetId !== null && !state.closed ? state.capture : null, words = describeCapture(capture);
+    if (toggling && (state.datasetId !== toggling.datasetId || capture?.state !== toggling.from)) toggling = null;
     const unsaved = !!words && !!capture.unsaved && capture.bytes > 0;
     // A focused control about to hide hands focus to one that stays. The
     // app menu goes with its button, or with the bar: its focus goes back
@@ -635,11 +668,18 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
     }
     ui.captureState.title = words.title;
     const live = capture.state === 'recording' || capture.state === 'waiting';
-    if (!live) for (const button of [ui.captureClear, ui.captureStop]) handOff(button, [ui.captureSave]);
+    // A capture the user stopped records on; one that failed or that an
+    // earlier run left does not.
+    const resumable = capture.state === 'stopped' && !capture.recovered;
+    if (!live) handOff(ui.captureClear, [ui.captureSave]);
+    if (!live && !resumable) handOff(ui.captureStop, [ui.captureSave]);
     if (appHidden) handOff(ui.captureApp, [ui.captureSave]);
     // The bar's buttons keep focus while they cannot act, so they are only
-    // marked unavailable, and the trash button says why.
-    ui.captureClear.hidden = !live;
+    // marked unavailable, and the trash button says why. A stopped
+    // capture's trash keeps its place unseen, so the stop button stays
+    // under the pointer.
+    ui.captureClear.hidden = !live && !resumable;
+    ui.captureClear.classList.toggle('place-only', !live);
     ui.captureClear.disabled = busy;
     const why = unclearable(capture);
     ui.captureClear.setAttribute('aria-disabled', clearing || why ? 'true' : 'false');
@@ -649,9 +689,17 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
       ui.captureClear.title = hint;
       ui.captureClearHint.textContent = hint;
     }
-    ui.captureStop.hidden = !live;
+    ui.captureStop.hidden = !live && !resumable;
     ui.captureStop.disabled = busy;
-    ui.captureStop.setAttribute('aria-disabled', clearing ? 'true' : 'false');
+    ui.captureStop.setAttribute('aria-disabled', clearing || toggling ? 'true' : 'false');
+    // It is as wide as its other name too, so it does not move either.
+    const [now, other] = live ? [STOP, RESUME] : [RESUME, STOP];
+    ui.captureStopName.textContent = now.name;
+    ui.captureStopOther.textContent = other.name;
+    if (ui.captureStop.title !== now.hint) {
+      ui.captureStop.title = now.hint;
+      ui.captureStopHint.textContent = now.hint;
+    }
     ui.captureSave.setAttribute('aria-disabled', clearing ? 'true' : 'false');
     // An app starts on an iPhone or iPad only while it is being recorded.
     ui.captureApp.hidden = appHidden;

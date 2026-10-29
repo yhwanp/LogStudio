@@ -6,7 +6,9 @@
 //! and rows it dropped from its buffer while away cannot come back. An
 //! iPhone sends only new rows, so rows it logged while away are lost. A
 //! capture can be cut: it records into a new file from then on, and the rows
-//! before stay with the old one.
+//! before stay with the old one. A stopped capture can record on into the
+//! same file from the moment it resumes; rows logged while stopped are not
+//! recorded.
 pub mod adb;
 pub mod apps;
 pub mod cli;
@@ -38,6 +40,7 @@ use store::Slot;
 pub const LIMIT: &str = "Recording stopped at 8 GiB";
 pub const DISK_FULL: &str = "Recording stopped: not enough disk space";
 pub const WRITE_FAILED: &str = "Recording stopped: the capture file could not be written";
+pub const NOT_STOPPED: &str = "Only a stopped device capture can record on";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase {
@@ -57,8 +60,9 @@ impl Phase {
         }
     }
 }
-/// Where the capture lost and found the device again: `row` is the first
-/// physical row after it. Times are Unix milliseconds of this computer.
+/// Where the capture lost and found the device again, or where the user
+/// stopped it and it recorded on: `row` is the first physical row after it.
+/// Times are Unix milliseconds of this computer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Break {
     pub row: u64,
@@ -66,8 +70,10 @@ pub struct Break {
     pub resumed: i64,
     pub reboot: bool,
     /// Rows the device logged while away were not recorded: its stream
-    /// sends only new rows, as an iPhone's does.
+    /// sends only new rows, as an iPhone's does, or the capture was stopped.
     pub gap: bool,
+    /// The user stopped the capture at `lost` and resumed it.
+    pub stopped: bool,
 }
 /// An app the capture's device started with its private values shown:
 /// `row` is the first physical row recorded after the start began, `at` its
@@ -104,10 +110,15 @@ struct Status {
     /// When the capture was last cut, in Unix milliseconds of this
     /// computer: the page marks the new file's first row with it.
     cleared: Option<i64>,
-    /// The capture was cut while its device was away: rows the device
-    /// logged meanwhile may precede the cut, so it is recorded from its
-    /// return as a new capture is.
+    /// The capture was cut while its device was away, or it resumes after
+    /// a stop: rows the device logged in the meantime are skipped, and
+    /// recording starts from the device's latest row, as a new capture does.
     fresh: bool,
+    /// When the capture last stopped, until it records again after a
+    /// resume: its break starts there.
+    stopped: Option<i64>,
+    /// The device's boot when its stream last opened.
+    boot: String,
     serial: String,
     bytes: u64,
     rows: u64,
@@ -131,6 +142,8 @@ pub struct Capture {
     wake: Condvar,
     stop: AtomicBool,
     closer: Mutex<Option<Closer>>,
+    /// The thread that records. Held while a capture stops or resumes, so
+    /// that the two do not cross.
     worker: Mutex<Option<JoinHandle<()>>>,
     /// What the worker writes with, which a cut changes. Locked before
     /// `status`. A capture left by an earlier run has none.
@@ -142,6 +155,8 @@ pub struct Capture {
     discard: AtomicBool,
     /// A file left by an earlier run, shown again.
     recovered: bool,
+    /// The capture closed and never resumes.
+    closed: AtomicBool,
 }
 fn now() -> i64 {
     chrono::Utc::now().timestamp_millis()
@@ -261,6 +276,8 @@ impl Capture {
                 cuts: 0,
                 cleared: None,
                 fresh: false,
+                stopped: None,
+                boot: c.boot,
                 serial: serial.into(),
                 bytes: 0,
                 rows: 0,
@@ -279,11 +296,12 @@ impl Capture {
             saved: AtomicU64::new(0),
             discard: AtomicBool::new(false),
             recovered: false,
+            closed: AtomicBool::new(false),
         });
-        let (stream, gate, boot) = (c.stream, c.gate, c.boot);
+        let (stream, gate) = (c.stream, c.gate);
         let worker = capture.clone();
         *capture.worker.lock().unwrap() =
-            Some(thread::spawn(move || worker.run(stream, gate, boot)));
+            Some(thread::spawn(move || worker.run(Some((stream, gate)))));
         Ok(capture)
     }
     /// A capture file left by an earlier run, held again to be shown,
@@ -312,6 +330,8 @@ impl Capture {
                 cuts: 0,
                 cleared: None,
                 fresh: false,
+                stopped: None,
+                boot: String::new(),
                 serial: String::new(),
                 bytes,
                 rows: 0,
@@ -330,6 +350,7 @@ impl Capture {
             saved: AtomicU64::new(0),
             discard: AtomicBool::new(false),
             recovered: true,
+            closed: AtomicBool::new(false),
         }))
     }
     /// The file the capture writes now.
@@ -402,9 +423,11 @@ impl Capture {
     pub fn discard(&self, on: bool) {
         self.discard.store(on, Ordering::Release);
     }
-    /// Stops the capture and deletes its file when the user chose not to
-    /// keep it, or when no row would be lost: all were saved, or none came.
+    /// Stops the capture for good and deletes its file when the user chose
+    /// not to keep it, or when no row would be lost: all were saved, or none
+    /// came.
     pub fn close(&self) {
+        self.closed.store(true, Ordering::Release);
         self.stop();
         if self.discard.load(Ordering::Acquire) || !self.unsaved() {
             let _ = self.status.lock().unwrap().slot.remove();
@@ -464,7 +487,7 @@ impl Capture {
             .breaks
             .iter()
             .map(|b| {
-                json!({"row":b.row,"lost":b.lost,"resumed":b.resumed,"reboot":b.reboot,"gap":b.gap})
+                json!({"row":b.row,"lost":b.lost,"resumed":b.resumed,"reboot":b.reboot,"gap":b.gap,"stopped":b.stopped})
             })
             .collect();
         let launches: Vec<Value> = s
@@ -484,6 +507,7 @@ impl Capture {
             "breaks": breaks,
             "launches": launches,
             "lost": s.lost,
+            "stopped": s.stopped,
             "cleared": s.cleared,
             "reason": s.reason,
             "saved": saved,
@@ -494,19 +518,66 @@ impl Capture {
     /// Ends the capture and waits until the file has every row received;
     /// it keeps them.
     pub fn stop(&self) {
-        self.stop.store(true, Ordering::Release);
-        let closer = self.closer.lock().unwrap().take();
-        if let Some(close) = closer {
-            close();
-        }
-        {
-            let _s = self.status.lock().unwrap();
-            self.wake.notify_all();
-        }
-        let worker = self.worker.lock().unwrap().take();
+        let worker = {
+            let mut worker = self.worker.lock().unwrap();
+            self.stop.store(true, Ordering::Release);
+            let closer = self.closer.lock().unwrap().take();
+            if let Some(close) = closer {
+                close();
+            }
+            {
+                let _s = self.status.lock().unwrap();
+                self.wake.notify_all();
+            }
+            worker.take()
+        };
         if let Some(h) = worker.filter(|h| h.thread().id() != thread::current().id()) {
             let _ = h.join();
         }
+    }
+    /// Records again into the file of a capture the user stopped, as a
+    /// capture started now would: after the rows the device holds now, with
+    /// a break where it stopped. A device not ready yet is waited for. A row
+    /// that stopping cut short ends where it was cut. A capture left by an
+    /// earlier run, one closing, or one not stopped, fails.
+    pub fn resume(self: &Arc<Self>) -> io::Result<()> {
+        {
+            let mut worker = self.worker.lock().unwrap();
+            if self.writer.is_none()
+                || self.closed.load(Ordering::Acquire)
+                || self.phase() != Phase::Stopped
+            {
+                return Err(error(NOT_STOPPED));
+            }
+            // A thread still held has ended, as the phase says.
+            if let Some(h) = worker.take() {
+                let _ = h.join();
+            }
+            {
+                let mut w = self.writer();
+                if w.bytes > 0 && !matches!(w.tail.last(), Some(b'\n' | b'\r')) {
+                    w.write(b"\n")?;
+                    let mut s = self.status.lock().unwrap();
+                    (s.bytes, s.rows) = (w.bytes, w.rows);
+                }
+            }
+            self.status.lock().unwrap().fresh = true;
+            // A device found ready records at once; the page then never
+            // shows the capture waiting for it.
+            let back = self.attempt(&mut HashMap::new())?;
+            self.stop.store(false, Ordering::Release);
+            let stream = match back {
+                Some(back) => Some(self.returned(back)),
+                None => {
+                    self.away(now());
+                    None
+                }
+            };
+            let capture = self.clone();
+            *worker = Some(thread::spawn(move || capture.run(stream)));
+        }
+        self.notify();
+        Ok(())
     }
     fn stopping(&self) -> bool {
         self.stop.load(Ordering::Acquire)
@@ -525,42 +596,22 @@ impl Capture {
             .lock()
             .unwrap()
     }
-    fn run(&self, mut stream: Box<dyn Stream>, mut gate: Gate, mut boot: String) {
+    /// Records the device's streams until stopped, starting with `stream`,
+    /// or with waiting for the device when there is none.
+    fn run(&self, mut stream: Option<(Box<dyn Stream>, Gate)>) {
         let result = loop {
-            if let Err(e) = self.pump(&mut *stream, &mut gate) {
-                break Err(e);
-            }
-            if self.stopping() {
-                break Ok(());
-            }
-            self.writer().stale = true;
-            let lost = now();
-            {
-                let mut s = self.status.lock().unwrap();
-                s.phase = Phase::Waiting;
-                s.lost = Some(lost);
-            }
-            self.notify();
-            match self.reconnect(&boot) {
-                Ok(Some(back)) => {
-                    let reboot = back.boot != boot;
-                    (stream, gate, boot) = (back.stream, back.gate, back.boot);
-                    let w = self.writer();
-                    let mut s = self.status.lock().unwrap();
-                    s.breaks.push(Break {
-                        row: w.rows + 1,
-                        lost,
-                        resumed: now(),
-                        reboot,
-                        gap: back.gap,
-                    });
-                    s.phase = Phase::Recording;
-                    s.lost = None;
-                    s.reason.clear();
-                    if back.fresh {
-                        s.fresh = false;
-                    }
+            if let Some((s, gate)) = &mut stream {
+                if let Err(e) = self.pump(&mut **s, gate) {
+                    break Err(e);
                 }
+                if self.stopping() {
+                    break Ok(());
+                }
+                self.away(now());
+                self.notify();
+            }
+            match self.reconnect() {
+                Ok(Some(back)) => stream = Some(self.returned(back)),
                 Ok(None) => break Ok(()),
                 Err(e) => break Err(e),
             }
@@ -572,7 +623,10 @@ impl Capture {
             let mut s = self.status.lock().unwrap();
             (s.bytes, s.rows, s.lost) = (w.bytes, w.rows, None);
             match result {
-                Ok(()) => s.phase = Phase::Stopped,
+                Ok(()) => {
+                    s.phase = Phase::Stopped;
+                    s.stopped.get_or_insert_with(now);
+                }
                 Err(e) => {
                     s.phase = Phase::Failed;
                     s.error = crate::source::public_message(&e, WRITE_FAILED);
@@ -580,6 +634,36 @@ impl Capture {
             }
         }
         self.notify();
+    }
+    /// The device left, or a resume did not find it: the capture waits.
+    fn away(&self, lost: i64) {
+        self.writer().stale = true;
+        let mut s = self.status.lock().unwrap();
+        s.phase = Phase::Waiting;
+        s.lost = Some(lost);
+    }
+    /// Records the device that came back: its break, and its stream.
+    fn returned(&self, back: Back) -> (Box<dyn Stream>, Gate) {
+        let w = self.writer();
+        let mut s = self.status.lock().unwrap();
+        let stopped = s.stopped.take();
+        let gone = Break {
+            row: w.rows + 1,
+            lost: stopped.or(s.lost).unwrap_or_else(now),
+            resumed: now(),
+            reboot: back.boot != s.boot,
+            gap: back.gap,
+            stopped: stopped.is_some(),
+        };
+        s.breaks.push(gone);
+        s.boot = back.boot;
+        s.phase = Phase::Recording;
+        s.lost = None;
+        s.reason.clear();
+        if back.fresh {
+            s.fresh = false;
+        }
+        (back.stream, back.gate)
     }
     /// Writes a stream's rows until it ends; fails only when writing does.
     fn pump(&self, stream: &mut dyn Stream, gate: &mut Gate) -> io::Result<()> {
@@ -605,7 +689,7 @@ impl Capture {
     }
     /// Waits until the device is back and continues: after the rows the
     /// capture has, or from its first row after a boot. None once stopped.
-    fn reconnect(&self, boot: &str) -> io::Result<Option<Back>> {
+    fn reconnect(&self) -> io::Result<Option<Back>> {
         let mut known: HashMap<String, String> = HashMap::new();
         loop {
             {
@@ -617,32 +701,43 @@ impl Capture {
             if self.stopping() {
                 return Ok(None);
             }
-            let conflict = |e: &io::Error| crate::source::public_message(e, "") == link::CONFLICT;
-            let devices = match self.link.devices() {
-                Ok(d) => d,
-                Err(e) if conflict(&e) => return Err(e),
-                Err(_) => continue,
-            };
-            self.explain(&devices);
-            let Some(serial) = self.find(&devices, &mut known) else {
-                continue;
-            };
-            match self.resume(&serial, boot) {
-                Ok(back) => {
-                    self.status.lock().unwrap().serial = serial;
-                    return Ok(Some(back));
-                }
-                Err(e) if conflict(&e) => return Err(e),
-                Err(_) => continue,
+            if let Some(back) = self.attempt(&mut known)? {
+                return Ok(Some(back));
             }
+        }
+    }
+    /// Looks once for the device to continue with; None while it is not
+    /// ready. Fails only when another adb server holds the devices.
+    fn attempt(&self, known: &mut HashMap<String, String>) -> io::Result<Option<Back>> {
+        let conflict = |e: &io::Error| crate::source::public_message(e, "") == link::CONFLICT;
+        let devices = match self.link.devices() {
+            Ok(d) => d,
+            Err(e) if conflict(&e) => return Err(e),
+            Err(_) => return Ok(None),
+        };
+        self.explain(&devices);
+        let Some(serial) = self.find(&devices, known) else {
+            return Ok(None);
+        };
+        match self.reopen(&serial) {
+            Ok(back) => {
+                self.status.lock().unwrap().serial = serial;
+                Ok(Some(back))
+            }
+            Err(e) if conflict(&e) => Err(e),
+            Err(_) => Ok(None),
         }
     }
     /// Opens the device's stream again: after the rows written when it
     /// still has the same boot, else from the first row of its new boot.
-    /// Cut while away, it starts after the rows the device holds now.
-    fn resume(&self, serial: &str, boot: &str) -> io::Result<Back> {
+    /// A capture cut while away, or resumed after a stop, starts after the
+    /// rows the device holds now.
+    fn reopen(&self, serial: &str) -> io::Result<Back> {
         let now_boot = self.link.boot_id(serial)?;
-        let fresh = self.status.lock().unwrap().fresh;
+        let (fresh, boot) = {
+            let s = self.status.lock().unwrap();
+            (s.fresh, s.boot.clone())
+        };
         let gate = if !self.link.replays() {
             Gate::open()
         } else if fresh {

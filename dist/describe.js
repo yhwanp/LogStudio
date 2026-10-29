@@ -150,6 +150,7 @@ export function describeLogError(value, format='text') {
     'Capture files are unavailable':'기기 로그용 임시 폴더에 쓸 수 없습니다.',
     'No device capture is open':'열린 기기 로그가 없습니다.',
     'No device capture is recording':'기록 중인 기기 로그가 없습니다.',
+    'Only a stopped device capture can record on':'기록을 멈춘 기기 로그만 이어서 기록할 수 있습니다.',
     'Choose a file other than the capture':'기록 중인 임시 파일에는 저장할 수 없습니다. 다른 위치를 선택해 주세요.',
     'Save cancelled':'저장을 취소했습니다.',
     'Save failed':'저장하지 못했습니다. 다시 시도해 주세요.',

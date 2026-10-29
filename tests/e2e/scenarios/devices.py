@@ -1,7 +1,7 @@
 """Device captures with scripted devices (QA builds; no adb, device
 service or device runs): a capture file a crashed run left, getting adb,
 the device menu with Android devices and iPhones, recording, a device that
-leaves and comes back, stopping, the save question before a capture's log
+leaves and comes back, stopping and recording on, the save question before a capture's log
 closes or the app quits, opening a left file, a capture that fails, an
 iPhone whose developer build starts anew with its private values shown, and
 an iPhone that leaves and must trust the computer again."""
@@ -17,6 +17,8 @@ QA = "window.__TAURI__.core.invoke('qa_devices',{action:arguments[0]});return tr
 QUIT = "window.__quit=null;window.__TAURI__.core.invoke('qa_quit').then(ids=>{window.__quit=ids;});return true;"
 STATE = """const bar=document.getElementById('captureBar'),rows=[...document.querySelectorAll('#logsRows .log-row')];return {
   bar:bar.hidden?null:{tone:bar.dataset.tone,text:document.getElementById('captureText').textContent,stop:!document.getElementById('captureStop').hidden,
+    stopLabel:document.getElementById('captureStopName').textContent,focus:document.activeElement?.id??null,
+    stopBox:(b=>[Math.round(b.left*2)/2,Math.round(b.right*2)/2])(document.getElementById('captureStop').getBoundingClientRect()),
     save:document.getElementById('captureSave').classList.contains('primary')},
   open:document.getElementById('openFile').classList.contains('primary'),
   count:document.getElementById('logsCount').textContent,following:document.getElementById('followFile').getAttribute('aria-pressed'),
@@ -293,7 +295,7 @@ def run(ctx):
         button = js("""const b=document.getElementById('captureClear');return {hidden:b.hidden,label:b.getAttribute('aria-label'),title:b.title,
           hint:document.getElementById(b.getAttribute('aria-describedby')).textContent,icon:!!b.querySelector('svg'),text:b.textContent.trim(),
           last:document.getElementById('captureSave').nextElementSibling===b,border:getComputedStyle(b).borderTopColor}""")
-        warn = '지금까지 기록한 로그를 비우고 이어서 기록합니다. 저장하지 않은 로그는 되살릴 수 없습니다'
+        warn = '지금까지 기록한 로그를 비우고 계속 기록합니다. 저장하지 않은 로그는 되살릴 수 없습니다'
         check('a live capture offers a quiet trash button after saving that names itself and warns that unsaved rows cannot come back',
               button == {'hidden': False, 'label': '로그 비우기', 'icon': True, 'text': '', 'title': warn, 'hint': warn, 'last': True,
                          'border': 'rgba(0, 0, 0, 0)'}, button)
@@ -324,9 +326,38 @@ def run(ctx):
         app.exclude_tags('')
         until(lambda v: not js("return !!document.querySelector('#hideList .cond-card')"), 'filter removed again')
 
+        js("document.getElementById('captureStop').focus();return true;")
+        box = js(STATE)['bar']['stopBox']
         app.click('captureStop')
-        s = until(lambda v: v['bar'] and v['bar']['tone'] == 'stopped' and not v['bar']['stop'], 'stopped')
+        s = until(lambda v: v['bar'] and v['bar']['tone'] == 'stopped' and v['bar']['stopLabel'] == '이어서 기록', 'stopped')
         check('stopping ends the capture and says its rows are not saved', s['bar']['text'] == '기록 중지됨 · 저장 안 됨 · Pixel 8', s['bar'])
+        check('the stop button turns into recording on, keeping focus', s['bar']['stop'] and s['bar']['focus'] == 'captureStop', s['bar'])
+        check('the button stays where it was pressed', s['bar']['stopBox'] == box, {'before': box, 'after': s['bar']['stopBox']})
+        app.capture('07d-stopped', hover='captureStop')
+        # The same button records on into the same log from now on, and the
+        # first row after marks where it stopped.
+        app.click('captureStop')
+        s = until(lambda v: v['bar'] and v['bar']['tone'] == 'live' and v['bar']['stopLabel'] == '기록 중지' and v['following'] == 'true'
+                  and any('이어서 기록' in b['label'] for b in v['breaks']), 'recorded on')
+        mark = next(b['label'] for b in s['breaks'] if '이어서 기록' in b['label'])
+        check('pressing it again records on into the log and marks where it stopped',
+              re.fullmatch(r'\d\d:\d\d:\d\d 기록 중지 → \d\d:\d\d:\d\d 이어서 기록', mark) is not None
+              and s['bar']['text'] == '기록 중 · 저장 안 됨 · Pixel 8' and s['bar']['focus'] == 'captureStop', {'mark': mark, 'bar': s['bar']})
+        check('recording on leaves the button where it was', s['bar']['stopBox'] == box, {'before': box, 'after': s['bar']['stopBox']})
+        app.capture('07e-recorded-on')
+        app.click('captureStop')
+        until(lambda v: v['bar'] and v['bar']['tone'] == 'stopped' and v['bar']['stopLabel'] == '이어서 기록', 'stopped again')
+        # Recording on without the device waits for it, and does not say it
+        # was cut off then.
+        js(QA, 'unplug')
+        app.click('captureStop')
+        s = until(lambda v: v['bar'] and v['bar']['tone'] == 'waiting', 'waiting to record on')
+        check('recording on without the device waits for it', s['bar']['text'] == '기기 연결을 기다리는 중 · Pixel 8' and s['bar']['stopLabel'] == '기록 중지', s['bar'])
+        app.capture('07f-resume-waiting')
+        js(QA, 'plug')
+        until(lambda v: v['bar'] and v['bar']['tone'] == 'live', 'recording once back')
+        app.click('captureStop')
+        until(lambda v: v['bar'] and v['bar']['tone'] == 'stopped' and v['bar']['stopLabel'] == '이어서 기록', 'stopped once more')
 
         # Quitting from the app menu asks about the unsaved rows as closing
         # does; 취소 keeps the app and the log.
@@ -350,7 +381,7 @@ def run(ctx):
         # A left file opens as a stopped capture to save or delete.
         js("document.querySelector('#leftoverList .recent-open').click();return true;")
         s = until(lambda v: v['bar'] and not v['empty'] and v['count'] == '로그 · 전체 30건', 'left file shown')
-        check('a left file opens as a capture to save', s['bar']['text'] == '남은 기기 로그 · 저장 안 됨', s['bar'])
+        check('a left file opens as a capture to save, not to record on', s['bar']['text'] == '남은 기기 로그 · 저장 안 됨' and not s['bar']['stop'], s['bar'])
         app.capture('09-left-file-open')
         app.click('largeClose')
         until(lambda v: v['dialog'], 'asked about the left file')
@@ -369,6 +400,7 @@ def run(ctx):
         s = until(lambda v: v['bar'] and v['bar']['tone'] == 'failed', 'failed', 30)
         check('a capture that fails keeps its rows and gives the whole reason', s['bar']['text'] == '기록 중단 · 저장 안 됨 · Pixel 8'
               and (s['error'] or '').startswith('버전이 다른 adb가 함께 실행되어'), {'bar': s['bar'], 'error': s['error']})
+        check('a capture that failed does not offer to record on', not s['bar']['stop'], s['bar'])
         app.capture('10-failed')
         app.click('largeClose')
         until(lambda v: v['dialog'], 'asked about the failed capture')

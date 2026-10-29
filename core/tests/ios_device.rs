@@ -94,6 +94,62 @@ fn iphone_rows_from_the_start_on_are_recorded_as_ios_rows() {
 }
 
 #[test]
+#[ignore = "needs a trusted iPhone or iPad"]
+fn a_stopped_iphone_capture_records_on_from_its_resume() {
+    let link = Arc::new(IosLink::default());
+    let serial = udid(&link);
+    let dir = tempfile::tempdir().unwrap();
+    let slot = Store::new(dir.path())
+        .create(Platform::Ios, "iPhone")
+        .unwrap();
+    let capture = Capture::start(link, &serial, slot, Options::default()).unwrap();
+    thread::sleep(Duration::from_secs(3));
+    capture.stop();
+    let stopped = chrono::Local::now();
+    let before = capture.rows();
+    thread::sleep(Duration::from_secs(3));
+    let resumed = chrono::Local::now();
+    let at = Instant::now();
+    capture.resume().unwrap();
+    let took = at.elapsed();
+    assert_eq!(capture.phase(), Phase::Recording);
+    thread::sleep(Duration::from_secs(3));
+    capture.stop();
+    let breaks = capture.breaks();
+    assert_eq!(breaks.len(), 1);
+    assert!(breaks[0].stopped && breaks[0].gap);
+    // A row cut by the stop ends before the rows after the resume.
+    assert!(breaks[0].row == before + 1 || breaks[0].row == before + 2);
+    let text = String::from_utf8_lossy(&std::fs::read(capture.path()).unwrap()).into_owned();
+    check_rows(&text);
+    // Rows logged while stopped never come; the device clock may differ a
+    // little from this computer's.
+    let time = |t: chrono::DateTime<chrono::Local>| t.format("%Y-%m-%d %H:%M:%S%.6f").to_string();
+    let lines: Vec<&str> = text.lines().collect();
+    let first = lines[breaks[0].row as usize - 1];
+    let last = lines[..breaks[0].row as usize - 1]
+        .iter()
+        .rev()
+        .find(|l| parse_line(l, 1, false).parsed.is_some())
+        .unwrap();
+    assert!(
+        first[..26] >= time(resumed - chrono::Duration::seconds(1))[..],
+        "{first}"
+    );
+    assert!(
+        last[..26] <= time(stopped + chrono::Duration::seconds(1))[..],
+        "{last}"
+    );
+    println!(
+        "{} rows before the stop, {} after; resumed in {} ms; first row after: {}",
+        breaks[0].row - 1,
+        capture.rows() + 1 - breaks[0].row,
+        took.as_millis(),
+        &first[..26]
+    );
+}
+
+#[test]
 #[ignore = "needs a trusted iPhone or iPad and a person to unplug it"]
 fn an_unplugged_iphone_is_waited_for_and_continued() {
     let link = Arc::new(IosLink::default());
