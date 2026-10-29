@@ -31,6 +31,19 @@ if(!r)return false;v.scrollTop+=r.getBoundingClientRect().top-v.getBoundingClien
 # Brings the logs pane to its end: a hidden window runs no animation frames,
 # so following does not keep up with rows after the pane was resized.
 AT_END = "const v=document.getElementById('logsViewport');v.scrollTop=v.scrollHeight;v.dispatchEvent(new Event('scroll'));return true;"
+# The top of the logs row with line arguments[0].
+ROW_TOP = "const r=document.querySelector(`#logsRows [data-line-number=\"${arguments[0]}\"]`);return r?Math.round(r.getBoundingClientRect().top):null"
+# Whether the row menu is open with focus, and beside the row with line
+# arguments[0]: the row's middle lies within the menu's height.
+OPEN = ("const m=document.getElementById('rowMenu'),r=document.querySelector(`#logsRows [data-line-number=\"${arguments[0]}\"]`)?.getBoundingClientRect(),b=m.getBoundingClientRect();"
+        "return {open:!m.hidden,label:m.getAttribute('aria-label'),focus:m.contains(document.activeElement),beside:!!r&&b.top<=r.top+r.height/2+1&&r.top+r.height/2<=b.bottom+1}")
+# The selected logs row's line.
+SELECTED = "return document.querySelector('#logsRows .selected-log-row')?.dataset.lineNumber??null"
+# The line of the second-to-last logs row drawn.
+NEAR_END = "const r=[...document.querySelectorAll('#logsRows .log-row')];return r.length>3&&Number(r.at(-2).dataset.lineNumber)"
+# The last row's line while the logs pane shows its end, else false.
+END = ("const v=document.getElementById('logsViewport'),r=[...document.querySelectorAll('#logsRows .log-row')].at(-1);"
+       "return !!r&&r.getBoundingClientRect().bottom<=v.getBoundingClientRect().bottom+1&&Number(r.dataset.lineNumber)")
 # Whether the capture state's words end in an ellipsis instead of spilling
 # onto the file name beside them.
 FITS = """const t=document.getElementById('captureText'),info=document.querySelector('.file-info'),s=document.getElementById('captureState');
@@ -101,6 +114,65 @@ def run(ctx):
         check('a capture records the device rows and follows them', s['bar']['text'] == '기록 중 · 저장 안 됨 · Pixel 8' and s['bar']['stop'], s['bar'])
         check('unsaved rows make saving the main action', s['bar']['save'] and not s['open'], {'save': s['bar']['save'], 'open': s['open']})
         app.capture('05-recording', hover='captureStop')
+
+        # A row's menu stays open while rows arrive, and the followed log
+        # holds still so the row stays beside it; closing the menu follows
+        # the end again. The scroll event a list sends when it moves itself
+        # is sent while the menu is open, and must not close it.
+        js(AT_END)
+        app.wait(lambda: js("const v=document.getElementById('logsViewport');return v.scrollHeight>v.clientHeight+3*28"), what='rows past the pane')
+        js(AT_END)
+        line = app.wait(lambda: js(NEAR_END), what='rows shown')
+        app.click_row(line, event='contextmenu')
+        menu(lambda v: '행 원문 복사' in v, 'row menu while recording')
+        # The press opens the raw detail, which shifts the row up; the menu
+        # moves with it.
+        app.wait(lambda: not app.hidden('largeDetail'), what='raw detail')
+
+        def steady(script, *args):
+            first = js(script, *args)
+            time.sleep(.2)
+            return first if first is not None and first == js(script, *args) else None
+        top = app.wait(lambda: steady(ROW_TOP, line), what='row settled')
+        count = st()['count']
+        until(lambda v: v['count'] != count, 'rows arrive under the menu')
+        time.sleep(.4)
+        js("document.getElementById('logsViewport').dispatchEvent(new Event('scroll'));return true;")
+        held = js(OPEN, line)
+        check('a row menu stays open while a capture adds rows, its row held still beside it',
+              held == {'open': True, 'label': '행 작업', 'focus': True, 'beside': True} and js(ROW_TOP, line) == top, {'menu': held, 'top': [top, js(ROW_TOP, line)]})
+        app.capture('05b-row-menu-recording')
+        # Right-clicking another row opens its menu there: the list does not
+        # move under the press that closed the first menu.
+        other = line - 3
+        other_top = js(ROW_TOP, other)
+        app.click_row(other, event='contextmenu')
+        time.sleep(.3)
+        moved = {**js(OPEN, other), 'top': js(ROW_TOP, other), 'selected': js(SELECTED)}
+        check('right-clicking another row under an open row menu opens its menu on that row, the list still held',
+              moved == {'open': True, 'label': '행 작업', 'focus': True, 'beside': True, 'top': other_top, 'selected': str(other)}, {'was': other_top, 'now': moved})
+        app.key('Escape')
+        last = app.wait(lambda: js(END), what='end after the menu')
+        count = st()['count']
+        until(lambda v: v['count'] != count, 'more rows')
+        time.sleep(.4)
+        check('closing the row menu follows the end again', js(END) and js(END) > last, {'last': last, 'now': js(END)})
+        # Scrolling the list closes the menu and leaves the list where it
+        # was scrolled to.
+        line = app.wait(lambda: js(NEAR_END), what='rows shown')
+        app.click_row(line, event='contextmenu')
+        menu(lambda v: '행 원문 복사' in v, 'row menu again')
+        js("const v=document.getElementById('logsViewport');v.scrollTop-=56;v.dispatchEvent(new Event('scroll'));return true;")
+        gone = app.wait(lambda: js("return document.getElementById('rowMenu').hidden"), what='menu closed by scrolling')
+        count = st()['count']
+        until(lambda v: v['count'] != count, 'rows after scrolling')
+        time.sleep(.4)
+        check('scrolling the list closes its row menu and the list stays where it was scrolled', gone and not js(END), {'closed': gone, 'end': js(END)})
+        # Later steps start from a followed log with no detail or selection.
+        app.key('Escape', target='logsViewport')
+        app.wait(lambda: app.hidden('largeDetail'), what='raw detail closed')
+        app.key('Escape', target='logsViewport')
+        js(AT_END)
 
         # The device menu opens with "looking…" and fills in; Escape still
         # returns focus to the button that opened it.

@@ -31,9 +31,9 @@ class Element {
 function rig() {
   const document = {activeElement:null, listeners:{}, createElement(tag) {return new Element(document, tag);}, addEventListener(key, fn) {this.listeners[key] = fn;}};
   const window = {innerWidth:800, innerHeight:600, addEventListener() {}};
-  const menu = new Element(document), opener = new Element(document, 'button'), list = new Element(document);
+  const menu = new Element(document), opener = new Element(document, 'button');
   opener.focus();
-  return {document, menu, opener, list, popup:createPopupMenu({menu, document, window, scrollers:[list]})};
+  return {document, menu, opener, popup:createPopupMenu({menu, document, window})};
 }
 
 test('notes are plain text, a checked choice is a radio item focused first', () => {
@@ -112,17 +112,60 @@ test('a menu shown again while open keeps focus on the item of the same key', ()
   assert.equal(r.document.activeElement, r.opener);
 });
 
-test('a list that scrolls closes a menu on its rows, not one from a button', () => {
+test('a list the user scrolls closes a menu on its rows, not one from a button', () => {
   const r = rig();
-  // A followed log scrolls as rows arrive; the device and app menus stay.
   r.popup.show([['Pixel 8', () => {}]], 10, 20, '기기 로그');
-  r.list.fire('scroll');
+  r.popup.moved();
   assert.equal(r.menu.hidden, false);
   r.popup.show([['복사', () => {}]], 10, 20, '행 작업', {onList:true});
-  r.list.fire('scroll');
+  r.popup.moved();
   assert.equal(r.menu.hidden, true);
+  assert.equal(r.document.activeElement, r.opener, 'focus goes back to the list it was opened on');
   // The next menu from a button stays again.
   r.popup.show([['Pixel 8', () => {}]], 10, 20, '기기 로그');
-  r.list.fire('scroll');
+  r.popup.moved();
   assert.equal(r.menu.hidden, false);
+});
+
+test('focus moving out of the menu closes it, as a shortcut to the search box does', () => {
+  const r = rig(), search = new Element(r.document, 'input');
+  r.popup.show([['복사', () => {}]], 0, 0, '행 작업', {onList:true});
+  r.document.listeners.focusin({target:r.menu.children[0]});
+  assert.equal(r.menu.hidden, false, 'focus inside keeps it');
+  search.focus();
+  r.document.listeners.focusin({target:search});
+  assert.equal(r.menu.hidden, true);
+  assert.equal(r.document.activeElement, search, 'focus stays where it went');
+});
+
+test('onClose runs once when the menu closes or is replaced, after a chosen item acts', () => {
+  const r = rig(), heard = [];
+  const open = name => r.popup.show([['복사', () => heard.push('copied')]], 0, 0, '행 작업', {onList:true, onClose:press => heard.push(press ? `${name}:${press.type}` : name)});
+  open('chosen');
+  r.menu.children[0].click();
+  open('escape');
+  r.menu.fire('keydown', {key:'Escape'});
+  // An outside press is passed on, so the owner can wait for it to end.
+  open('outside');
+  r.document.listeners.pointerdown({type:'pointerdown', target:r.opener});
+  open('scrolled');
+  r.popup.moved();
+  // A menu shown in its place is a new menu; a later close tells only it.
+  open('replaced');
+  open('closed');
+  r.popup.close();
+  r.popup.close();
+  assert.deepEqual(heard, ['copied', 'chosen', 'escape', 'outside:pointerdown', 'scrolled', 'replaced', 'closed']);
+});
+
+test('an open menu moves with what it was opened on, inside the window', () => {
+  const r = rig();
+  r.popup.show([['복사', () => {}]], 10, 100, '행 작업', {onList:true});
+  r.popup.moveBy(-60);
+  assert.equal(r.menu.style.top, '40px');
+  r.popup.moveBy(-60);
+  assert.equal(r.menu.style.top, '4px', 'it stays inside the window');
+  r.popup.close();
+  r.popup.moveBy(30);
+  assert.equal(r.menu.style.top, '4px', 'a closed menu stays put');
 });

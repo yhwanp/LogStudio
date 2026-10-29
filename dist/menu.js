@@ -6,19 +6,30 @@
 // after a label that may be cut, `note` a second line, `key` what names the
 // item when the menu is shown again while open (its focus stays there), and
 // `group` a note that heads the items after it. Escape restores focus to the
-// opener, which a menu shown again while open keeps; Tab, outside presses
-// and window blur/resize close it. A menu opened on a list (`onList`: its
-// rows or headers) also closes when a list scrolls; one from a button stays
-// while a followed log scrolls under it.
-export function createPopupMenu({menu, document, window, scrollers = []}) {
-  let opener = null, notes = 0, onList = false;
-  function close(restore = false) {
+// opener, which a menu shown again while open keeps; Tab, focus moving
+// elsewhere, outside presses and window blur/resize close it. A menu opened
+// on a list (`onList`: its rows or headers) also closes when the user
+// scrolls a list (`moved`), and focus returns to its opener; rows added to a
+// followed log close no menu. `onClose(press)` runs once when the menu
+// closes or another menu replaces it, after a chosen item's action, and gets
+// the outside press that closed it, if one did. `moveBy` moves an open menu
+// along with the row it was opened on.
+export function createPopupMenu({menu, document, window}) {
+  let opener = null, notes = 0, onList = false, onClose = null, at = null;
+  function close(restore = false, press = null) {
     if (menu.hidden) return;
+    const told = take();
     menu.hidden = true;
     menu.replaceChildren();
     menu.removeAttribute('aria-describedby');
     if (restore) opener?.focus({preventScroll:true});
     opener = null;
+    told?.(press);
+  }
+  function take() {
+    const told = onClose;
+    onClose = null;
+    return told;
   }
   function text(tag, className, words) {
     const element = document.createElement(tag);
@@ -65,16 +76,32 @@ export function createPopupMenu({menu, document, window, scrollers = []}) {
       button.setAttribute('aria-disabled', 'true');
     } else {
       button.addEventListener('click', () => {
+        const told = take();
         close(true);
-        action();
+        try {
+          action();
+        } finally {
+          told?.(null);
+        }
       });
     }
     return button;
   }
+  // Keeps the menu inside the window.
+  function place(x, y) {
+    at = {x, y};
+    const box = menu.getBoundingClientRect(), width = window.innerWidth || 0, height = window.innerHeight || 0;
+    menu.style.left = `${Math.max(4, width ? Math.min(x, width - box.width - 4) : x)}px`;
+    menu.style.top = `${Math.max(4, height ? Math.min(y, height - box.height - 4) : y)}px`;
+  }
+  function moveBy(dy) {if (!menu.hidden && at) place(at.x, at.y + dy);}
   function show(items, x, y, label, options = {}) {
     const again = !menu.hidden, focused = menu.contains(document.activeElement) ? document.activeElement.dataset?.key : undefined;
     onList = options.onList === true;
     if (!again) opener = document.activeElement;
+    // A menu shown again in place of another is a new one to its owner.
+    take()?.(null);
+    onClose = options.onClose ?? null;
     menu.setAttribute('aria-label', label);
     menu.replaceChildren(...items.map(entry));
     // Notes say what the items cannot: why a device is missing, for one.
@@ -82,10 +109,7 @@ export function createPopupMenu({menu, document, window, scrollers = []}) {
     if (described) menu.setAttribute('aria-describedby', described);
     else menu.removeAttribute('aria-describedby');
     menu.hidden = false;
-    // Keep the menu inside the window.
-    const box = menu.getBoundingClientRect(), width = window.innerWidth || 0, height = window.innerHeight || 0;
-    menu.style.left = `${Math.max(4, width ? Math.min(x, width - box.width - 4) : x)}px`;
-    menu.style.top = `${Math.max(4, height ? Math.min(y, height - box.height - 4) : y)}px`;
+    place(x, y);
     // A menu of notes only takes focus itself, so Escape still closes it.
     const kept = again && focused ? [...menu.querySelectorAll('[role^=menuitem]')].find(item => item.dataset.key === focused) : null;
     const first = kept
@@ -117,11 +141,14 @@ export function createPopupMenu({menu, document, window, scrollers = []}) {
     }
   });
   document.addEventListener('pointerdown', event => {
-    if (!menu.hidden && !menu.contains(event.target)) close(false);
+    if (!menu.hidden && !menu.contains(event.target)) close(false, event);
   }, true);
+  document.addEventListener('focusin', event => {
+    if (!menu.hidden && !menu.contains(event.target)) close(false);
+  });
   window.addEventListener('blur', () => close(false));
   window.addEventListener('resize', () => close(false));
-  for (const scroller of scrollers) scroller.addEventListener('scroll', () => {if (onList) close(false);});
+  function moved() {if (onList) close(true);}
   // The element focused when the open menu was shown.
-  return {show, close, opener: () => opener};
+  return {show, close, moved, moveBy, opener: () => opener};
 }

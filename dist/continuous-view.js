@@ -32,11 +32,15 @@ export class ScrollPosition {
 
 const MOVE_HINT='. 스크롤하거나 Home/End/PageUp/PageDown으로 이동';
 // `onUserMove` hears of the user scrolling the list (wheel, scrollbar or
-// keys), as opposed to the list moving itself.
+// keys), as opposed to the list moving itself. `hold()` keeps a followed
+// list still while a menu on its rows is open, so the row stays by the menu,
+// and returns its release. The last release takes the list back to the end
+// it followed, unless the list was moved on purpose meanwhile (by the user,
+// a selection or a locate) or shows another query now.
 export function createContinuousViewport({viewport,rowsElement,document,window,fetchRows,paint,onVisible=()=>{},onError=()=>{},onSelect=()=>{},onUserMove=()=>{}}) {
   const model=new ScrollPosition(),cache=new Map();let bytes=0,epoch=0,key=null,state=null;
   let flight=null,blocked=null,viewVersion=0,scrollRevision=null,pendingAnchor=null,disposed=false;
-  let lastPaint=null,lastProgrammatic=0;
+  let lastPaint=null,lastProgrammatic=0,holds=0,heldKey=null,heldEnd=false,sticky=false;
   let selectionIndex=null,pendingSelection=null,pendingRepeat=false,pendingExtend=false,lastSelectedLine=null;
   const space=document.createElement('div');space.className='continuous-space';space.append(rowsElement);viewport.replaceChildren(space);
   // The page names each pane; only how to move through it is added here.
@@ -106,10 +110,12 @@ export function createContinuousViewport({viewport,rowsElement,document,window,f
     }).finally(()=>{if(flight===job)flight=null;if(!disposed)pump();});
   }
   function changed(){viewVersion++;blocked=null;render();pump();}
-  function onScroll(){if(disposed)return;const moved=Math.abs(viewport.scrollTop-lastProgrammatic)>.01;if(moved)model.native(viewport.scrollTop);lastProgrammatic=viewport.scrollTop;changed();if(moved)onUserMove();}
+  const held=()=>holds>0&&heldKey===key;
+  function userMoved(){heldEnd=false;onUserMove();}
+  function onScroll(){if(disposed)return;const moved=Math.abs(viewport.scrollTop-lastProgrammatic)>.01;if(moved)model.native(viewport.scrollTop);lastProgrammatic=viewport.scrollTop;changed();if(moved)userMoved();}
   function onWheel(event){
     if(!model.scaled||event.ctrlKey||event.shiftKey||!event.deltaY)return;
-    event.preventDefault();model.move(event.deltaY*(event.deltaMode===1?ROW_HEIGHT:event.deltaMode===2?model.height:1));sync();changed();onUserMove();
+    event.preventDefault();model.move(event.deltaY*(event.deltaMode===1?ROW_HEIGHT:event.deltaMode===2?model.height:1));sync();changed();userMoved();
   }
   function onKey(event){
     if(event.defaultPrevented||event.altKey||event.ctrlKey||event.metaKey||event.target?.isContentEditable||event.target?.closest?.('input,textarea,select,button,[contenteditable]:not([contenteditable="false"])'))return;
@@ -122,7 +128,7 @@ export function createContinuousViewport({viewport,rowsElement,document,window,f
     if(delta!==undefined){event.preventDefault();model.move(delta);}
     else if(event.key==='Home'||event.key==='End'){event.preventDefault();model.jump(event.key==='Home'?0:Math.max(0,model.count-1));}
     else return;
-    sync();changed();onUserMove();
+    sync();changed();userMoved();
   }
   // Selection travels in displayed ordinal order, including uncached rows. A
   // held key replaces the pending ordinal; page replies publish only the latest.
@@ -132,8 +138,10 @@ export function createContinuousViewport({viewport,rowsElement,document,window,f
     index=clamp(index,0,model.count-1);
     if(!force&&index===selectionIndex&&pendingSelection===null)return;
     selectionIndex=index;pendingSelection=index;pendingRepeat=repeat;pendingExtend=extend;
+    const before=model.position;
     if(index*ROW_HEIGHT<model.position)model.position=index*ROW_HEIGHT;
     else if((index+1)*ROW_HEIGHT>model.position+model.height)model.position=Math.min(model.maximum,(index+1)*ROW_HEIGHT-model.height);
+    if(model.position!==before)heldEnd=false;
     sync();changed();
   }
   function resize(){if(disposed)return;dimensions();sync();changed();}
@@ -153,11 +161,12 @@ export function createContinuousViewport({viewport,rowsElement,document,window,f
   viewport.addEventListener('scroll',onScroll);viewport.addEventListener('wheel',onWheel,{passive:false});viewport.addEventListener('keydown',onKey);
   const observer=window.ResizeObserver?new window.ResizeObserver(resize):null;observer?.observe(viewport);window.addEventListener('resize',resize);
   // `stick` keeps the end in view while rows arrive (a followed file), as
-  // long as the end was in view; selection and focus stay where they are.
+  // long as the end was in view and the list is not held; selection and
+  // focus stay where they are.
   function update(next,{force=false,stick=false}={}) {
-    state=next;
+    state=next;sticky=stick;
     const identity=next.closed?null:`${next.datasetId}:${next.generation}:${next.queryId}`;
-    const atEnd=stick&&identity===key&&pendingAnchor===null&&pendingSelection===null&&model.position>=model.maximum;
+    const atEnd=stick&&!held()&&identity===key&&pendingAnchor===null&&pendingSelection===null&&model.position>=model.maximum;
     if(identity!==key){key=identity;epoch++;clear();model.position=0;scrollRevision=null;pendingAnchor=null;selectionIndex=pendingSelection=lastSelectedLine=null;}
     dimensions();
     if(atEnd&&scrollRevision===next.scrollRevision)model.position=model.maximum;
@@ -176,13 +185,24 @@ export function createContinuousViewport({viewport,rowsElement,document,window,f
     if(pendingAnchor!==null&&(model.count>pendingAnchor||next.queryComplete||next.queryStatus==='cancelled')){
       // `offset` rows stay above the anchor, as many as fit above its row.
       const rows=Math.floor(model.height/ROW_HEIGHT),above=next.scrollAlign==='center'?Math.floor(rows/2):next.scrollAlign==='offset'?Math.min(next.scrollOffset|0,Math.max(0,rows-1)):0;
-      model.jump(Math.max(0,pendingAnchor-above));pendingAnchor=null;
+      model.jump(Math.max(0,pendingAnchor-above));pendingAnchor=null;heldEnd=false;
     }
     sync();render(force);pump();
   }
-  function scrollToEnd(){if(disposed)return;model.position=model.maximum;sync();changed();}
+  function scrollToEnd(){if(disposed)return;model.position=model.maximum;heldEnd=true;sync();changed();}
+  function hold(){
+    if(disposed)return ()=>{};
+    if(!holds++||heldKey!==key){heldKey=key;heldEnd=sticky&&model.position>=model.maximum;}
+    let done=false;
+    return ()=>{
+      if(done)return;done=true;
+      if(--holds||disposed)return;
+      const back=heldEnd&&sticky&&heldKey===key;heldKey=null;
+      if(back)scrollToEnd();
+    };
+  }
   // A drag past the list's edge scrolls by logical pixels, as the wheel does.
-  function scrollBy(delta){if(disposed||!model.count||!Number.isFinite(delta))return;model.move(delta);sync();changed();}
+  function scrollBy(delta){if(disposed||!model.count||!Number.isFinite(delta))return;model.move(delta);heldEnd=false;sync();changed();}
   // The row at a client y inside the viewport, kept to the rows in view.
   function indexAt(clientY){
     const box=viewport.getBoundingClientRect?.();
@@ -192,5 +212,5 @@ export function createContinuousViewport({viewport,rowsElement,document,window,f
   function destroy(){disposed=true;epoch++;clear();observer?.disconnect();viewport.removeEventListener?.('scroll',onScroll);viewport.removeEventListener?.('wheel',onWheel);viewport.removeEventListener?.('keydown',onKey);window.removeEventListener?.('resize',resize);}
   // Rows for a copy are taken from the cache only when every one is present.
   function cachedRows(start,end){const rows=[];for(let i=start;i<=end;i++){const row=cache.get(i)?.row;if(!row)return null;rows.push(row);}return rows;}
-  return {update,destroy,selectIndex,cachedRows,refresh,scrollToEnd,scrollBy,indexAt,metrics:()=>({selectionIndex,pendingSelection,logicalPosition:model.position,first:model.first,last:model.last,count:model.count,scrollHeight:model.extent,cachedRows:cache.size,cachedBytes:bytes,renderedRows:lastPaint?.entries.length??0,pending:!!flight})};
+  return {update,destroy,selectIndex,cachedRows,refresh,scrollToEnd,hold,scrollBy,indexAt,metrics:()=>({selectionIndex,pendingSelection,logicalPosition:model.position,first:model.first,last:model.last,count:model.count,scrollHeight:model.extent,cachedRows:cache.size,cachedBytes:bytes,renderedRows:lastPaint?.entries.length??0,pending:!!flight})};
 }
