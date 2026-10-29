@@ -8,7 +8,7 @@
 // file by an ID. A capture's rows are a temporary file until the user saves
 // them; clearing them records into a new file from then on.
 import {formatSize, describeLogError} from './describe.js';
-import {textSpan, writeClipboard} from './dom.js';
+import {textSpan, writeClipboard, focusOwner} from './dom.js';
 
 const ORIGINS = {chosen:'직접 지정', sdk:'ANDROID_HOME', studio:'Android Studio', path:'PATH', homebrew:'Homebrew'};
 const pad = n => String(n).padStart(2, '0');
@@ -260,7 +260,7 @@ export function mountCaptureDialog({document = globalThis.document} = {}) {
     answer?.('cancel');
     note.textContent = text;
     if (!dialog.open) {
-      opener = document.activeElement;
+      opener = focusOwner(document);
       dialog.showModal();
     }
     save.focus({preventScroll:true});
@@ -323,12 +323,13 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
   let adb = null, busy = false, saving = false, clearing = false, clearedAt = -Infinity, launchError = '';
 
   // The device menu opens at once and fills in when adb and the devices
-  // answer.
-  let menuAt = null, menuSequence = 0;
+  // answer. `shownMenu` is the version of the menu this module last showed:
+  // a late answer replaces only that menu, never one opened since.
+  let menuAt = null, menuSequence = 0, shownMenu = null, appMenu = null;
   function showMenu(content) {
     if (!menuAt) return;
     const actions = {refresh:() => void openMenu(menuAt.anchor), pick, help:openHelp, appleHelp:openAppleHelp, start};
-    menu.show(deviceMenuItems({adb, ...content}, actions), menuAt.x, menuAt.y, '기기 로그');
+    shownMenu = menu.show(deviceMenuItems({adb, ...content}, actions), menuAt.x, menuAt.y, '기기 로그');
   }
   const listing = listed => ({list:listed?.devices, androidError:listed?.androidError, iosError:listed?.iosError});
   // A device that waits on the person (USB debugging, trust, unlocking) is
@@ -340,8 +341,9 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
     const box = anchor.getBoundingClientRect();
     menuAt = {anchor, x:box.left, y:box.bottom + 4};
     const sequence = ++menuSequence;
-    // A newer menu, a closed one or a closed page drops a late answer.
-    const stale = () => sequence !== menuSequence || isGone() || ui.rowMenu.hidden;
+    // A newer menu of either kind, any menu opened since, a closed one or a
+    // closed page drops a late answer and ends the re-listing.
+    const stale = () => sequence !== menuSequence || isGone() || menu.version() !== shownMenu;
     showMenu({loading:true});
     let listed;
     try {
@@ -370,10 +372,10 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
     if (isGone() || !Number.isSafeInteger(datasetId)) return;
     const box = anchor.getBoundingClientRect(), sequence = ++menuSequence;
     menuAt = null;
-    const stale = () => sequence !== menuSequence || isGone() || ui.rowMenu.hidden || logs.getState().datasetId !== datasetId;
+    const stale = () => sequence !== menuSequence || isGone() || menu.version() !== appMenu || logs.getState().datasetId !== datasetId;
     const copyXcode = () => {void writeClipboard(window, XCODE_URL).then(() => notify('Xcode 설치 주소를 복사했습니다. 브라우저에 붙여 넣어 App Store에서 설치해 주세요.'), () => {});};
     const actions = {refresh:() => void openAppMenu(anchor), launch:app => void launch(datasetId, app), copyXcode};
-    const show = content => menu.show(appMenuItems(content, actions), box.left, box.bottom + 4, '앱 실행');
+    const show = content => {appMenu = menu.show(appMenuItems(content, actions), box.left, box.bottom + 4, '앱 실행');};
     show({loading:true});
     try {
       const list = await invoke('capture_apps', {datasetId});
@@ -394,10 +396,12 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
     launchError = '';
     ui.captureAppStatus.textContent = `${name} 앱을 실행하는 중입니다`;
     render();
-    const slow = window.setTimeout(() => {if (shown()) notify(`${name} 앱을 실행하는 중입니다. 기기 잠금이 풀려 있는지 확인해 주세요.`);}, SLOW_LAUNCH_MS);
+    // These notices come on their own, so they wait for a toast offering an
+    // undo instead of taking its place.
+    const slow = window.setTimeout(() => {if (shown()) notify(`${name} 앱을 실행하는 중입니다. 기기 잠금이 풀려 있는지 확인해 주세요.`, null, {wait:true});}, SLOW_LAUNCH_MS);
     try {
       const result = await invoke('launch_capture_app', {datasetId, bundle:app.bundle});
-      if (shown()) notify(`${result?.name || name} 앱을 실행했습니다. 이번 실행의 로그는 <private> 없이 기록합니다.`);
+      if (shown()) notify(`${result?.name || name} 앱을 실행했습니다. 이번 실행의 로그는 <private> 없이 기록합니다.`, null, {wait:true});
     } catch (error) {
       if (shown()) {
         launchError = String(error).slice(0, 500);
@@ -611,6 +615,13 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
   function render(state = logs.getState()) {
     const capture = state.datasetId !== null && !state.closed ? state.capture : null, words = describeCapture(capture);
     const unsaved = !!words && !!capture.unsaved && capture.bytes > 0;
+    // A focused control about to hide hands focus to one that stays. The
+    // app menu goes with its button, or with the bar: its focus goes back
+    // to the button first, to be handed on from there.
+    const handOff = (from, to) => {if (from.contains(document.activeElement)) [...to, ui.deviceButton, ui.openFile].find(button => !button.hidden && !button.disabled)?.focus({preventScroll:true});};
+    const appHidden = !words || !xcode || capture.platform !== 'ios' || capture.state !== 'recording';
+    if (appHidden && menu.version() === appMenu) menu.close(true);
+    if (!words) handOff(ui.captureBar, []);
     ui.captureBar.hidden = !words;
     ui.deviceButton.disabled = busy;
     ui.openFile.classList.toggle('primary', !unsaved);
@@ -624,6 +635,8 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
     }
     ui.captureState.title = words.title;
     const live = capture.state === 'recording' || capture.state === 'waiting';
+    if (!live) for (const button of [ui.captureClear, ui.captureStop]) handOff(button, [ui.captureSave]);
+    if (appHidden) handOff(ui.captureApp, [ui.captureSave]);
     // The bar's buttons keep focus while they cannot act, so they are only
     // marked unavailable, and the trash button says why.
     ui.captureClear.hidden = !live;
@@ -641,7 +654,7 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
     ui.captureStop.setAttribute('aria-disabled', clearing ? 'true' : 'false');
     ui.captureSave.setAttribute('aria-disabled', clearing ? 'true' : 'false');
     // An app starts on an iPhone or iPad only while it is being recorded.
-    ui.captureApp.hidden = !xcode || capture.platform !== 'ios' || capture.state !== 'recording';
+    ui.captureApp.hidden = appHidden;
     ui.captureApp.disabled = busy;
     const launching = starting.get(state.datasetId)?.name ?? '';
     ui.captureApp.setAttribute('aria-disabled', launching ? 'true' : 'false');

@@ -407,6 +407,9 @@ export function createLargeLogController({transport, onChange=()=>{}, onLocate=(
     if(!r.select)return seek(index,{restore:true});
     const detail=state.detail,before=state.selectedLine;
     if(line===null){seek(0,{anchor:r.line});state.anchorOffset=r.offset;return;}
+    // The page that found the row can come before the count that reaches
+    // it, and seek clamps to the count: it rises to the found row first.
+    if(state.count<=index)state.count=index+1;
     seek(index,{selectedLine:line,offset:r.offset,center:r.offset===null,anchor:r.line});state.anchorOffset=r.offset;
     if(detail&&(detail.lineNumber!==line||detail.loading))void loadDetail(line,detail.lineNumber===line?detail.startByte:0);
     if(line!==r.line&&line!==before)onRelocate({lineNumber:r.line,target:line});

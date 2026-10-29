@@ -51,6 +51,9 @@ export function mountLogLayout({document = globalThis.document, window = globalT
   let autoHide = typeof saved?.autoHide === 'boolean' ? saved.autoHide : true;
   let lowerRatio = savedTo(saved?.lowerRatio, LOWER), detailLines = savedTo(saved?.detailLines, DETAIL);
   let open = !autoHide && saved?.open !== false, available = true, rawMode = false, multiFile = false, hideTimer = null, drag = null, timestampFor = null;
+  // Whether a press outside the floating panel is down, and whether its
+  // close is waiting (closeAfterPress).
+  let pressing = false, settling = false;
   // While a tip points into the panel, auto-hide leaves it open.
   let held = false;
   // A combined log adds a file badge to the row column without changing the
@@ -64,6 +67,7 @@ export function mountLogLayout({document = globalThis.document, window = globalT
   function cancelHide() {
     if (hideTimer !== null) window.clearTimeout(hideTimer);
     hideTimer = null;
+    settling = false;
   }
   // Without an open file the filters have nothing to act on: the rail is
   // disabled and the panel shown closed, keeping the saved open preference.
@@ -89,7 +93,7 @@ export function mountLogLayout({document = globalThis.document, window = globalT
   }
   function scheduleHide() {
     cancelHide();
-    if (!autoHide || !shown() || held) return;
+    if (!autoHide || !shown() || held || pressing) return;
     hideTimer = window.setTimeout(() => {
       hideTimer = null;
       // Typing, keyboard navigation and an open select must not be interrupted.
@@ -105,11 +109,41 @@ export function mountLogLayout({document = globalThis.document, window = globalT
   autoHideInput.addEventListener('change', () => {
     cancelHide(); autoHide = autoHideInput.checked; renderPanel(); persist();
   });
+  // A primary press outside closes the floating panel once the press, and
+  // a double-click it may begin, are over: closing moves the log area, which
+  // must not slide under the pointer. The wait is the usual double-click
+  // interval on macOS and Windows. Focus the press moves out waits too. A
+  // release that lands in the panel keeps it, and a context menu, whose
+  // release may never come, ends the press.
+  const PRESS_SETTLE_MS = 500;
+  function closeAfterPress() {
+    cancelHide();
+    if (pressing) return;
+    pressing = true;
+    const ends = ['pointerup', 'pointercancel', 'contextmenu'];
+    const done = event => {
+      for (const name of ends) window.removeEventListener(name, done, true);
+      window.removeEventListener('blur', done);
+      pressing = false;
+      cancelHide();
+      if (event?.type === 'pointerup' && panel.contains(event.target)) return;
+      settling = true;
+      hideTimer = window.setTimeout(() => {
+        hideTimer = null; settling = false;
+        if (autoHide && shown() && !held && !panel.contains(document.activeElement)) setOpen(false);
+      }, PRESS_SETTLE_MS);
+    };
+    for (const name of ends) window.addEventListener(name, done, true);
+    window.addEventListener('blur', done);
+  }
   document.addEventListener('pointerdown', event => {
-    if (autoHide && shown() && !held && !panel.contains(event.target) && !toggle.contains(event.target)) setOpen(false);
+    if (!autoHide || !shown() || held || panel.contains(event.target) || toggle.contains(event.target)) return;
+    // Other buttons close it at once, as before: no double-click follows.
+    if ((event.button ?? 0) !== 0) setOpen(false);
+    else closeAfterPress();
   });
   document.addEventListener('focusin', event => {
-    if (autoHide && shown() && !held && !panel.contains(event.target) && !toggle.contains(event.target)) setOpen(false);
+    if (autoHide && shown() && !held && !pressing && !settling && !panel.contains(event.target) && !toggle.contains(event.target)) setOpen(false);
   });
   // One Escape closes one thing. Popup menus and drags claim it first; the
   // panel takes it while focus is inside it or while it floats (auto-hide).
@@ -348,7 +382,8 @@ export function mountLogLayout({document = globalThis.document, window = globalT
       fill: () => { const all = Math.ceil((height(detailText.firstElementChild) ?? detailText.scrollHeight) / lineHeight() - 0.05); return all > 0 ? all : detailLines; }}),
   ];
   setLower(lowerRatio); setDetail(detailLines);
-  function cancelDrags() { finishDrag(null, true); for (const split of splits) split.cancel(); cancelHide(); }
+  // A blur ends a press outside (closeAfterPress), whose close still comes.
+  function cancelDrags() { finishDrag(null, true); for (const split of splits) split.cancel(); if (!pressing && !settling) cancelHide(); }
   window.addEventListener('blur', cancelDrags);
   window.addEventListener('pagehide', cancelDrags, {once: true});
   renderPanel(); renderHeaders();

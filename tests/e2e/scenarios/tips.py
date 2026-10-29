@@ -89,8 +89,14 @@ def run(ctx):
         app.capture('07-levels-tip')
         app.js(POINTER, '#logsRows .log-row', 'pointerdown')
         time.sleep(.3)
+        pressed = st()
+        # The panel hides once the press, and a double-click it may begin,
+        # are over, so the log area does not move under the pointer.
+        app.js(POINTER, '#logsRows .log-row', 'pointerup')
+        app.wait(lambda: not st()['panelOpen'], what='panel hidden after the press')
         s = st()
-        check('a press outside dismisses the tip and then hides the panel as before', not s['open'] and not s['panelOpen'] and 'levels' in s['stored']['seen'], s)
+        check('a press outside dismisses the tip at once and hides the panel once the press is over',
+              not pressed['open'] and pressed['panelOpen'] and not s['open'] and not s['panelOpen'] and 'levels' in s['stored']['seen'], {'pressed': pressed, 'after': s})
 
         app.type('searchInput', 'WIFI')
         app.wait(lambda: app.text('largeCount') not in ('0', ''), what='search results')

@@ -5,6 +5,7 @@ import {mountLargeLogView} from '../dist/large-view.js';
 import {desktopTransport} from '../dist/desktop.js';
 import {createLargeLogController} from '../dist/controller.js';
 import {createContinuousViewport, ROW_HEIGHT} from '../dist/continuous-view.js';
+import {rowGestures} from '../dist/row-gestures.js';
 import {describeLargeProgress, describeFollowError} from '../dist/describe.js';
 
 async function settle(){for(let i=0;i<10;i++)await nextTurn();}
@@ -65,6 +66,8 @@ test('the follow toggle shows only for a followable file and turns following on 
   assert.deepEqual(r.requests.filter(b=>b.action==='follow').map(b=>[b.follow,b.datasetId]),[[true,1]]);
   assert.equal(button.attributes['aria-pressed'],'true');
   assert.equal(r.get('largeStatus').textContent,'파일 6행 · 따라가는 중');
+  // Screen readers hear the change, not the row count that keeps growing.
+  assert.equal(r.get('largeStatusNote').textContent,'따라가는 중');
   // Results are partial while rows can still arrive: no export, no final count.
   assert.equal(r.get('exportLogs').disabled,true);assert.match(r.get('exportLogs').title,/따라가기를 끄면/);
   assert.match(r.get('logsCount').textContent,/현재까지 6건/);
@@ -83,6 +86,7 @@ test('arriving rows grow the followed list and a replaced last row is read again
   const pages=()=>r.requests.filter(b=>b.action==='page').length;
   r.engine.total=9;await r.poll();
   assert.equal(r.controller.logs.getState().count,9);
+  assert.equal(r.get('largeStatusNote').textContent,'따라가는 중','arriving rows say nothing new');
   const before=pages();
   r.engine.tailRevision=1;r.engine.total=8;await r.poll();
   // A replaced row may leave one result fewer; shown rows are read again.
@@ -111,6 +115,12 @@ test('following status text separates waiting for rows from searching',()=>{
   // Rows appended while not following are announced, not read.
   assert.equal(describeLargeProgress({...base,summaryComplete:true,grown:true}).status,'파일 12행 · 새 줄 있음');
   assert.equal(describeLargeProgress({...base,following:true,caughtUp:true,grown:true}).status,'파일 12행 · 따라가는 중');
+  // A screen reader hears reading start and end, not each percent, and no
+  // row count while following.
+  assert.equal(describeLargeProgress({...base,textComplete:false,indexedBytes:40}).status,'파일 읽는 중 40%');
+  assert.equal(describeLargeProgress({...base,textComplete:false,indexedBytes:40}).note,'파일 읽는 중');
+  assert.equal(describeLargeProgress({...base,summaryComplete:true},{omitDuplicateFileCount:true}).note,'파일 12행','even where the count is shown elsewhere');
+  assert.equal(describeLargeProgress({...base,following:true,caughtUp:true}).note,'따라가는 중');
   assert.match(describeFollowError('A physical line exceeds 1 MiB'),/^추가된 줄이 1 MiB를 넘어 따라가기를 멈췄습니다/);
   assert.match(describeFollowError('Following stopped at 8 GiB'),/8 GiB/);
   assert.equal(describeFollowError(''),'');
@@ -215,6 +225,54 @@ test('a held followed list stays still as rows arrive and goes back to the end w
   release();assert.equal(view.metrics().last,40);
   assert.deepEqual(moves,[10],'the list moving itself is never the user');
   view.destroy();
+});
+
+test('a followed list keeps following when it gets shorter, as when the raw detail opens',async()=>{
+  const viewport=new Element(),rowsElement=new Element();viewport.listeners=new Map();
+  viewport.addEventListener=(n,f)=>viewport.listeners.set(n,f);viewport.removeEventListener=n=>viewport.listeners.delete(n);
+  let resized=null;const window={addEventListener:(n,f)=>{if(n==='resize')resized=f;},removeEventListener(){}};
+  const view=createContinuousViewport({viewport,rowsElement,document:{createElement:()=>new Element()},window,fetchRows:async start=>({start,rows:[]}),paint(){}});
+  const state=(count,extra={})=>({datasetId:1,queryId:1,count,viewportStart:0,scrollRevision:0,queryComplete:false,queryStatus:'running',closed:false,selectedLine:null,...extra});
+  view.update(state(5),{stick:true});view.update(state(50),{stick:true});
+  // The pane is measured before the next rows: it shows the end at once.
+  viewport.clientHeight=200;resized();
+  assert.equal(view.metrics().last,50);
+  view.update(state(60),{stick:true});assert.equal(view.metrics().last,60,'and keeps following');
+  // A list not at its end keeps its place.
+  viewport.scrollTop=0;viewport.listeners.get('scroll')();
+  viewport.clientHeight=120;resized();assert.equal(view.metrics().first,0);
+  view.update(state(70),{stick:true});assert.equal(view.metrics().first,0);
+  // A release with `stay` (a selection made under the hold) stays put.
+  view.scrollToEnd();const at=view.metrics().first,release=view.hold();view.update(state(80),{stick:true});
+  release({stay:true});assert.equal(view.metrics().first,at);
+  view.update(state(90),{stick:true});assert.equal(view.metrics().first,at);
+  // It stays even when no row came during the hold, the list still at its
+  // end, until the user takes it back to the end.
+  view.scrollToEnd();const end=view.metrics().first,again=view.hold();
+  again({stay:true});view.update(state(100),{stick:true});assert.equal(view.metrics().first,end,'the selection stays in view');
+  // Nor does a click there take it back, the list still at its end.
+  view.scrollToEnd();view.hold()({stay:true});const kept=view.metrics().first;
+  view.hold()();view.update(state(110),{stick:true});assert.equal(view.metrics().first,kept,'a later click does not take it back');
+  viewport.listeners.get('keydown')({key:'End',preventDefault(){},target:viewport});
+  view.update(state(120),{stick:true});assert.equal(view.metrics().last,120,'End follows again');
+  view.destroy();
+});
+
+test('a row press holds the list for its length and lets go after its click',()=>{
+  const list=new Element(),timers=[],held=[];list.getBoundingClientRect=()=>({top:0,bottom:280});
+  const windowListeners=new Map(),window={addEventListener:(n,f)=>windowListeners.set(n,f),removeEventListener:n=>windowListeners.delete(n),setTimeout:fn=>{timers.push(fn);return timers.length;},clearTimeout(){}};
+  const gestures=rowGestures({list,document:{},window,mac:true,indexAt:()=>0,scroll(){},isTextRow:()=>false,press:()=>true,grab:()=>true,drag(){},
+    hold:()=>{held.push('held');return ()=>held.push('let go');}});
+  assert.equal(gestures.down({button:0,detail:1,clientY:10,preventDefault(){}},0),true);
+  assert.deepEqual(held,['held']);
+  windowListeners.get('pointerup')({type:'pointerup',clientY:10,buttons:0});
+  assert.deepEqual(held,['held'],'the click after the release still finds the rows where they were');
+  for(const fn of timers.splice(0))fn();
+  assert.deepEqual(held,['held','let go']);
+  // A tap's mousedown comes after its pointerup: it must hold nothing.
+  list.listeners.pointerdown[0]({pointerId:2,pointerType:'touch'});
+  gestures.down({button:0,detail:1,clientY:10,preventDefault(){}},0);
+  assert.deepEqual(held,['held','let go'],'a tap holds nothing');
 });
 
 test('a row menu on a followed log stays open while rows arrive, the list held under it',async t=>{

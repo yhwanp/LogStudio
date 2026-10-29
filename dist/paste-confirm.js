@@ -4,6 +4,7 @@
 // or a press on the backdrop keeps the open log. Focus returns to where it
 // was. A paste while the dialog shows replaces what it offers.
 import {formatNumber, formatSize} from './describe.js';
+import {focusOwner} from './dom.js';
 
 // A paste replaces a log that is shown, even one still being read, or one
 // being opened.
@@ -77,7 +78,7 @@ export function mountPasteConfirm({document = globalThis.document} = {}) {
     settle('replaced');
     what.textContent = text; note.textContent = closing;
     if (!dialog.open) {
-      opener = document.activeElement;
+      opener = focusOwner(document);
       if (typeof dialog.showModal === 'function') dialog.showModal(); else dialog.open = true;
     }
     openButton.focus?.({preventScroll: true});

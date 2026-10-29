@@ -33,14 +33,18 @@ export class ScrollPosition {
 const MOVE_HINT='. 스크롤하거나 Home/End/PageUp/PageDown으로 이동';
 // `onUserMove` hears of the user scrolling the list (wheel, scrollbar or
 // keys), as opposed to the list moving itself. `hold()` keeps a followed
-// list still while a menu on its rows is open, so the row stays by the menu,
-// and returns its release. The last release takes the list back to the end
-// it followed, unless the list was moved on purpose meanwhile (by the user,
-// a selection or a locate) or shows another query now.
+// list still while a row is pressed or a row's menu is open, so the row
+// stays under the pointer or by the menu, and returns its release. The last
+// release takes the list back to the end it followed, unless the list was
+// moved on purpose meanwhile (by the user, a selection or a locate) or shows
+// another query now. A release with `stay` leaves the list where it is, even
+// at the end: the user selected rows or text there, or moved to another row
+// from outside the menu. It follows again once the user moves it back to the
+// end, or once it shows another query.
 export function createContinuousViewport({viewport,rowsElement,document,window,fetchRows,paint,onVisible=()=>{},onError=()=>{},onSelect=()=>{},onUserMove=()=>{}}) {
   const model=new ScrollPosition(),cache=new Map();let bytes=0,epoch=0,key=null,state=null;
   let flight=null,blocked=null,viewVersion=0,scrollRevision=null,pendingAnchor=null,disposed=false;
-  let lastPaint=null,lastProgrammatic=0,holds=0,heldKey=null,heldEnd=false,sticky=false;
+  let lastPaint=null,lastProgrammatic=0,holds=0,heldKey=null,heldEnd=false,sticky=false,parked=false;
   let selectionIndex=null,pendingSelection=null,pendingRepeat=false,pendingExtend=false,lastSelectedLine=null;
   const space=document.createElement('div');space.className='continuous-space';space.append(rowsElement);viewport.replaceChildren(space);
   // The page names each pane; only how to move through it is added here.
@@ -62,12 +66,16 @@ export function createContinuousViewport({viewport,rowsElement,document,window,f
     }
   }
   // A list that shrinks (the raw detail opening under it) keeps its selected
-  // row in view when that row was in view.
-  function dimensions(){
+  // row in view when that row was in view. A list following its end stays at
+  // the end instead: the row would scroll away with the next rows anyway.
+  function dimensions({following=false}={}){
     const before=model.height,shown=selectionIndex!==null&&selectionIndex*ROW_HEIGHT>=model.position&&(selectionIndex+1)*ROW_HEIGHT<=model.position+before;
     model.update(state?.closed||!state?.datasetId?0:state?.count??0,viewport.clientHeight||280);space.style.height=`${model.extent}px`;
-    if(shown&&model.height<before&&(selectionIndex+1)*ROW_HEIGHT>model.position+model.height)model.position=Math.min(model.maximum,(selectionIndex+1)*ROW_HEIGHT-model.height);
+    if(following)model.position=model.maximum;
+    else if(shown&&model.height<before&&(selectionIndex+1)*ROW_HEIGHT>model.position+model.height)model.position=Math.min(model.maximum,(selectionIndex+1)*ROW_HEIGHT-model.height);
   }
+  // Whether the list keeps the end in view as rows arrive or it resizes.
+  const stuck=()=>sticky&&!parked&&!held()&&pendingAnchor===null&&pendingSelection===null&&model.position>=model.maximum;
   function sync(){viewport.scrollTop=model.physical;lastProgrammatic=viewport.scrollTop;}
   function render(force=false) {
     const {start,end}=model.range,entries=[];
@@ -111,7 +119,7 @@ export function createContinuousViewport({viewport,rowsElement,document,window,f
   }
   function changed(){viewVersion++;blocked=null;render();pump();}
   const held=()=>holds>0&&heldKey===key;
-  function userMoved(){heldEnd=false;onUserMove();}
+  function userMoved(){heldEnd=false;parked=false;onUserMove();}
   function onScroll(){if(disposed)return;const moved=Math.abs(viewport.scrollTop-lastProgrammatic)>.01;if(moved)model.native(viewport.scrollTop);lastProgrammatic=viewport.scrollTop;changed();if(moved)userMoved();}
   function onWheel(event){
     if(!model.scaled||event.ctrlKey||event.shiftKey||!event.deltaY)return;
@@ -141,10 +149,10 @@ export function createContinuousViewport({viewport,rowsElement,document,window,f
     const before=model.position;
     if(index*ROW_HEIGHT<model.position)model.position=index*ROW_HEIGHT;
     else if((index+1)*ROW_HEIGHT>model.position+model.height)model.position=Math.min(model.maximum,(index+1)*ROW_HEIGHT-model.height);
-    if(model.position!==before)heldEnd=false;
+    if(model.position!==before)heldEnd=parked=false;
     sync();changed();
   }
-  function resize(){if(disposed)return;dimensions();sync();changed();}
+  function resize(){if(disposed)return;dimensions({following:stuck()});sync();changed();}
   // Row annotations changed for the same query: replies in flight are
   // discarded, `strip` maps the kept rows at once (so nothing stale paints),
   // and with `reread` the rows are read again around the current position.
@@ -166,8 +174,8 @@ export function createContinuousViewport({viewport,rowsElement,document,window,f
   function update(next,{force=false,stick=false}={}) {
     state=next;sticky=stick;
     const identity=next.closed?null:`${next.datasetId}:${next.generation}:${next.queryId}`;
-    const atEnd=stick&&!held()&&identity===key&&pendingAnchor===null&&pendingSelection===null&&model.position>=model.maximum;
-    if(identity!==key){key=identity;epoch++;clear();model.position=0;scrollRevision=null;pendingAnchor=null;selectionIndex=pendingSelection=lastSelectedLine=null;}
+    const atEnd=stick&&identity===key&&stuck();
+    if(identity!==key){key=identity;epoch++;clear();parked=false;model.position=0;scrollRevision=null;pendingAnchor=null;selectionIndex=pendingSelection=lastSelectedLine=null;}
     dimensions();
     if(atEnd&&scrollRevision===next.scrollRevision)model.position=model.maximum;
     const anchorMoved=scrollRevision!==next.scrollRevision;
@@ -185,24 +193,25 @@ export function createContinuousViewport({viewport,rowsElement,document,window,f
     if(pendingAnchor!==null&&(model.count>pendingAnchor||next.queryComplete||next.queryStatus==='cancelled')){
       // `offset` rows stay above the anchor, as many as fit above its row.
       const rows=Math.floor(model.height/ROW_HEIGHT),above=next.scrollAlign==='center'?Math.floor(rows/2):next.scrollAlign==='offset'?Math.min(next.scrollOffset|0,Math.max(0,rows-1)):0;
-      model.jump(Math.max(0,pendingAnchor-above));pendingAnchor=null;heldEnd=false;
+      model.jump(Math.max(0,pendingAnchor-above));pendingAnchor=null;heldEnd=parked=false;
     }
     sync();render(force);pump();
   }
-  function scrollToEnd(){if(disposed)return;model.position=model.maximum;heldEnd=true;sync();changed();}
+  function scrollToEnd(){if(disposed)return;model.position=model.maximum;heldEnd=true;parked=false;sync();changed();}
   function hold(){
     if(disposed)return ()=>{};
-    if(!holds++||heldKey!==key){heldKey=key;heldEnd=sticky&&model.position>=model.maximum;}
+    if(!holds++||heldKey!==key){heldKey=key;heldEnd=sticky&&!parked&&model.position>=model.maximum;}
     let done=false;
-    return ()=>{
+    return ({stay=false}={})=>{
       if(done)return;done=true;
+      if(stay){heldEnd=false;parked=true;}
       if(--holds||disposed)return;
       const back=heldEnd&&sticky&&heldKey===key;heldKey=null;
       if(back)scrollToEnd();
     };
   }
   // A drag past the list's edge scrolls by logical pixels, as the wheel does.
-  function scrollBy(delta){if(disposed||!model.count||!Number.isFinite(delta))return;model.move(delta);heldEnd=false;sync();changed();}
+  function scrollBy(delta){if(disposed||!model.count||!Number.isFinite(delta))return;model.move(delta);heldEnd=parked=false;sync();changed();}
   // The row at a client y inside the viewport, kept to the rows in view.
   function indexAt(clientY){
     const box=viewport.getBoundingClientRect?.();

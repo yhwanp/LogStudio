@@ -18,7 +18,11 @@ const EDGE=8,MIN_STEP=2,MAX_STEP=16*28,SLACK=8,DRAG_START=4;
 // selects and says whether a drag may extend from there; `grab(index)` does
 // the same for a drag that leaves the selected row it began in, which stays
 // selected; `drag(index)` moves the focus; `release()` ends a claimed press.
-export function rowGestures({list,document,window,mac,indexAt,scroll,isTextRow,press,grab,drag,release=()=>{}}){
+// `hold()` keeps the list from moving itself (a followed log) for the length
+// of a press, text or rows, and returns what lets it go once the click that
+// ends the press has been handled. A tap holds nothing: its mousedown comes
+// after its pointerup, the release that ends a press, so none would follow.
+export function rowGestures({list,document,window,mac,indexAt,scroll,isTextRow,press,grab,drag,release=()=>{},hold=()=>()=>{}}){
   let pointer=null,gesture=null,frame=null,claimed=false;
   // The next frame, or a timer where frames are paused (a hidden window)
   // or stop arriving, so a held drag never stalls.
@@ -74,7 +78,7 @@ export function rowGestures({list,document,window,mac,indexAt,scroll,isTextRow,p
     document?.removeEventListener?.('selectionchange',dropText);
     try{if(done.captured)list.releasePointerCapture?.(done.pointer);}catch{}
     // The click that follows this release belongs to the press.
-    window.setTimeout(()=>{if(!gesture)claimed=false;},0);
+    window.setTimeout(()=>{if(!gesture)claimed=false;done.letGo();},0);
     if(!done.text)release();
   }
   const listeners=[['pointermove',move],['pointerup',end],['pointercancel',end],['blur',end]];
@@ -93,11 +97,11 @@ export function rowGestures({list,document,window,mac,indexAt,scroll,isTextRow,p
     const text=!toggle&&!shift&&isTextRow(index);
     if(event.detail>1||text){if(text&&!touch)start(event,index,{text:true});return false;}
     event.preventDefault?.();window.getSelection?.()?.removeAllRanges?.();claimed=true;
-    start(event,index,{draggable:press(index,{shift,toggle})===true&&!touch});
+    start(event,index,{draggable:press(index,{shift,toggle})===true&&!touch,touch});
     return true;
   }
-  function start(event,index,{draggable=false,text=false}){
-    gesture={index,y:event.clientY,start:event.clientY,pointer:pointer?.id??null,draggable,text,captured:false,moved:false};
+  function start(event,index,{draggable=false,text=false,touch=false}){
+    gesture={index,y:event.clientY,start:event.clientY,pointer:pointer?.id??null,draggable,text,captured:false,moved:false,letGo:touch?()=>{}:hold()};
     for(const [name,fn] of listeners)window.addEventListener(name,fn);
   }
   // Whether a click was already handled by its press; it is claimed once.
