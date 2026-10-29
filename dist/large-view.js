@@ -106,6 +106,8 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
   let conds={include:[emptyCondition()],exclude:[]},active={list:'include',index:0},conditionView=null;
   // The open log's format: its columns, level names and filter fields.
   let shownFormat = 'text', levelKey = 'text';
+  // The open row menu's pane, line and row top (keepMenuByRow).
+  let menuRow=null;
   const previousRows=new Map(), viewports=new Map(), focusedSelection=new Map(), navigationFocus=new Map(), selections=new Map(), selectedAt=new Map(), paintedSelection=new Map(), paintedMarks=new Map();
   const MOD=/Mac|iPhone|iPad/.test(window.navigator?.platform??'')?'⌘':'Ctrl+';
   // Only macOS reads a copied file from the native pasteboard.
@@ -246,10 +248,10 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
         drag:index=>{if(dragFrom)applySelection(prefix,extendTo(dragFrom,index,owner.getState().count,{keep:true}),{repeat:true});}});
       const toggleKey=event=>!!(MOD==='⌘'?event.metaKey:event.ctrlKey);
       view=createContinuousViewport({viewport:realViewport,rowsElement:ui[prefix+'Rows'],document,window,
-        fetchRows:start=>owner.fetchRows(start),onError:owner.reportError,onUserMove:()=>stoppedFinding(owner),
+        fetchRows:start=>owner.fetchRows(start),onError:owner.reportError,onUserMove:()=>{stoppedFinding(owner);menu.moved();},
         onSelect:(entry,index,{repeat=false,extend=false}={})=>{const current=owner.getState();setSelection(prefix,current,extend?.focus===index?extend:extend===true?extendTo(selectionOf(prefix,current),index,current.count):selectOne(index),entry.lineNumber);detailOwner=owner;if(isSearch)followUpper(entry.lineNumber,repeat);owner.selectLine(entry.lineNumber);void owner.loadDetail(entry.lineNumber,0,{delay:repeat?DETAIL_SETTLE_MS:0});saver.schedule();if(!isSearch)tips?.offer('rows');},
         onVisible:(first,last,total)=>{
-          owner.rememberPosition(first);saver.schedule();
+          owner.rememberPosition(first);saver.schedule();keepMenuByRow(prefix);
           if(total)showRange(prefix,owner,`${formatNumber(first+1)}–${formatNumber(last)} / ${formatNumber(total)}건`,false);
           ui[prefix+'First'].disabled=!total||first===0;ui[prefix+'Last'].disabled=!total||last>=total;
         },
@@ -848,7 +850,25 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
   // Row actions add conditions rather than rewrite one the user may not be
   // looking at; each says in a toast what it did and can be undone there.
   // A showing value fills a blank showing condition, or starts a new one.
-  const menu=createPopupMenu({menu:ui.rowMenu,document,window,scrollers:[ui.logsViewport,ui.largeViewport,ui.bookmarkList]});
+  const menu=createPopupMenu({menu:ui.rowMenu,document,window});
+  // A row menu moves with its row when the list shifts under it, as when the
+  // raw detail opens below a row near the bottom.
+  const rowTop=(prefix,line)=>ui[prefix+'Rows'].querySelector?.(`[data-line-number="${line}"]`)?.getBoundingClientRect?.().top;
+  function keepMenuByRow(prefix){
+    if(menuRow?.prefix!==prefix||ui.rowMenu.hidden)return;
+    const top=rowTop(prefix,menuRow.line);
+    if(!Number.isFinite(top)||!Number.isFinite(menuRow.top)||top===menuRow.top)return;
+    menu.moveBy(top-menuRow.top);menuRow.top=top;
+  }
+  // Runs `then` once the press under way is over, after its click or
+  // context menu (which Windows sends on release) has been handled, or once
+  // the window loses focus with the release unseen.
+  function afterPress(then){
+    const ends=['pointerup','pointercancel'];
+    const done=()=>{for(const name of ends)window.removeEventListener(name,done,true);window.removeEventListener('blur',done);window.setTimeout(then,0);};
+    for(const name of ends)window.addEventListener(name,done,true);
+    window.addEventListener('blur',done);
+  }
   const quote=text=>text.length>24?`${text.slice(0,24)}…`:text;
   function addShowing(values){
     syncEditor();
@@ -913,7 +933,13 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     if(size===1&&(continuationOwner(entry)||(entry.kind==='parsed'&&continuationOwner(next)?.lineNumber===entry.lineNumber)))items.push(['로그 전체 원문 복사',()=>copyRecord(owner,owner.readRecordText(entry.lineNumber))]);
     items.push([size>1?`선택한 ${formatNumber(size)}행 북마크 추가/해제`:bookmarks.has(entry.lineNumber)?'북마크 해제':'북마크 추가',()=>toggleBookmarks(prefix)]);
     if(isSearch)items.push(['위 로그로 이동',()=>jumpTo(entry.lineNumber)]);
-    menu.show(items,x,y,'행 작업',{onList:true});
+    // A followed log is held while the menu is open, so the row stays beside
+    // the menu. When an outside press closes the menu, the hold ends only
+    // after the press does: the list must not move under the pointer, and a
+    // row menu that press opens takes the hold over.
+    const release=viewports.get(prefix)?.hold()??(()=>{});
+    menu.show(items,x,y,'행 작업',{onList:true,onClose:press=>{menuRow=null;if(press)afterPress(release);else release();}});
+    menuRow={prefix,line:entry.lineNumber,top:rowTop(prefix,entry.lineNumber)};
   }
   // The bookmark list's menu: the same conditions, then its selection's copy
   // and unmark.
@@ -1008,7 +1034,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     current:()=>{const state=logs.getState();return Number.isSafeInteger(state.selectedLine)?{datasetId:state.datasetId,line:state.selectedLine}:null;}});
   mountRecentFiles({ui,document,native,menu,isGone:()=>pageGone,onError:message=>{inputError=message;errors();},guard:()=>devices.guard(),keep:id=>devices.keep(id),shown:()=>logs.getState().datasetId});
   function repaintRows(){previousRows.clear();renderLogs(logs.getState());renderSearch(search.getState());}
-  const bookmarks=createBookmarks({ui,document,window,notify,mod:MOD,logs,lineCell,onReveal:showBookmark,offerUndo:undoBookmarks,openMenu:openBookmarkMenu,isRawMode:()=>rawMode,onChange:()=>{repaintRows();saver.schedule();},onCount:count=>{bookmarkCount=count;updateLowerPane();if(count)tips?.offer('bookmarks');}});
+  const bookmarks=createBookmarks({ui,document,window,notify,mod:MOD,logs,lineCell,onReveal:showBookmark,offerUndo:undoBookmarks,openMenu:openBookmarkMenu,onUserMove:()=>menu.moved(),isRawMode:()=>rawMode,onChange:()=>{repaintRows();saver.schedule();},onCount:count=>{bookmarkCount=count;updateLowerPane();if(count)tips?.offer('bookmarks');}});
   const saver=createWorkSaver({invoke:(command,args)=>native.core.invoke(command,args),capture:captureWork,setTimer:(fn,ms)=>window.setTimeout(fn,ms),clearTimer:id=>window.clearTimeout(id)});
   saved=mountSavedFilters({native,menu,notify,document,read:()=>fieldsOf(currentFilters()),write:writeFields,changed:()=>saver.schedule(),format:()=>shownFormat,isGone:()=>pageGone});
   conditionView=mountConditions({document,lists:{include:$('showList'),exclude:$('hideList')},hints:{include:$('showHint'),exclude:$('hideHint')},adders:{include:$('addShow'),exclude:$('addHide')},editor:$('condEditor'),rowless:()=>rowless(),problem:rejectedProblem,

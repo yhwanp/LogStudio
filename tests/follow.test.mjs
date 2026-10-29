@@ -175,6 +175,73 @@ test('a followed list keeps its end in view only while the end is in view',async
   view.destroy();
 });
 
+test('a held followed list stays still as rows arrive and goes back to the end when let go',async()=>{
+  // A row's menu holds the list, so the row stays beside the menu.
+  const viewport=new Element(),rowsElement=new Element();viewport.listeners=new Map();
+  viewport.addEventListener=(n,f)=>viewport.listeners.set(n,f);viewport.removeEventListener=n=>viewport.listeners.delete(n);
+  const window={addEventListener(){},removeEventListener(){}},moves=[];
+  const view=createContinuousViewport({viewport,rowsElement,document:{createElement:()=>new Element()},window,fetchRows:async start=>({start,rows:[]}),paint(){},onUserMove:()=>moves.push(view.metrics().first)});
+  const state=(count,extra={})=>({datasetId:1,queryId:1,count,viewportStart:0,scrollRevision:0,queryComplete:false,queryStatus:'running',closed:false,selectedLine:3,...extra});
+  const scrolled=()=>viewport.listeners.get('scroll')();
+  view.update(state(5),{stick:true});view.update(state(50),{stick:true});
+  let release=view.hold();
+  view.update(state(60),{stick:true});assert.equal(view.metrics().last,50);
+  // The scroll event echoing the list's own move is not the user's.
+  scrolled();assert.deepEqual(moves,[]);assert.equal(view.metrics().last,50);
+  release();assert.equal(view.metrics().last,60);
+  scrolled();release();assert.deepEqual(moves,[]);
+  view.update(state(70),{stick:true});assert.equal(view.metrics().last,70,'it follows the end again');
+  // A press that closes one menu may open another: the last release lets go.
+  const first=view.hold(),second=view.hold();
+  view.update(state(80),{stick:true});first();assert.equal(view.metrics().last,70);
+  second();assert.equal(view.metrics().last,80);
+  // Rows scrolled by the user while held stay where they were moved.
+  release=view.hold();view.update(state(90),{stick:true});
+  viewport.scrollTop=10*ROW_HEIGHT;scrolled();
+  assert.deepEqual(moves,[10],'the user moving it is heard');
+  release();assert.equal(view.metrics().first,10);
+  view.update(state(100),{stick:true});assert.equal(view.metrics().first,10);
+  // So do rows a locate showed (a bookmark stepped to) while held.
+  view.scrollToEnd();release=view.hold();
+  view.update(state(110,{scrollRevision:1,viewportStart:20}),{stick:true});release();assert.equal(view.metrics().first,20);
+  // A list not following when held stays when let go.
+  view.update(state(120,{scrollRevision:1}));view.scrollToEnd();
+  release=view.hold();view.update(state(130,{scrollRevision:1}));release();assert.equal(view.metrics().last,120);
+  // Another query is not held: it follows its own end, and the release
+  // leaves it there.
+  view.update(state(140,{scrollRevision:1}),{stick:true});view.scrollToEnd();release=view.hold();
+  for(const count of [0,5,40])view.update(state(count,{queryId:2}),{stick:true});
+  assert.equal(view.metrics().last,40,'the new query follows its end while the menu is open');
+  release();assert.equal(view.metrics().last,40);
+  assert.deepEqual(moves,[10],'the list moving itself is never the user');
+  view.destroy();
+});
+
+test('a row menu on a followed log stays open while rows arrive, the list held under it',async t=>{
+  const r=await rig();t.after(()=>r.controller.close());
+  // Only what the menu measures and searches.
+  const menu=r.get('rowMenu');menu.hidden=true;menu.getBoundingClientRect=()=>({width:120,height:80});menu.querySelectorAll=()=>[];
+  await r.get('followFile').dispatch('click');await settle();
+  r.engine.total=40;await r.poll();
+  const viewport=r.get('logsViewport'),range=()=>r.get('logsRange').textContent;
+  const menuOn=line=>r.get('logsRows').querySelector(`[data-line-number="${line}"]`).dispatch('contextmenu',{preventDefault(){},clientX:10,clientY:10});
+  assert.equal(range(),'31–40 / 40건');
+  await menuOn(38);await settle();
+  assert.equal(menu.hidden,false);
+  r.engine.total=50;await r.poll();await viewport.dispatch('scroll');
+  assert.equal(menu.hidden,false,'rows arriving, and the scroll event they cause, leave the menu open');
+  assert.equal(range(),'31–40 / 50건','the list holds still under the menu');
+  await menu.dispatch('keydown',{key:'Escape',preventDefault(){},stopPropagation(){}});
+  assert.equal(menu.hidden,true);assert.equal(range(),'41–50 / 50건','closed, it follows the end again');
+  // The user scrolling the list closes the menu; the list stays there.
+  await menuOn(48);await settle();
+  viewport.scrollTop-=2*ROW_HEIGHT;await viewport.dispatch('scroll');
+  assert.equal(menu.hidden,true);
+  r.engine.total=60;await r.poll();
+  assert.equal(range(),'39–48 / 60건');
+  await r.controller.close();
+});
+
 test('a completed single file is checked slowly for appended rows until some are seen',async()=>{
   const timers=clock(),snapshots=[];let queryId=0;
   const transport=async body=>{

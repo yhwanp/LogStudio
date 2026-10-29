@@ -17,21 +17,23 @@ export const markOf=row=>({lineNumber:row.lineNumber,file:row.file,fileLine:row.
 // bookmark's row there and in the raw detail, moving focus to it with
 // `focus`; `onChange` repaints rows after a mark changes;
 // `offerUndo(message,undo)` reports a removal with a way back;
-// `openMenu(mark,size,x,y)` opens a row's menu for a selection of `size`.
+// `openMenu(mark,size,x,y)` opens a row's menu for a selection of `size`;
+// `onUserMove` hears of the user scrolling the list.
 // The list is a lower-region tab: `onCount` lets the view show or hide that
 // tab before the list renders, and the list renders only while it is shown.
-export function createBookmarks({ui, document, window, notify, mod, logs, lineCell, onReveal=()=>{}, offerUndo=message=>notify(message), openMenu=()=>{}, isRawMode, onChange, onCount}) {
+export function createBookmarks({ui, document, window, notify, mod, logs, lineCell, onReveal=()=>{}, offerUndo=message=>notify(message), openMenu=()=>{}, onUserMove=()=>{}, isRawMode, onChange, onCount}) {
   const bookmarks=new Map();
   // The list selects rows as the other lists do (row-selection.js), by
   // position in line order. `cursor` is the line of its focus row, the row
   // revealed in the upper logs; a changed set of marks keeps only the cursor.
-  let cursor=null,selection=null,version=0,order=null,dragFrom=null;
+  let cursor=null,selection=null,version=0,order=null,dragFrom=null,ownTop=0;
   // Counts replacements of every mark (a reload reading them again, another
   // file); an undo offered before one does nothing.
   let resets=0;
   const sorted=()=>order??=[...bookmarks.keys()].sort((a,b)=>a-b);
   const changed=()=>{order=null;version++;};
   const rowNodes=()=>[...(ui.bookmarkList.children??[])];
+  const own=()=>{ownTop=ui.bookmarkList.scrollTop||0;};
   const info=document.getElementById?.('bookmarkSelection'),mac=mod==='⌘',toggleKey=event=>!!(mac?event.metaKey:event.ctrlKey);
   function current(){
     const lines=sorted();
@@ -100,7 +102,7 @@ export function createBookmarks({ui, document, window, notify, mod, logs, lineCe
     });
     // Right-click keeps a selection that contains the row, or selects the row
     // alone; the menu acts on that selection. As in the search results, the
-    // upper logs stay where they are, which also keeps the menu open.
+    // upper logs stay where they are.
     const menuAt=(x,y)=>{
       const at=rowNodes().indexOf(row);
       if(!inRanges(selectedRanges(current(),sorted().length),at))press(at);else row.focus?.({preventScroll:true});
@@ -129,14 +131,14 @@ export function createBookmarks({ui, document, window, notify, mod, logs, lineCe
     onCount(bookmarks.size);
     ui.bookmarkTab.textContent=`북마크 ${formatNumber(bookmarks.size)}`;
     ui.bookmarkCount.textContent=`북마크 · ${formatNumber(bookmarks.size)}개`;
-    if(ui.bookmarkPane.hidden){ui.bookmarkList.replaceChildren();showCount(0);return;}
+    if(ui.bookmarkPane.hidden){ui.bookmarkList.replaceChildren();showCount(0);own();return;}
     // A rebuilt list keeps focus on the same row, or the row taking its place.
     const before=rowNodes(),at=before.findIndex(row=>row.contains(document.activeElement)),focused=at<0?null:Number(before[at].dataset.lineNumber);
     const lines=sorted(),focusLine=bookmarks.has(cursor)?cursor:lines[0],s=current(),chosen=selectedRanges(s,lines.length),size=selectedCount(s,lines.length);
     ui.bookmarkList.replaceChildren(...lines.map((line,i)=>rowNode(line,line===focusLine,size>1&&inRanges(chosen,i))));
-    showCount(size);
+    showCount(size);own();
     if(at<0)return;
-    const rows=rowNodes();(rows.find(row=>Number(row.dataset.lineNumber)===focused)??rows[Math.min(at,rows.length-1)])?.focus?.();
+    const rows=rowNodes();(rows.find(row=>Number(row.dataset.lineNumber)===focused)??rows[Math.min(at,rows.length-1)])?.focus?.();own();
   }
   const showCount=size=>{const text=size>1?`${formatNumber(size)}행 선택 · ${mod}C 복사`:'';if(info&&info.textContent!==text)info.textContent=text;};
   // Marks the cursor and the selection in place so a focused row keeps its
@@ -148,7 +150,7 @@ export function createBookmarks({ui, document, window, notify, mod, logs, lineCe
       if(row.className!==className)row.className=className;row.tabIndex=isCursor?0:-1;
       if(isCursor){row.setAttribute('aria-current','true');row.scrollIntoView?.({block:'nearest'});}else row.removeAttribute('aria-current');
     });
-    showCount(size);
+    showCount(size);own();
   }
   // Shows a new selection; its focus row becomes the cursor and takes focus.
   function select(next){selection={...next,version};cursor=sorted()[next.focus]??null;paint();focusCursor();}
@@ -228,9 +230,12 @@ export function createBookmarks({ui, document, window, notify, mod, logs, lineCe
     const list=ui.bookmarkList,box=list.getBoundingClientRect?.();if(!box)return;
     const shrunk=listHeight-box.height;listHeight=box.height;
     const row=cursor===null?null:rowNodes().find(node=>Number(node.dataset.lineNumber)===cursor),at=row?.getBoundingClientRect?.();
-    if(at&&shrunk>0&&at.top>=box.top&&at.bottom>box.bottom&&at.bottom-box.bottom<=shrunk+1)list.scrollTop+=at.bottom-box.bottom;
+    if(at&&shrunk>0&&at.top>=box.top&&at.bottom>box.bottom&&at.bottom-box.bottom<=shrunk+1){list.scrollTop+=at.bottom-box.bottom;own();}
   }
   if(window.ResizeObserver)new window.ResizeObserver(keepCursor).observe(ui.bookmarkList);
+  // The list's own scrolls (paint, render and keepCursor) record where they
+  // left it, so any other scroll is the user's.
+  ui.bookmarkList.addEventListener('scroll',()=>{const top=ui.bookmarkList.scrollTop||0;if(Math.abs(top-ownTop)>.5)onUserMove();ownTop=top;});
   ui.copyBookmarks.addEventListener('click',()=>{
     const count=bookmarks.size;
     writeClipboard(window,text()).then(()=>notify(`북마크 ${formatNumber(count)}행을 복사했습니다.`),()=>notify('복사하지 못했습니다. 다시 시도해 주세요.'));

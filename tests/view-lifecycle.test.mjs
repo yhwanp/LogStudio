@@ -1090,6 +1090,21 @@ test('time bound grammar matches the core', async () => {
   for (const bad of ['6-19', '25:00', '06-19 12:3', '12:30:15.', '06-19 12 x', '13-01', '06-32', '12:60', '1:00', '12:30.5', '12:30:15.1234567890', '12:30 06-19']) assert.equal(isTimeBound(bad), false, bad);
 });
 
+test('the bookmark menu closes when the user scrolls the list, not when the list scrolls itself',async t=>{
+  const rows=Array.from({length:30},(_,i)=>({lineNumber:i+1,kind:'raw',raw:`raw ${i+1}`}));
+  const r=await rig({rows,detail:{text:'x',startByte:0,nextByte:1,totalBytes:1,complete:true,highlights:[]}});t.after(()=>r.controller.close());
+  const row=line=>r.get('logsRows').children.find(n=>n.dataset.lineNumber===String(line)),list=r.get('bookmarkList'),menu=r.get('rowMenu');
+  for(const line of [3,8]){await row(line).dispatch('click',{detail:1});await settle();r.handlers.get('keydown')({key:'b',metaKey:true,preventDefault(){},target:new Element()});await settle();}
+  await r.get('bookmarkTab').dispatch('click');await settle();
+  await list.children[1].dispatch('contextmenu',{preventDefault(){},clientX:1,clientY:1});await settle();
+  assert.equal(menu.hidden,false);assert.equal(menu.attributes['aria-label'],'북마크 작업');
+  await list.dispatch('scroll');
+  assert.equal(menu.hidden,false,'a scroll event that moved nothing is the list keeping itself');
+  list.scrollTop+=28;await list.dispatch('scroll');
+  assert.equal(menu.hidden,true);
+  await r.controller.close();
+});
+
 test('bookmarks mark rows, list them in a lower tab, step with F2 and reset with the file',async t=>{
   const rows=Array.from({length:30},(_,i)=>({lineNumber:i+1,kind:'raw',raw:`raw ${i+1}`}));
   const r=await rig({rows,detail:{text:'x',startByte:0,nextByte:1,totalBytes:1,complete:true,highlights:[]}});t.after(()=>r.controller.close());
