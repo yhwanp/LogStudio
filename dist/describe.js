@@ -144,6 +144,7 @@ export function describeLogError(value, format='text') {
     'Could not create a capture file':'기록할 임시 파일을 만들지 못했습니다.',
     'Capture files are unavailable':'기기 로그용 임시 폴더에 쓸 수 없습니다.',
     'No device capture is open':'열린 기기 로그가 없습니다.',
+    'No device capture is recording':'기록 중인 기기 로그가 없습니다.',
     'Choose a file other than the capture':'기록 중인 임시 파일에는 저장할 수 없습니다. 다른 위치를 선택해 주세요.',
     'Save cancelled':'저장을 취소했습니다.',
     'Save failed':'저장하지 못했습니다. 다시 시도해 주세요.',

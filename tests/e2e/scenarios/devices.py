@@ -151,6 +151,45 @@ def run(ctx):
         app.exclude_tags('')
         until(lambda v: v['breaks'] and v['breaks'][0]['line'] == line, 'filter removed')
 
+        # The trash button clears the rows so far at once, unsaved as they
+        # are: the capture goes on into a new file, shown as a new log that
+        # keeps the filters and follows again, and the old file goes.
+        app.exclude_tags('Choreographer')
+        until(lambda v: js("return !!document.querySelector('#hideList .cond-card')"), 'filter applied')
+        button = js("""const b=document.getElementById('captureClear');return {hidden:b.hidden,label:b.getAttribute('aria-label'),title:b.title,
+          hint:document.getElementById(b.getAttribute('aria-describedby')).textContent,icon:!!b.querySelector('svg'),text:b.textContent.trim(),
+          last:document.getElementById('captureSave').nextElementSibling===b,border:getComputedStyle(b).borderTopColor}""")
+        warn = '지금까지 기록한 로그를 비우고 이어서 기록합니다. 저장하지 않은 로그는 되살릴 수 없습니다'
+        check('a live capture offers a quiet trash button after saving that names itself and warns that unsaved rows cannot come back',
+              button == {'hidden': False, 'label': '로그 비우기', 'icon': True, 'text': '', 'title': warn, 'hint': warn, 'last': True,
+                         'border': 'rgba(0, 0, 0, 0)'}, button)
+        app.capture('07b-clear-hover', hover='captureClear')
+        recorded = lambda: [p for p in captures.glob('logcat-*.log') if p != left]
+        before = recorded()
+        last = before[0].read_text(encoding='utf-8').splitlines()[-1][:18] if len(before) == 1 else ''
+        app.click('captureClear')
+        # The filter may hide the first row; the next row shown takes its mark.
+        s = until(lambda v: v['bar'] and v['bar']['tone'] == 'live' and v['following'] == 'true' and not v['dialog']
+                  and len(v['breaks']) == 1 and '로그 비움' in v['breaks'][0]['label'], 'cleared')
+        toast = app.wait(lambda: js("const t=document.getElementById('toast');return !t.hidden&&t.textContent"), what='clear notice')
+        check('clearing asks nothing and says how much went',
+              re.fullmatch(r'기록한 로그\([0-9.,]+ (B|KiB|MiB)\)를 비웠습니다\. 지금부터 들어오는 로그를 기록합니다\.', toast or '') is not None, toast)
+        # The list's first row has no row above, so its label sits inside it.
+        inside = js("const r=document.querySelector('#logsRows .log-row.capture-break');return !!r&&r.classList.contains('capture-break-start')&&getComputedStyle(r,'::after').right")
+        check('the first row of the cleared log is marked inside it with when it was cleared',
+              re.fullmatch(r'\d\d:\d\d:\d\d 로그 비움', s['breaks'][0]['label']) is not None and inside == '10px', {'breaks': s['breaks'], 'inside': inside})
+        after = app.wait(lambda: (lambda f: len(f) == 1 and f[0] not in before and f[0].stat().st_size > 0 and f)(recorded()), what='new capture file')
+        first = after[0].read_text(encoding='utf-8').splitlines()[0][:18]
+        check('the rows so far go with their file, and the new file holds only rows from then on',
+              len(before) == 1 and not before[0].exists() and first > last, {'before': [p.name for p in before], 'after': [p.name for p in after], 'last': last, 'first': first})
+        kept = js("return [...document.querySelectorAll('#hideList .cond-card')].map(c=>c.textContent)")
+        check('clearing keeps the filters', len(kept) == 1 and 'Choreographer' in kept[0], kept)
+        shown = app.wait(lambda: js("return [...document.querySelectorAll('#logsRows .log-row .tag')].map(t=>t.textContent)") or None, what='rows after clearing')
+        check('the cleared log applies the kept filters', 'Choreographer' not in shown, shown)
+        app.capture('07c-cleared')
+        app.exclude_tags('')
+        until(lambda v: not js("return !!document.querySelector('#hideList .cond-card')"), 'filter removed again')
+
         app.click('captureStop')
         s = until(lambda v: v['bar'] and v['bar']['tone'] == 'stopped' and not v['bar']['stop'], 'stopped')
         check('stopping ends the capture and says its rows are not saved', s['bar']['text'] == '기록 중지됨 · 저장 안 됨 · Pixel 8', s['bar'])
@@ -297,6 +336,16 @@ def run(ctx):
         check('at 900 px the iPhone bar ends in an ellipsis beside the file name and still shows the unsaved warning',
               fit['ellipsis'] == 'ellipsis' and fit['apart'] and unsaved is True, {'fit': fit, 'unsaved': unsaved})
         app.capture('11f-ios-recording-900')
+        # In the narrowest window the wordmark gives way, so the state still
+        # leads the bar and the trash button keeps its shape.
+        app.rect(width=760, height=frame['height'])
+        time.sleep(.5)
+        narrow = js("""const w=id=>Math.round(document.getElementById(id).getBoundingClientRect().width),bar=document.querySelector('.topbar');
+          return {state:w('captureState'),clear:w('captureClear'),wordmark:Math.round(document.querySelector('.brand h1').getBoundingClientRect().width),
+          overflow:bar.scrollWidth>bar.clientWidth}""")
+        check('at 760 px the iPhone bar keeps its state readable and the trash button square',
+              narrow['state'] >= 60 and narrow['clear'] == 30 and narrow['wordmark'] <= 1 and not narrow['overflow'], narrow)
+        app.capture('11h-ios-recording-760')
         app.rect(width=frame['width'], height=frame['height'])
         js(QA, 'ios-unplug')
         s = until(lambda v: v['bar'] and v['bar']['tone'] == 'waiting', 'iPhone waiting')

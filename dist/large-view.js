@@ -79,7 +79,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
   const $ = id => document.getElementById(id);
   $('largeLogPanel').hidden=false;
   const ids = ['largeName','largeStatus','largeError','largeCount','largeTotal','largeRows','largeViewport','largeFirst','largeLast','largeJump','largeJumpForm','largeCancel','largeClose','largeColumns','largeRaw','largeHeaders','largeRange','largeDetail','largeDetailTitle','largeDetailText','largeDetailPrevious','largeDetailNext','largeDetailClose','levelFilters','allLevels','errorLevels','resetFilters','searchInput','tagFilter','pidFilter','tidFilter','caseSensitive','includeRaw','recognizeLineNumbers','logsCount','logsRows','logsViewport','logsHeaders','logsFirst','logsLast','logsJump','logsJumpForm','logsRange','largeSearchPane','filterBadge','activeFilters','filterRow','logsSelection','largeSelection','toast','largeDetailCopy','largeDetailMore','largeDetailHint','toggleFilters','emptyState','logContent','loadProgress','loadProgressBar','paneSplitter','idFilterError','tagFilterError','searchError','dropHint','filterPanel','largeRegex','rowMenu','largeSize','exportLogs','exportSearch','exportCancel','recentFiles','recentList','clearRecent','recentButton','timeFrom','timeTo','timeFilterError','lowerTabs','searchTab','bookmarkTab','bookmarkPane','bookmarkCount','bookmarkList','copyBookmarks','clearBookmarks','searchPosition','logsPending','reopenFile','errorBar','errorReopen','followFile','messageFilter','messageRegex','messageFilterError','messageLabel'];
-  for (const id of ['extrasButton','deviceButton','emptyDevice','captureBar','captureState','captureText','captureHint','captureApp','captureAppStatus','captureStop','captureSave','captureLeftovers','leftoverList','openFile']) ids.push(id);
+  for (const id of ['extrasButton','deviceButton','emptyDevice','captureBar','captureState','captureText','captureHint','captureClear','captureClearHint','captureApp','captureAppStatus','captureStop','captureSave','captureLeftovers','leftoverList','openFile']) ids.push(id);
   const ui = Object.fromEntries(ids.map(id => [id,$(id)]));
   // Device captures (devices.js) mount once the menu and toasts exist.
   let devices=null;
@@ -274,7 +274,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
             const entryOwner=rawMode?null:continuationOwner(entry),next=entries[k+1]?.index===index+1?entries[k+1].row:null;
             const continued=!rawMode&&joinsNext(entry,next);
             const kindClass=entryOwner?continuationClass(entryOwner):entry.kind!=='parsed'?'raw-row':`level-row-${entry.level}`;
-            row.className=`log-row ${kindClass}${continued?' record-continued':''}${fileStart?' file-start':''}${captureBreak?' capture-break':''}${current.selectedLine===entry.lineNumber?' selected-log-row':''}${entry.encodingDamaged?' encoding-damaged-row':''}${multiple&&inRanges(selected,index)?' in-selection':''}${bookmarks.has(entry.lineNumber)?' bookmarked':''}${!isSearch&&entry.searchHit?' search-hit':''}`; row.tabIndex=-1;row.dataset.lineNumber=String(entry.lineNumber);row.setAttribute('role','listitem');row.setAttribute('aria-posinset',String(index+1));row.setAttribute('aria-setsize',String(current.queryComplete?current.count:-1));
+            row.className=`log-row ${kindClass}${continued?' record-continued':''}${fileStart?' file-start':''}${captureBreak?` capture-break${index===0?' capture-break-start':''}`:''}${current.selectedLine===entry.lineNumber?' selected-log-row':''}${entry.encodingDamaged?' encoding-damaged-row':''}${multiple&&inRanges(selected,index)?' in-selection':''}${bookmarks.has(entry.lineNumber)?' bookmarked':''}${!isSearch&&entry.searchHit?' search-hit':''}`; row.tabIndex=-1;row.dataset.lineNumber=String(entry.lineNumber);row.setAttribute('role','listitem');row.setAttribute('aria-posinset',String(index+1));row.setAttribute('aria-setsize',String(current.queryComplete?current.count:-1));
             if(captureBreak)row.dataset.captureBreak=captureBreak;else delete row.dataset.captureBreak;
             if(current.selectedLine===entry.lineNumber){row.setAttribute('aria-current','true');selectedAt.set(prefix,{identity:selectionIdentity(current),line:entry.lineNumber,index});}
             else row.removeAttribute('aria-current');
@@ -998,7 +998,9 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
   const columnItems=()=>[['내용에 맞춤',()=>layout.fitColumns(),'현재 표시된 로그에 맞춰 열 폭 조절'],['폭 초기화',()=>layout.resetColumns(),'열 폭을 기본값으로 되돌리기']];
   columnMenu.addEventListener('click',()=>{const box=columnMenu.getBoundingClientRect?.();menu.show(columnItems(),box?box.left:0,box?box.bottom+4:0,'열 폭');});
   for(const header of [ui.logsHeaders,ui.largeHeaders,$('bookmarkHeaders')])header.addEventListener('contextmenu',event=>{if(rawMode||disposed)return;event.preventDefault();menu.show(columnItems(),event.clientX,event.clientY,'열 폭',{onList:true});});
-  devices=mountDevices({ui,document,window,native,menu,logs,isGone:()=>pageGone,report:message=>{inputError=message;errors();},unreport:message=>{if(message&&inputError===message){inputError='';errors();}},notify});
+  devices=mountDevices({ui,document,window,native,menu,logs,isGone:()=>pageGone,report:message=>{inputError=message;errors();},unreport:message=>{if(message&&inputError===message){inputError='';errors();}},notify,
+    // A cleared capture's log replaces this one keeping the filters and search, as a reload does.
+    keepInput:(from,notice,noticeMs)=>{reloadRequest={from,snapshot:{filters:currentFilters(),savedFilter:saved?.applied()??null,notice,noticeMs}};return ()=>{if(reloadRequest?.from===from)reloadRequest=null;};}});
   // A row an extension picks is selected in the upper logs, as a typed row
   // number is, without moving focus.
   extras=mountExtras({button:ui.extrasButton,native,menu,notify,isGone:()=>pageGone,
@@ -1282,7 +1284,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
       if(snapshot?.upper?.viewportStart)logs.seek(snapshot.upper.viewportStart,{restore:true,selectedLine:snapshot.upper.selectedLine});
       if(valid()&&snapshot?.lower?.viewportStart&&filters.query)search.seek(snapshot.lower.viewportStart,{restore:true});
     }
-    if(snapshot?.notice)notify(snapshot.notice);
+    if(snapshot?.notice)notify(snapshot.notice,null,{ms:snapshot.noticeMs});
     resolveMarks(logs.getState());
   }
   // The filters to keep: what is typed when valid, else what was applied.

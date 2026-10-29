@@ -4,7 +4,7 @@ use logstudio_core::{
         gate::{Gate, Stamp},
         link::{self, parse_devices, Platform},
         store::Store,
-        Break, Capture, Launch, Options, Phase,
+        Break, Capture, Cut, Launch, Options, Phase,
     },
     search::Filters,
     source::public_message,
@@ -536,7 +536,7 @@ fn saving_copies_the_rows_so_far_while_recording_goes_on() {
     s.link.log("SER1", &row(3, 0, "three"));
     wait("unsaved", || c.unsaved());
     // The capture file itself is no place to save to.
-    let e = c.save(c.path(), &never).unwrap_err();
+    let e = c.save(&c.path(), &never).unwrap_err();
     assert_eq!(
         public_message(&e, ""),
         "Choose a file other than the capture"
@@ -553,6 +553,143 @@ fn saving_copies_the_rows_so_far_while_recording_goes_on() {
         .collect();
     assert!(leftovers.is_empty());
     c.stop();
+}
+
+#[test]
+fn a_cut_capture_records_into_its_new_file_from_then_on() {
+    let s = setup();
+    let c = s.start("SER1");
+    let first = [row(1, 0, "one"), row(2, 0, "two")].concat();
+    s.link.log("SER1", &first);
+    written(&c, &first);
+    wait("rows", || c.rows() == 2);
+    let never = std::sync::atomic::AtomicBool::new(false);
+    c.save(&s._dir.path().join("kept.log"), &never).unwrap();
+    // A row being received when the cut comes goes to the new file whole.
+    let three = row(3, 0, "three");
+    s.link.log("SER1", &three[..20]);
+    thread::sleep(Duration::from_millis(30));
+    let before = c.path();
+    assert!(c.json()["cleared"].is_null());
+    let (_, cuts) = c.next_row();
+    let slot = s.store.create(Platform::Android, "Pixel 8").unwrap();
+    let old = c.cut(Cut::open(slot).unwrap());
+    assert_eq!(old.path, before);
+    assert_ne!(c.path(), before);
+    assert_eq!(std::fs::read(&before).unwrap(), first.as_bytes());
+    // The new file starts empty and owes no save.
+    assert_eq!((c.bytes(), c.rows()), (0, 0));
+    assert!(!c.unsaved());
+    assert_eq!(c.json()["saved"], 0);
+    // The page marks the new file's start with when it was cleared.
+    assert!(c.json()["cleared"].is_i64());
+    assert_eq!(c.phase(), Phase::Recording);
+    s.link.log("SER1", &three[20..]);
+    s.link.log("SER1", &row(4, 0, "four"));
+    written(&c, &[three, row(4, 0, "four")].concat());
+    wait("rows", || c.rows() == 2);
+    assert!(c.unsaved());
+    assert_eq!(std::fs::read(&before).unwrap(), first.as_bytes());
+    // An app start that began before the cut marks the new file's start.
+    c.mark_launch(
+        Launch {
+            row: 3,
+            at: 0,
+            app: "SampleApp".into(),
+            process: "SampleApp".into(),
+        },
+        cuts,
+    );
+    assert_eq!(c.launches()[0].row, 1);
+    old.remove().unwrap();
+    let path = c.path();
+    c.close();
+    drop(c);
+    // Its rows were never saved, so the new file stays for the next run.
+    assert!(path.exists());
+    assert_eq!(s.store.leftovers().len(), 1);
+}
+
+#[test]
+fn a_capture_cut_while_its_device_is_away_records_from_its_return() {
+    let s = setup();
+    let c = s.start("SER1");
+    s.link.log("SER1", &row(1, 0, "one"));
+    written(&c, &row(1, 0, "one"));
+    s.link.unplug("SER1");
+    wait("waiting", || c.phase() == Phase::Waiting);
+    // The device logs while away, then the capture is cut.
+    s.link.log("SER1", &row(2, 0, "away"));
+    let slot = s.store.create(Platform::Android, "Pixel 8").unwrap();
+    let old = c.cut(Cut::open(slot).unwrap());
+    assert_eq!(c.phase(), Phase::Waiting);
+    s.link.plug("SER1");
+    wait("recording again", || c.phase() == Phase::Recording);
+    s.link.log("SER1", &row(3, 0, "back"));
+    written(&c, &row(3, 0, "back"));
+    let breaks = c.breaks();
+    assert_eq!(breaks.len(), 1);
+    assert_eq!((breaks[0].row, breaks[0].gap), (1, true));
+    // It starts after the rows the device held, as a new capture does.
+    assert_eq!(s.link.opened()[1].1.as_deref(), Some("10-23 14:00:02.000"));
+    // Away again, it continues after its rows as before.
+    s.link.unplug("SER1");
+    wait("waiting", || c.phase() == Phase::Waiting);
+    s.link.log("SER1", &row(4, 0, "four"));
+    s.link.plug("SER1");
+    written(&c, &[row(3, 0, "back"), row(4, 0, "four")].concat());
+    assert!(!c.breaks()[1].gap);
+    c.stop();
+    old.remove().unwrap();
+}
+
+#[test]
+fn clearing_a_capture_log_shows_its_capture_anew() {
+    let s = setup();
+    let e = Arc::new(Engine::default());
+    let id = e.begin_open();
+    let c = s.start("SER1");
+    e.open_capture(id, c.clone()).unwrap();
+    let state = || e.request(json!({"action":"status"})).unwrap();
+    s.link
+        .log("SER1", &[row(1, 0, "one"), row(2, 0, "two")].concat());
+    wait("rows", || state()["total"] == 2);
+    let before = c.path();
+    let cut = |s: &Setup| Cut::open(s.store.create(Platform::Android, "Pixel 8").unwrap()).unwrap();
+    // Only the shown log's recording capture is cleared.
+    let next = e.begin_open();
+    assert!(e.clear_capture(id + 7, next, cut(&s)).is_err());
+    let next = e.begin_open();
+    let status = e.clear_capture(id, next, cut(&s)).unwrap();
+    assert_eq!(status["datasetId"], next);
+    wait("cleared", || {
+        let s = state();
+        s["datasetId"] == next && s["following"] == true && s["capture"]["rows"] == 0
+    });
+    assert!(e.cleared_from(next).is_none());
+    assert!(e.capture(id).is_none());
+    assert!(Arc::ptr_eq(&e.capture(next).unwrap(), &c));
+    assert!(c.live());
+    // The rows before go with the log that showed them.
+    assert!(!before.exists());
+    s.link.log("SER1", &row(3, 0, "three"));
+    wait("new row", || {
+        let s = state();
+        s["total"] == 1 && s["capture"]["rows"] == 1
+    });
+    // A clear that does not open leaves the capture in its file.
+    let path = c.path();
+    let stale = e.begin_open();
+    e.begin_open();
+    assert!(e.clear_capture(next, stale, cut(&s)).is_err());
+    assert_eq!(c.path(), path);
+    assert!(c.live());
+    assert_eq!(s.store.leftovers().len(), 0);
+    e.close();
+    assert_eq!(c.phase(), Phase::Stopped);
+    drop(c);
+    // Its row was never saved, so its file stays for the next run.
+    assert_eq!(s.store.leftovers().len(), 1);
 }
 
 #[test]
@@ -796,14 +933,17 @@ fn a_scripted_developer_build_started_again_shows_its_private_values() {
     assert_eq!(public_message(&missing, ""), NOT_LISTED);
     // As the desktop does: the row after those written when the start
     // began is marked once the app has started.
-    let row = c.rows() + 1;
+    let (row, cuts) = c.next_row();
     link.launch(IPHONE, "com.example.sample").unwrap();
-    c.mark_launch(Launch {
-        row,
-        at: 1_792_818_131_000,
-        app: "SampleApp".into(),
-        process: "SampleApp".into(),
-    });
+    c.mark_launch(
+        Launch {
+            row,
+            at: 1_792_818_131_000,
+            app: "SampleApp".into(),
+            process: "SampleApp".into(),
+        },
+        cuts,
+    );
     wait("a row with its value", || {
         text().contains("request ") && text().contains("to api.example.com")
     });

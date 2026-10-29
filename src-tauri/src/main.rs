@@ -508,9 +508,10 @@ async fn work_state(window: tauri::WebviewWindow, dataset_id: u64) -> Result<Val
 }
 fn work_info(app: &tauri::AppHandle, id: u64) -> Value {
     let engine = &app.state::<AppState>().0;
-    // A capture file is temporary and tied to its capture.
+    // A capture file is temporary and tied to its capture. A cleared one
+    // continues the log it replaces, as a reloaded file does.
     if engine.capture(id).is_some() {
-        return json!({"reopenable":false,"capture":true});
+        return json!({"reopenable":false,"capture":true,"reloadOf":engine.cleared_from(id)});
     }
     match engine.grants(id) {
         Some(grants) => app
@@ -609,6 +610,31 @@ async fn stop_capture(
         .await
         .map_err(|_| "Request failed".to_string())?
 }
+/// Discards the rows a recording capture has so far: it records into a new
+/// file from now on, shown as a new log that keeps the page's filters.
+#[tauri::command]
+async fn clear_capture(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+    dataset_id: u64,
+) -> Result<Value, String> {
+    main_window(&window)?;
+    let engine = state.0.clone();
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let capture = engine
+            .capture(dataset_id)
+            .ok_or("No device capture is open")?;
+        let cut = app.state::<devices::Devices>().cut(&capture)?;
+        let id = engine.begin_open();
+        engine
+            .clear_capture(dataset_id, id, cut)
+            .inspect_err(|_| engine.cancel_open(id))
+            .map_err(message)
+    })
+    .await
+    .map_err(|_| "Request failed".to_string())?
+}
 /// Why no app can be started for a dataset: it shows no iPhone or iPad
 /// being recorded.
 const NOT_RECORDING_IOS: &str = "Apps start only while an iPhone or iPad is recording";
@@ -653,19 +679,22 @@ async fn launch_capture_app(
     let capture = recorded_iphone(&state.0, dataset_id)?;
     let app = window.app_handle().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let row = capture.rows() + 1;
+        let (row, cuts) = capture.next_row();
         let at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_millis() as i64);
         let started = app
             .state::<devices::Devices>()
             .launch(&capture.serial(), &bundle)?;
-        capture.mark_launch(logstudio_core::capture::Launch {
-            row,
-            at,
-            app: started.name.clone(),
-            process: started.executable.clone(),
-        });
+        capture.mark_launch(
+            logstudio_core::capture::Launch {
+                row,
+                at,
+                app: started.name.clone(),
+                process: started.executable.clone(),
+            },
+            cuts,
+        );
         Ok(json!({"name":started.name,"process":started.executable}))
     })
     .await
@@ -1279,6 +1308,7 @@ fn main() {
                 list_devices,
                 start_capture,
                 stop_capture,
+                clear_capture,
                 save_capture,
                 discard_capture,
                 capture_leftovers,
@@ -1323,6 +1353,7 @@ fn main() {
             list_devices,
             start_capture,
             stop_capture,
+            clear_capture,
             save_capture,
             discard_capture,
             capture_leftovers,

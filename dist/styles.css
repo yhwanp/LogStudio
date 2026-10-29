@@ -80,6 +80,9 @@ h1{font-size:16px;font-weight:650;letter-spacing:-.02em;margin:0}
 .capture-bar[data-tone=waiting] .capture-state{color:var(--navy-warn-text)}
 .capture-bar[data-tone=failed] .capture-state{color:var(--navy-error-text)}
 .capture-text{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* In a narrow window a capture's buttons leave its state no room; the
+   wordmark gives way first, still read by screen readers, the mark stays. */
+@media(max-width:860px){.topbar:has(.capture-bar:not([hidden])) .brand h1{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}}
 .capture-state::before,.capture-state::after{content:'';flex-shrink:0;width:8px;height:8px;border-radius:50%;background:var(--tone)}
 /* While recording a ring spreads from the dot. */
 .capture-state::after{position:absolute;left:0;top:50%;margin-top:-4px;opacity:0}
@@ -95,6 +98,12 @@ h1{font-size:16px;font-weight:650;letter-spacing:-.02em;margin:0}
 .topbar .button.primary:hover:not(:disabled){background:var(--brand)}
 .topbar .button.subtle{border-color:transparent;color:var(--navy-muted)}
 .topbar .button[aria-disabled=true]{cursor:default;opacity:.5}
+/* An icon in place of a button's name; the button names itself. */
+.button.icon-button{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;padding:0;width:30px}
+.icon-button svg{width:16px;height:16px;flex-shrink:0}
+/* Clearing takes the rows away at once: the quiet icon takes its border
+   and a warning color only when pointed at or focused. */
+.topbar .capture-clear:is(:hover,:focus-visible):not(:disabled,[aria-disabled=true]){color:var(--navy-error-text);border-color:#ffffff33}
 .topbar .button[aria-disabled=true]:hover{background:transparent}
 .topbar .help-button{width:34px;padding:0;font-size:15px;border-color:#ffffff33}
 
@@ -362,6 +371,9 @@ h2{font-size:16px;margin:0;font-weight:650}
 .log-row.capture-break{position:relative}
 .log-row.capture-break::before{content:'';position:absolute;left:0;right:0;top:-1px;height:2px;background:repeating-linear-gradient(90deg,var(--muted) 0 6px,transparent 6px 11px);pointer-events:none}
 .log-row.capture-break::after{content:attr(data-capture-break);position:absolute;left:calc(var(--line-column) + 6px);top:-7px;padding:0 7px;border:1px solid var(--border-strong);border-radius:7px;background:var(--surface);color:var(--muted);font:600 10.5px/12px Inter,"Noto Sans KR",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;white-space:nowrap;pointer-events:none}
+/* The list's first row has no row above for its label to sit across: the
+   label goes inside the row, at its end, clear of the time. */
+.log-row.capture-break-start::after{top:50%;left:auto;right:10px;transform:translateY(-50%)}
 .timestamp{font-size:12px;color:var(--muted)}
 .pid,.tid,.uptime,.ecu,.apid,.ctid{font-size:12px;color:var(--muted)}
 .uptime{text-align:right;font-variant-numeric:tabular-nums}
