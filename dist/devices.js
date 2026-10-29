@@ -6,7 +6,7 @@
 // files; the page names a device by the serial of the last listing (an
 // iPhone's UDID), an app by its bundle in the last app listing and a left
 // file by an ID. A capture's rows are a temporary file until the user saves
-// them.
+// them; clearing them records into a new file from then on.
 import {formatSize, describeLogError} from './describe.js';
 import {textSpan, writeClipboard} from './dom.js';
 
@@ -197,12 +197,13 @@ export function describeCapture(capture) {
       };
   }
 }
-// Where a capture lost its device and found it again, and where an app it
-// started with its private values shown begins: the first row after each,
-// in row order.
+// Where a capture was cleared, where it lost its device and found it again,
+// and where an app it started with its private values shown begins: the
+// first row after each, in row order. A clear marks the first row.
 export function captureBreaks(capture) {
   const away = (capture?.breaks ?? []).map(b => ({...b, kind:'away'})), launches = (capture?.launches ?? []).map(l => ({...l, kind:'launch'}));
-  return [...away, ...launches].filter(b => Number.isSafeInteger(b?.row)).sort((a, b) => a.row - b.row);
+  const cleared = Number.isSafeInteger(capture?.cleared) ? [{row:1, at:capture.cleared, kind:'clear'}] : [];
+  return [...cleared, ...away, ...launches].filter(b => Number.isSafeInteger(b?.row)).sort((a, b) => a.row - b.row);
 }
 // The label of the breaks after row `after` up to and including `row`. A
 // filtered list may hide a break's own first row; the next row shown carries
@@ -211,7 +212,9 @@ export function breakLabel(breaks, after, row) {
   const between = breaks.filter(b => b.row > after && b.row <= row);
   if (!between.length) return '';
   // Each kind reads as one part, in the order its first mark came.
-  const parts = [], away = between.filter(b => b.kind !== 'launch'), started = between.filter(b => b.kind === 'launch');
+  const parts = [], away = between.filter(b => b.kind === 'away'), started = between.filter(b => b.kind === 'launch');
+  const cleared = between.find(b => b.kind === 'clear');
+  if (cleared) parts.push({row:cleared.row, text:`${clockTime(cleared.at)} 로그 비움`});
   if (away.length) {
     const first = away[0], last = away[away.length - 1], reboot = away.some(b => b.reboot), gap = away.some(b => b.gap);
     const span = away.length === 1
@@ -238,6 +241,14 @@ export function installCommand(platform) {
 export const PLATFORM_TOOLS_URL = 'https://developer.android.com/tools/releases/platform-tools';
 // Native code's word for a save the user stopped.
 const SAVE_CANCELLED = 'Save cancelled';
+// What the trash button does, and the notice once it has, which stays as
+// long as a notice with an action: the rows it names are gone.
+const CLEAR_HINT = '지금까지 기록한 로그를 비우고 이어서 기록합니다';
+export const clearedNotice = bytes => `기록한 로그(${formatSize(bytes)})를 비웠습니다. 지금부터 들어오는 로그를 기록합니다.`;
+const CLEARED_MS = 6000;
+// A second press of a double click, after a clear that ended at once, is
+// not a second clear.
+const CLEAR_REPEAT_MS = 600;
 
 // One modal question: 저장 (focused), 저장 안 함, or 취소 (also Escape and a
 // press on the backdrop). Resolves 'save', 'discard' or 'cancel'.
@@ -293,7 +304,7 @@ export function mountCaptureDialog({document = globalThis.document} = {}) {
   return {ask, dismiss:() => close('cancel'), get isOpen() {return dialog.open;}};
 }
 
-export function mountDevices({ui, document, window, native, menu, logs, isGone, report, unreport = () => {}, notify}) {
+export function mountDevices({ui, document, window, native, menu, logs, isGone, report, unreport = () => {}, notify, keepInput = () => () => {}}) {
   const invoke = (command, args) => native.core.invoke(command, args);
   const fail = error => report(String(error).slice(0, 500));
   const $ = id => document.getElementById(id);
@@ -306,9 +317,10 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
   // device, which devicectl gives up on after about 10 s.
   const SLOW_LAUNCH_MS = 2000;
   // Apps starting, by the dataset of the capture they start on: another
-  // capture shown meanwhile has its own button.
+  // capture shown meanwhile has its own button. A start goes on under the
+  // log that replaces its capture's when the capture is cleared.
   const starting = new Map();
-  let adb = null, busy = false, saving = false, launchError = '';
+  let adb = null, busy = false, saving = false, clearing = false, clearedAt = -Infinity, launchError = '';
 
   // The device menu opens at once and fills in when adb and the devices
   // answer.
@@ -375,9 +387,9 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
   // for a capture no longer shown is dropped.
   async function launch(datasetId, app) {
     if (starting.has(datasetId) || isGone()) return;
-    const name = String(app.name || app.bundle);
-    const shown = () => !isGone() && logs.getState().datasetId === datasetId;
-    starting.set(datasetId, name);
+    const name = String(app.name || app.bundle), job = {datasetId, name};
+    const shown = () => !isGone() && logs.getState().datasetId === job.datasetId;
+    starting.set(datasetId, job);
     unreport(launchError);
     launchError = '';
     ui.captureAppStatus.textContent = `${name} 앱을 실행하는 중입니다`;
@@ -393,7 +405,7 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
       }
     } finally {
       window.clearTimeout(slow);
-      starting.delete(datasetId);
+      starting.delete(job.datasetId);
       if (shown()) ui.captureAppStatus.textContent = '';
       render();
     }
@@ -515,7 +527,7 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
   // Saves a copy of the rows so far; false when the user cancelled. While it
   // copies, 저장 becomes 저장 취소: a capture can be gigabytes.
   async function save(datasetId = logs.getState().datasetId) {
-    if (saving || !logs.getState().capture) return false;
+    if (saving || clearing || !logs.getState().capture) return false;
     saving = true;
     render();
     try {
@@ -533,11 +545,51 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
       render();
     }
   }
+  // Why the trash button cannot clear now; empty when it can.
+  function unclearable(capture = logs.getState().capture) {
+    if (saving) return '저장하는 동안에는 비울 수 없습니다';
+    if (!(capture?.bytes > 0)) return '아직 비울 로그가 없습니다';
+    return '';
+  }
+  // Discards the rows so far at once, unsaved or not: the capture records
+  // into a new file from now on, shown as a new log that keeps the filters
+  // and search. Bookmarks and marks went with the rows. The bar's status
+  // stays quiet meanwhile: the notice says what happened, and the status
+  // turning unsaved again as rows arrive is no news.
+  async function clear() {
+    const {datasetId, capture} = logs.getState();
+    if (clearing || unclearable(capture) || Date.now() - clearedAt < CLEAR_REPEAT_MS || isGone() || !Number.isSafeInteger(datasetId)) return;
+    clearing = true;
+    render();
+    const forget = keepInput(datasetId, clearedNotice(capture.bytes), CLEARED_MS);
+    ui.captureState.setAttribute('aria-live', 'off');
+    const speak = () => ui.captureState.setAttribute('aria-live', 'polite');
+    try {
+      const status = await invoke('clear_capture', {datasetId});
+      const job = starting.get(datasetId);
+      if (job && Number.isSafeInteger(status?.datasetId)) {
+        starting.delete(datasetId);
+        job.datasetId = status.datasetId;
+        starting.set(job.datasetId, job);
+      }
+      window.setTimeout(speak, CLEARED_MS);
+    } catch (error) {
+      speak();
+      forget();
+      fail(error);
+    } finally {
+      clearing = false;
+      clearedAt = Date.now();
+      render();
+    }
+  }
+  ui.captureClear.addEventListener('click', () => void clear());
   ui.captureSave.addEventListener('click', () => {
     if (saving) void invoke('cancel_export').catch(() => {});
     else void save();
   });
   ui.captureStop.addEventListener('click', async () => {
+    if (clearing) return;
     const datasetId = logs.getState().datasetId;
     ui.captureStop.disabled = true;
     try {
@@ -572,12 +624,26 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
     }
     ui.captureState.title = words.title;
     const live = capture.state === 'recording' || capture.state === 'waiting';
+    // The bar's buttons keep focus while they cannot act, so they are only
+    // marked unavailable, and the trash button says why.
+    ui.captureClear.hidden = !live;
+    ui.captureClear.disabled = busy;
+    const why = unclearable(capture);
+    ui.captureClear.setAttribute('aria-disabled', clearing || why ? 'true' : 'false');
+    // Rows no save holds cannot come back.
+    const hint = why || (unsaved ? `${CLEAR_HINT}. 저장하지 않은 로그는 되살릴 수 없습니다` : CLEAR_HINT);
+    if (ui.captureClear.title !== hint) {
+      ui.captureClear.title = hint;
+      ui.captureClearHint.textContent = hint;
+    }
     ui.captureStop.hidden = !live;
     ui.captureStop.disabled = busy;
+    ui.captureStop.setAttribute('aria-disabled', clearing ? 'true' : 'false');
+    ui.captureSave.setAttribute('aria-disabled', clearing ? 'true' : 'false');
     // An app starts on an iPhone or iPad only while it is being recorded.
     ui.captureApp.hidden = !xcode || capture.platform !== 'ios' || capture.state !== 'recording';
     ui.captureApp.disabled = busy;
-    const launching = starting.get(state.datasetId) ?? '';
+    const launching = starting.get(state.datasetId)?.name ?? '';
     ui.captureApp.setAttribute('aria-disabled', launching ? 'true' : 'false');
     ui.captureApp.textContent = launching ? '앱 실행 중…' : '앱 실행…';
     ui.captureApp.title = launching ? `${launching} 앱을 실행하는 중입니다` : '개발용 서명 앱을 다시 실행해 그 앱의 로그를 <private> 없이 기록합니다';
@@ -670,5 +736,5 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
     if (!isGone() && payload?.datasetId === logs.getState().datasetId) void logs.start();
   }).catch(() => {});
 
-  return {render, guard, keep, save, loadLeftovers, openMenu, openAppMenu, isAsking:() => dialog.isOpen || helpDialog.open || appleDialog.open};
+  return {render, guard, keep, save, clear, loadLeftovers, openMenu, openAppMenu, isAsking:() => dialog.isOpen || helpDialog.open || appleDialog.open};
 }

@@ -12,7 +12,7 @@ use logstudio_core::{
         ios::IosLink,
         link::{Device, Link, Platform},
         store::Store,
-        Capture, Options,
+        Capture, Cut, Options,
     },
     source::public_message,
 };
@@ -245,6 +245,14 @@ impl Devices {
             .create(device.platform, device.name())
             .map_err(message)?;
         Capture::start(link, serial, slot, Options::default()).map_err(message)
+    }
+    /// A new file for a capture to record into once cleared.
+    pub fn cut(&self, capture: &Capture) -> Result<Cut, String> {
+        let slot = self
+            .store()?
+            .create(capture.platform, &capture.model)
+            .map_err(message)?;
+        Cut::open(slot).map_err(message)
     }
     /// Capture files left by earlier runs, under IDs for the page.
     pub fn leftovers(&self) -> Value {

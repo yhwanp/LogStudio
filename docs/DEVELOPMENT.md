@@ -15,8 +15,8 @@
 | `core/src/search.rs` | 고정 버전 `grep-regex` / `grep-searcher` 기반 문자열·정규식 검색 및 하이라이트 범위 계산, 필터 조건(레벨·태그·PID·TID·시간·메시지) 컴파일과 블록·행 판정 |
 | `core/src/encoding.rs` | 표시 텍스트 디코딩: 손상된 UTF-8 바이트의 표시용 대체(``)와 손상 위치 마스크, Mac OS Roman으로 잘못 읽혀 깨진 UTF-8 문자 복원(`repair`), UTF-16·압축 파일 판별 |
 | `core/src/launch.rs` | CLI 경로 인자(복수 지정 시 병합 열기) 및 `--large-log`(반복 가능) 옵션 해석 |
-| `core/src/capture/` | 기기 기록: `mod.rs`(기록기·재연결 상태 흐름·저장·버리기), `gate.rs`(`threadtime` 시각과 시작 경계·중복 제거), `link.rs`(연결 계층 trait·기기 종류·`adb devices -l` 파서·공개 오류 문구), `cli.rs`(adb 명령 실행 연결), `adb.rs`(adb 탐지·`adb version` 검증), `process.rs`(adb·Xcode 도구 명령을 표준 입력과 Windows 콘솔 창 없이 만들고, 시간 제한 안에 끝까지 실행), `ios.rs`(Apple 기기 서비스(usbmuxd)로 iPhone·iPad 목록과 `os_trace_relay` 로그를 받아 iOS 로그 줄로 쓰는 연결), `apps.rs`(기록 중인 iPhone·iPad의 개발용 서명 앱 목록과 Xcode `devicectl`로 `OS_ACTIVITY_DT_MODE=1` 실행), `store.rs`(임시 기록 파일과 잠금·남은 기록), `fake.rs`(테스트·QA용 가짜 연결과 합성 로그) |
-| `core/src/lib.rs` | `Engine`: 파일 열기·검증·롤백 복원, 기기 기록 로그 열기(`open_capture`)와 수명 관리, IPC 요청 처리, 진행 상태 이벤트 발행 |
+| `core/src/capture/` | 기기 기록: `mod.rs`(기록기·재연결 상태 흐름·저장·버리기·새 파일로 비우기(`Cut`)), `gate.rs`(`threadtime` 시각과 시작 경계·중복 제거), `link.rs`(연결 계층 trait·기기 종류·`adb devices -l` 파서·공개 오류 문구), `cli.rs`(adb 명령 실행 연결), `adb.rs`(adb 탐지·`adb version` 검증), `process.rs`(adb·Xcode 도구 명령을 표준 입력과 Windows 콘솔 창 없이 만들고, 시간 제한 안에 끝까지 실행), `ios.rs`(Apple 기기 서비스(usbmuxd)로 iPhone·iPad 목록과 `os_trace_relay` 로그를 받아 iOS 로그 줄로 쓰는 연결), `apps.rs`(기록 중인 iPhone·iPad의 개발용 서명 앱 목록과 Xcode `devicectl`로 `OS_ACTIVITY_DT_MODE=1` 실행), `store.rs`(임시 기록 파일과 잠금·남은 기록), `fake.rs`(테스트·QA용 가짜 연결과 합성 로그) |
+| `core/src/lib.rs` | `Engine`: 파일 열기·검증·롤백 복원, 기기 기록 로그 열기(`open_capture`)·비운 기록을 새 데이터셋으로 바꾸기(`clear_capture`)와 수명 관리, IPC 요청 처리, 진행 상태 이벤트 발행 |
 | `src-tauri/src/main.rs` | Tauri 커맨드 핸들러, 동시 요청 수 제한, 파일 선택·드롭 처리(다중 파일은 `order::arrange` 정렬), 시작 인자 오류 보관(`take_startup_error`) |
 | `src-tauri/src/clipboard.rs` | macOS Finder 파일 및 UTF-8 BOM 붙여넣기용 일회성 권한(grant) 발급·연장·폐기 |
 | `src-tauri/src/drag.rs` | 네이티브 드래그 이벤트 판정(`decide`): 실제 파일 경로가 있을 때만 드롭 안내 표시 및 열기 수행 |
@@ -47,7 +47,7 @@
 | 필터 | `filter-model.js`(레벨 목록, 붙여넣기 25 MiB 상한, 조건 모델 및 입력 검증), `conditions.js`(필터 패널의 조건 카드 UI), `saved-filters.js`(저장된 필터 직렬화·비교·메뉴·이름 대화상자) |
 | 행 선택·목록 | `row-selection.js`(상단·검색·북마크 공통 행 선택 상태 머신, DOM 비의존), `row-gestures.js`(마우스 클릭·드래그·자동 스크롤), `bookmarks.js`(북마크 관리), `recent.js`(최근 파일 메뉴) |
 | 공통·유틸 | `dom.js`(DOM 헬퍼), `demo.js`(빈 화면의 `샘플 로그 보기`용 합성 로그) |
-| 기기 기록 | `devices.js`(Android 기기와 iPhone·iPad를 종류별로 보여 주고, USB 디버깅 허용·신뢰·잠금 해제를 기다리는 기기가 있으면 열린 동안 다시 조회하는 기기 메뉴, adb·Apple 기기 서비스 설치 안내, 상단 바 기록 상태와 화면 낭독기용 설명, 기록 중인 iPhone·iPad의 `앱 실행…` 메뉴(macOS만)와 실행 지점 표시, 저장 확인 대화상자, 남은 기록 목록, 드롭·창 닫기 보류 응답) |
+| 기기 기록 | `devices.js`(Android 기기와 iPhone·iPad를 종류별로 보여 주고, USB 디버깅 허용·신뢰·잠금 해제를 기다리는 기기가 있으면 열린 동안 다시 조회하는 기기 메뉴, adb·Apple 기기 서비스 설치 안내, 상단 바 기록 상태와 화면 낭독기용 설명, 묻지 않고 비우는 휴지통 버튼(필터·검색 유지), 기록 중인 iPhone·iPad의 `앱 실행…` 메뉴(macOS만)와 실행 지점 표시, 저장 확인 대화상자, 남은 기록 목록, 드롭·창 닫기 보류 응답) |
 | 확장 기능 | `extras.js`(extras 빌드에서 설정 파일이 있는 확장 기능의 `확장` 메뉴와 설정 오류 표시·`설정 폴더 열기`, 창으로 돌아올 때 목록 갱신, 선택한 행을 확장 창에 전달, 확장 창이 고른 행을 상단 로그에서 선택; 다른 빌드에서는 버튼을 숨김) |
 | 메뉴·대화상자·문구 | `menu.js`(팝업 메뉴), `shortcuts.js`(단축키 안내 대화상자), `clipboard.js`(붙여넣기 대상 판별: 입력란·로그 텍스트·파일 경로), `paste-confirm.js`(열린 로그 교체 확인 대화상자), `tips.js`(첫 사용 팁 및 기능 둘러보기), `describe.js`(진행 상태·오류·필터 요약 문구) |
 
@@ -130,6 +130,13 @@
     - **`idevice`로 직접 실행하지 않는 이유:** iOS 17부터 앱 실행(DVT `processcontrol`)은 RSD의 `com.apple.instruments.dtservicehub`에만 있고, 이 서비스는 CoreDevice 터널(USB는 lockdown의 CoreDeviceProxy와 사용자 공간 TCP, Wi-Fi는 Xcode가 따로 맺는 RemotePairing TLS-PSK 페어링)과 기기별로 Apple TSS 서명을 받아 마운트하는 개발자 디스크 이미지(Xcode가 `/Library/Developer/DeveloperDiskImages`에 설치)가 있어야 열립니다. Xcode 없이 하려면 디스크 이미지를 내려받고 페어링을 새로 만들어야 해서 사용자가 모르는 도구 설치와 기존 페어링 변경을 피하는 원칙에 어긋나고, Xcode가 있으면 `devicectl`이 이 과정을 모두 처리합니다. 개발용 서명 앱은 대개 Xcode로 빌드하므로 Xcode를 요구해도 실제 사용에는 거의 제약이 없습니다. 다만 이 기능은 macOS에서만 동작합니다.
   - **재연결과 레벨 이름:** 기기는 연결된 동안의 로그만 보내므로 재연결 뒤에는 그때부터 이어서 기록하고, 끊긴 지점에 `gap`을 표시합니다. 재부팅은 구분하지 않습니다. Wi-Fi 기기도 연결이 끊기면 usbmuxd가 연결을 닫아 스트림이 끝나므로(macOS에서 iPhone의 Wi-Fi를 꺼서 확인), 데이터가 오지 않는 시간으로 끊김을 판단하지 않습니다. 데이터셋 상태의 `ios`(모든 파일이 iOS 로그)나 기록의 `platform`이 iOS면 화면은 F·U 레벨을 `Fault`·`Default`로 부릅니다.
 - **엔진 연동:** `Engine::open_capture`가 기록 파일을 데이터셋으로 열고 검증 직후 따라가기를 켭니다. 기록이 끝나면 따라가기를 꺼 마지막 줄까지 읽어 건수를 확정하며, 데이터셋을 닫거나 교체가 확정되면 기록을 닫습니다. 롤백으로 되살아난 기록 로그는 일시중지 직전에 따라가고 있었을 때만 다시 따라갑니다.
+- **비우기:** 기기 스트림은 그대로 두고 기록 파일만 바꿉니다. 그래서 다시 연결하는 동안 줄을 잃지 않고(iPhone은 연결 전의 줄을 보내지 않음), 기기 로그에 adb 조회가 남기는 줄도 생기지 않습니다. 데스크톱이 새 임시 파일을 미리 열고(`Cut::open`), `Engine::clear_capture`가 그 빈 파일을 새 데이터셋으로 엽니다. 새 데이터셋의 검증이 끝나면(`finish`) 기록기가 `writer`와 `status` 잠금을 함께 잡은 채 파일을 바꾸고 바이트·행 수, 저장한 바이트, 끊긴 지점, 실행 지점을 비웁니다(`Capture::cut`). 이전 데이터셋은 기존 교체 흐름대로 닫히고, 그 파일은 닫힌 뒤 지웁니다.
+  - 받는 중이던 줄 조각과 재연결 경계용 꼬리 바이트는 새 파일로 이어집니다. 새 데이터셋이 열리지 않거나 취소되면 기록은 원래 파일에 계속 쓰고, 새 파일은 지웁니다. 비우는 동안 기록은 두 데이터셋 모두에 등록되어 있으며, 마지막 데이터셋이 닫힐 때만 기록을 닫습니다.
+  - 기기가 끊긴 동안 비우면 끊긴 사이 기기 버퍼에 쌓인 줄이 비우기 전의 것일 수 있습니다. 그래서 다음 재연결은 새 기록처럼 최근 줄을 경계로 받고, `gap`을 표시합니다.
+  - 데스크톱이 실행 지점의 행 번호를 잡은 뒤 비우기가 일어나면, 실행 지점은 새 파일의 첫 행이 됩니다(`Capture::next_row`).
+  - 기록 상태의 `cleared`(비운 시각)로 화면은 새 로그의 첫 행에 재연결 구분선과 같은 방식의 표시를 그립니다. 목록의 첫 행에는 위에 걸칠 행이 없으므로 표시를 행 안 끝에 둡니다(`capture-break-start`).
+  - 화면은 비우는 동안 `기록 중지`·`저장`을 막고, 비울 로그가 없거나 저장 중이면 휴지통을 `aria-disabled`로 둡니다. 더블클릭의 두 번째 누름(600 ms 안)은 무시합니다. 알림이 비운 일을 읽어 주는 동안 상단 바 상태의 라이브 영역은 잠시 끕니다.
+  - 새 데이터셋의 `opened` 이벤트에 실린 작업 정보는 `reloadOf`로 이전 데이터셋을 가리킵니다. 화면은 다시 열기와 같은 경로로 필터·저장된 필터·검색어를 이어 받고, 북마크와 위치는 넘기지 않습니다.
 - **임시 파일(`store.rs`):** 기록 파일 옆 잠금 파일(`.lock`)을 실행 중인 앱이 잡고 있으며, 잡히지 않은 파일은 비정상 종료로 남은 기록입니다. 닫을 때 사용자가 버리기로 했거나 저장하지 않은 바이트가 없으면 파일을 지웁니다.
 - **닫기와 종료:** 기록 로그가 열려 있으면 드롭과 창 닫기를 보류하고 화면에 묻습니다(`drop-held`·`close-held`). macOS의 기본 종료 메뉴 항목은 창 닫기를 거치지 않고 앱을 바로 끝냅니다. 그래서 앱 메뉴의 종료(`Cmd+Q`)는 창을 먼저 닫는 메뉴 항목으로 바꿔, 창을 닫을 때와 같은 저장 확인을 거치게 합니다. Dock의 종료와 로그아웃은 여전히 바로 끝나며, 그 기록은 다음 실행의 남은 기록이 됩니다.
 
@@ -157,7 +164,7 @@
 | `follow` | `follow:true`/`false`로 실시간 따라가기 켜기·끄기(단일 텍스트 파일 전용) |
 | `cancel`, `close` | 진행 중인 쿼리 취소 및 파일 닫기(동시 요청 수 제한과 별도로 즉시 처리) |
 
-기기 기록은 별도 Tauri 명령을 씁니다: `adb_status`·`pick_adb`(adb 탐지·지정), `list_devices`(Android 기기와 iPhone·iPad 목록, 종류별로 목록을 받지 못한 이유), `start_capture`·`stop_capture`, `save_capture`·`discard_capture`(저장·버리기 표시), `capture_leftovers`·`open_leftover`·`delete_leftover`(남은 기록, ID로만 지칭), `capture_apps`·`launch_capture_app`(기록 중인 iPhone·iPad의 개발용 서명 앱 목록과 실행, 데이터셋 ID와 마지막 앱 목록의 bundle ID로만 지칭), `finish_drop`·`answer_close`(기록 로그가 열려 있을 때 보류한 드롭과 창 닫기에 대한 화면의 답). 엔진은 기록 상태가 바뀌면 `capture-changed` 이벤트를 보내고, 상태 응답과 `query-progress`에는 `capture`가 함께 실립니다.
+기기 기록은 별도 Tauri 명령을 씁니다: `adb_status`·`pick_adb`(adb 탐지·지정), `list_devices`(Android 기기와 iPhone·iPad 목록, 종류별로 목록을 받지 못한 이유), `start_capture`·`stop_capture`, `clear_capture`(기록 중인 로그를 새 파일로 비우고 새 데이터셋으로 표시), `save_capture`·`discard_capture`(저장·버리기 표시), `capture_leftovers`·`open_leftover`·`delete_leftover`(남은 기록, ID로만 지칭), `capture_apps`·`launch_capture_app`(기록 중인 iPhone·iPad의 개발용 서명 앱 목록과 실행, 데이터셋 ID와 마지막 앱 목록의 bundle ID로만 지칭), `finish_drop`·`answer_close`(기록 로그가 열려 있을 때 보류한 드롭과 창 닫기에 대한 화면의 답). 엔진은 기록 상태가 바뀌면 `capture-changed` 이벤트를 보내고, 상태 응답과 `query-progress`에는 `capture`가 함께 실립니다.
 
 동시 데이터 요청은 최대 4개까지 허용하며, 초과 시 `Local engine is busy; retry`를 반환해 프론트엔드가 짧게 재시도합니다. 엔진은 상태 변화 시 `source-changed`(`opened`·`validated`·`rollback`·`error`), `files-ordered`, `query-progress` 이벤트를 발행합니다.
 

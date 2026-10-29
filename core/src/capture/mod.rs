@@ -4,7 +4,9 @@
 //! waited for; an Android device is continued after the last row recorded,
 //! without repeating it, or from its first row when it booted meanwhile,
 //! and rows it dropped from its buffer while away cannot come back. An
-//! iPhone sends only new rows, so rows it logged while away are lost.
+//! iPhone sends only new rows, so rows it logged while away are lost. A
+//! capture can be cut: it records into a new file from then on, and the rows
+//! before stay with the old one.
 pub mod adb;
 pub mod apps;
 pub mod cli;
@@ -23,7 +25,7 @@ use std::{
     collections::HashMap,
     fs::{File, OpenOptions},
     io::{self, Write},
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Condvar, Mutex,
@@ -95,6 +97,17 @@ impl Default for Options {
 }
 struct Status {
     phase: Phase,
+    /// The file the capture writes now.
+    slot: Slot,
+    /// Times the capture was cut into a new file.
+    cuts: u64,
+    /// When the capture was last cut, in Unix milliseconds of this
+    /// computer: the page marks the new file's first row with it.
+    cleared: Option<i64>,
+    /// The capture was cut while its device was away: rows the device
+    /// logged meanwhile may precede the cut, so it is recorded from its
+    /// return as a new capture is.
+    fresh: bool,
     serial: String,
     bytes: u64,
     rows: u64,
@@ -109,7 +122,6 @@ struct Status {
 type Observer = Arc<dyn Fn(&Capture) + Send + Sync>;
 pub struct Capture {
     link: Arc<dyn Link>,
-    slot: Slot,
     /// The device as people know it: its model, else its serial.
     pub model: String,
     pub platform: Platform,
@@ -120,6 +132,9 @@ pub struct Capture {
     stop: AtomicBool,
     closer: Mutex<Option<Closer>>,
     worker: Mutex<Option<JoinHandle<()>>>,
+    /// What the worker writes with, which a cut changes. Locked before
+    /// `status`. A capture left by an earlier run has none.
+    writer: Option<Mutex<Writer>>,
     observer: Mutex<Option<Observer>>,
     /// Bytes the user saved elsewhere.
     saved: AtomicU64,
@@ -236,13 +251,16 @@ impl Capture {
         };
         let capture = Arc::new(Self {
             link,
-            slot,
             model: c.device.label(),
             platform: c.device.platform,
             identity: c.identity,
             options,
             status: Mutex::new(Status {
                 phase: Phase::Recording,
+                slot,
+                cuts: 0,
+                cleared: None,
+                fresh: false,
                 serial: serial.into(),
                 bytes: 0,
                 rows: 0,
@@ -256,6 +274,7 @@ impl Capture {
             stop: AtomicBool::new(false),
             closer: Mutex::new(None),
             worker: Mutex::new(None),
+            writer: Some(Mutex::new(writer)),
             observer: Mutex::new(None),
             saved: AtomicU64::new(0),
             discard: AtomicBool::new(false),
@@ -263,9 +282,8 @@ impl Capture {
         });
         let (stream, gate, boot) = (c.stream, c.gate, c.boot);
         let worker = capture.clone();
-        *capture.worker.lock().unwrap() = Some(thread::spawn(move || {
-            worker.run(stream, gate, boot, writer)
-        }));
+        *capture.worker.lock().unwrap() =
+            Some(thread::spawn(move || worker.run(stream, gate, boot)));
         Ok(capture)
     }
     /// A capture file left by an earlier run, held again to be shown,
@@ -284,13 +302,16 @@ impl Capture {
         };
         Ok(Arc::new(Self {
             link: Arc::new(Unlinked),
-            slot,
             model: name,
             platform,
             identity: String::new(),
             options: Options::default(),
             status: Mutex::new(Status {
                 phase: Phase::Stopped,
+                slot,
+                cuts: 0,
+                cleared: None,
+                fresh: false,
                 serial: String::new(),
                 bytes,
                 rows: 0,
@@ -304,14 +325,16 @@ impl Capture {
             stop: AtomicBool::new(true),
             closer: Mutex::new(None),
             worker: Mutex::new(None),
+            writer: None,
             observer: Mutex::new(None),
             saved: AtomicU64::new(0),
             discard: AtomicBool::new(false),
             recovered: true,
         }))
     }
-    pub fn path(&self) -> &Path {
-        &self.slot.path
+    /// The file the capture writes now.
+    pub fn path(&self) -> PathBuf {
+        self.status.lock().unwrap().slot.path.clone()
     }
     /// Whether rows were recorded that no save holds.
     pub fn unsaved(&self) -> bool {
@@ -320,16 +343,17 @@ impl Capture {
     /// Copies the rows recorded so far to `to` through a temporary file in
     /// its folder, as exports do; recording goes on. Returns the bytes.
     pub fn save(&self, to: &Path, cancel: &AtomicBool) -> io::Result<u64> {
-        if to == self.path()
-            || std::fs::canonicalize(to).ok() == std::fs::canonicalize(self.path()).ok()
-        {
+        let (path, len, cuts) = {
+            let s = self.status.lock().unwrap();
+            (s.slot.path.clone(), s.bytes, s.cuts)
+        };
+        if to == path || std::fs::canonicalize(to).ok() == std::fs::canonicalize(&path).ok() {
             return Err(error("Choose a file other than the capture"));
         }
-        let len = self.bytes();
         let name = to.file_name().ok_or_else(|| error("Save failed"))?;
         let mut partial = to.to_path_buf();
         partial.set_file_name(format!(".{}.logstudio-partial", name.to_string_lossy()));
-        if let Err(e) = copy_start(self.path(), len, &partial, to, cancel) {
+        if let Err(e) = copy_start(&path, len, &partial, to, cancel) {
             let _ = std::fs::remove_file(&partial);
             return Err(match crate::source::public_message(&e, "") {
                 m if !m.is_empty() => e,
@@ -340,8 +364,39 @@ impl Capture {
                 }),
             });
         }
-        self.saved.fetch_max(len, Ordering::AcqRel);
+        // A save of the previous file must not mark the new file's rows as
+        // saved.
+        let s = self.status.lock().unwrap();
+        if s.cuts == cuts {
+            self.saved.fetch_max(len, Ordering::AcqRel);
+        }
         Ok(len)
+    }
+    /// Records into `cut`'s file from now on, as a capture started now
+    /// would: the rows so far stay in the file it wrote, whose slot it
+    /// returns to be deleted once nothing reads it, and the breaks and app
+    /// starts are cleared. A row being received goes to the new file. A capture left by an
+    /// earlier run writes nothing and returns `cut`'s slot unused.
+    pub fn cut(&self, cut: Cut) -> Slot {
+        let Some(writer) = &self.writer else {
+            return cut.slot;
+        };
+        let old = {
+            let mut w = writer.lock().unwrap();
+            let mut s = self.status.lock().unwrap();
+            (w.file, w.bytes, w.rows) = (cut.file, 0, 0);
+            (s.bytes, s.rows) = (0, 0);
+            s.breaks.clear();
+            s.launches.clear();
+            s.cuts += 1;
+            s.cleared = Some(now());
+            s.fresh |= s.phase == Phase::Waiting;
+            self.saved.store(0, Ordering::Release);
+            self.discard.store(false, Ordering::Release);
+            std::mem::replace(&mut s.slot, cut.slot)
+        };
+        self.notify();
+        old
     }
     /// Marks the file to be deleted when the capture closes, or kept.
     pub fn discard(&self, on: bool) {
@@ -352,7 +407,7 @@ impl Capture {
     pub fn close(&self) {
         self.stop();
         if self.discard.load(Ordering::Acquire) || !self.unsaved() {
-            let _ = self.slot.remove();
+            let _ = self.status.lock().unwrap().slot.remove();
         }
     }
     /// Called when the phase, a waiting capture's reason or the launches
@@ -378,10 +433,23 @@ impl Capture {
     pub fn rows(&self) -> u64 {
         self.status.lock().unwrap().rows
     }
+    /// The row written next, with the cuts so far, for `mark_launch`.
+    pub fn next_row(&self) -> (u64, u64) {
+        let s = self.status.lock().unwrap();
+        (s.rows + 1, s.cuts)
+    }
     /// Remembers an app started on the device, for the page to mark where
     /// its rows begin; the capture file stays as the device sent it.
-    pub fn mark_launch(&self, launch: Launch) {
-        self.status.lock().unwrap().launches.push(launch);
+    /// `cuts` is from `next_row` with `launch.row`: a start that began
+    /// before a cut marks the first row of the new file.
+    pub fn mark_launch(&self, mut launch: Launch, cuts: u64) {
+        {
+            let mut s = self.status.lock().unwrap();
+            if s.cuts != cuts {
+                launch.row = 1;
+            }
+            s.launches.push(launch);
+        }
         self.notify();
     }
     pub fn launches(&self) -> Vec<Launch> {
@@ -416,6 +484,7 @@ impl Capture {
             "breaks": breaks,
             "launches": launches,
             "lost": s.lost,
+            "cleared": s.cleared,
             "reason": s.reason,
             "saved": saved,
             "unsaved": s.bytes > saved,
@@ -448,15 +517,23 @@ impl Capture {
             f(self);
         }
     }
-    fn run(&self, mut stream: Box<dyn Stream>, mut gate: Gate, mut boot: String, mut w: Writer) {
+    /// The writer of a started capture, the only kind that runs or is cut.
+    fn writer(&self) -> std::sync::MutexGuard<'_, Writer> {
+        self.writer
+            .as_ref()
+            .expect("a started capture has a writer")
+            .lock()
+            .unwrap()
+    }
+    fn run(&self, mut stream: Box<dyn Stream>, mut gate: Gate, mut boot: String) {
         let result = loop {
-            if let Err(e) = self.pump(&mut *stream, &mut gate, &mut w) {
+            if let Err(e) = self.pump(&mut *stream, &mut gate) {
                 break Err(e);
             }
             if self.stopping() {
                 break Ok(());
             }
-            w.stale = true;
+            self.writer().stale = true;
             let lost = now();
             {
                 let mut s = self.status.lock().unwrap();
@@ -464,29 +541,34 @@ impl Capture {
                 s.lost = Some(lost);
             }
             self.notify();
-            match self.reconnect(&boot, &w) {
+            match self.reconnect(&boot) {
                 Ok(Some(back)) => {
                     let reboot = back.boot != boot;
                     (stream, gate, boot) = (back.stream, back.gate, back.boot);
+                    let w = self.writer();
                     let mut s = self.status.lock().unwrap();
                     s.breaks.push(Break {
                         row: w.rows + 1,
                         lost,
                         resumed: now(),
                         reboot,
-                        gap: !self.link.replays(),
+                        gap: back.gap,
                     });
                     s.phase = Phase::Recording;
                     s.lost = None;
                     s.reason.clear();
+                    if back.fresh {
+                        s.fresh = false;
+                    }
                 }
                 Ok(None) => break Ok(()),
                 Err(e) => break Err(e),
             }
             self.notify();
         };
-        let result = result.and_then(|()| w.finish());
         {
+            let mut w = self.writer();
+            let result = result.and_then(|()| w.finish());
             let mut s = self.status.lock().unwrap();
             (s.bytes, s.rows, s.lost) = (w.bytes, w.rows, None);
             match result {
@@ -500,7 +582,7 @@ impl Capture {
         self.notify();
     }
     /// Writes a stream's rows until it ends; fails only when writing does.
-    fn pump(&self, stream: &mut dyn Stream, gate: &mut Gate, w: &mut Writer) -> io::Result<()> {
+    fn pump(&self, stream: &mut dyn Stream, gate: &mut Gate) -> io::Result<()> {
         let close = stream.closer();
         *self.closer.lock().unwrap() = Some(close.clone());
         // A stop before the closer was published still ends the stream.
@@ -513,6 +595,7 @@ impl Capture {
                 Ok(0) | Err(_) => break,
                 Ok(n) => n,
             };
+            let mut w = self.writer();
             w.push(&buf[..n], gate)?;
             let mut s = self.status.lock().unwrap();
             (s.bytes, s.rows) = (w.bytes, w.rows);
@@ -522,7 +605,7 @@ impl Capture {
     }
     /// Waits until the device is back and continues: after the rows the
     /// capture has, or from its first row after a boot. None once stopped.
-    fn reconnect(&self, boot: &str, w: &Writer) -> io::Result<Option<Back>> {
+    fn reconnect(&self, boot: &str) -> io::Result<Option<Back>> {
         let mut known: HashMap<String, String> = HashMap::new();
         loop {
             {
@@ -544,7 +627,7 @@ impl Capture {
             let Some(serial) = self.find(&devices, &mut known) else {
                 continue;
             };
-            match self.resume(&serial, boot, w) {
+            match self.resume(&serial, boot) {
                 Ok(back) => {
                     self.status.lock().unwrap().serial = serial;
                     return Ok(Some(back));
@@ -556,10 +639,16 @@ impl Capture {
     }
     /// Opens the device's stream again: after the rows written when it
     /// still has the same boot, else from the first row of its new boot.
-    fn resume(&self, serial: &str, boot: &str, w: &Writer) -> io::Result<Back> {
+    /// Cut while away, it starts after the rows the device holds now.
+    fn resume(&self, serial: &str, boot: &str) -> io::Result<Back> {
         let now_boot = self.link.boot_id(serial)?;
-        let gate = if now_boot == boot && self.link.replays() {
-            Gate::after(&w.tail)
+        let fresh = self.status.lock().unwrap().fresh;
+        let gate = if !self.link.replays() {
+            Gate::open()
+        } else if fresh {
+            Gate::after(&self.link.recent(serial, self.options.recent)?)
+        } else if now_boot == boot {
+            Gate::after(&self.writer().tail)
         } else {
             Gate::open()
         };
@@ -568,6 +657,8 @@ impl Capture {
             stream,
             gate,
             boot: now_boot,
+            gap: !self.link.replays() || fresh,
+            fresh,
         })
     }
     /// Says why the device, listed under its serial, cannot be used yet.
@@ -677,6 +768,35 @@ struct Back {
     stream: Box<dyn Stream>,
     gate: Gate,
     boot: String,
+    /// Rows the device logged while away were left out.
+    gap: bool,
+    /// It started anew, the capture having been cut while away.
+    fresh: bool,
+}
+/// A new file for a capture to record into from a cut on (`Capture::cut`),
+/// opened beforehand so that the cut cannot fail.
+pub struct Cut {
+    slot: Slot,
+    file: File,
+}
+impl Cut {
+    /// Deletes `slot`'s file when it cannot be opened.
+    pub fn open(slot: Slot) -> io::Result<Self> {
+        match OpenOptions::new().append(true).open(&slot.path) {
+            Ok(file) => Ok(Self { slot, file }),
+            Err(e) => {
+                let _ = slot.remove();
+                Err(e)
+            }
+        }
+    }
+    pub fn path(&self) -> &Path {
+        &self.slot.path
+    }
+    /// Deletes the file of a cut not made.
+    pub fn remove(self) {
+        let _ = self.slot.remove();
+    }
 }
 /// Copies the first `len` bytes of `from` to `to` through `partial`, which
 /// replaces `to` only once complete.
