@@ -98,6 +98,15 @@ h1{font-size:16px;font-weight:650;letter-spacing:-.02em;margin:0}
 .topbar .button.primary:hover:not(:disabled){background:var(--brand)}
 .topbar .button.subtle{border-color:transparent;color:var(--navy-muted)}
 .topbar .button[aria-disabled=true]{cursor:default;opacity:.5}
+/* Focus rings sit on navy in both schemes: the brand color keeps a dimmed
+   busy button's ring above 3:1. */
+.topbar{--focus:var(--brand)}
+/* The stop button switches between stopping and recording on. Its hidden
+   other name keeps the button as wide as either name, and the trash button
+   keeps its box while stopped, so the stop button stays under the pointer. */
+.capture-stop{display:inline-grid;align-items:center;justify-items:center}
+.capture-stop>span{grid-area:1/1}
+.capture-stop>[aria-hidden=true],.capture-clear.place-only{visibility:hidden}
 /* An icon in place of a button's name; the button names itself. */
 .button.icon-button{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;padding:0;width:30px}
 .icon-button svg{width:16px;height:16px;flex-shrink:0}
@@ -365,8 +374,9 @@ h2{font-size:16px;margin:0;font-weight:650}
 .file-badge{display:inline-block;min-width:16px;margin-right:4px;padding:0 3px;border-radius:4px;background:var(--surface-3);color:var(--muted);font-size:10px;font-weight:700;line-height:15px;text-align:center;vertical-align:1px}
 /* The first row of each later file of a combined log marks the boundary. */
 .log-row.file-start{box-shadow:inset 0 2px var(--accent-border)}
-/* Where a capture's device left and came back: a dashed line, unlike a
-   file's solid one, labeled with when. The label sits in the gap between the
+/* Where a capture's device left and came back, or where the user stopped
+   it and recorded on: a dashed line, unlike a file's solid one, labeled
+   with when. The label sits in the gap between the
    two rows' text and is only drawn: the log itself is unchanged. */
 .log-row.capture-break{position:relative}
 .log-row.capture-break::before{content:'';position:absolute;left:0;right:0;top:-1px;height:2px;background:repeating-linear-gradient(90deg,var(--muted) 0 6px,transparent 6px 11px);pointer-events:none}

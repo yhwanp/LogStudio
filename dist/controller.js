@@ -20,17 +20,19 @@ export const DEFAULT_FILTERS = Object.freeze(defaultFilters());
 const number = value => Number.isSafeInteger(value) && value >= 0;
 const CAPTURE_STATES = new Set(['recording', 'waiting', 'stopped', 'failed']);
 // A device capture as the engine reports it; null for any other log. A
-// break is where the device left and came back: `row` is the first after it,
+// break is where the device left and came back, or where the user stopped
+// the capture (`stopped`) and it recorded on: `row` is the first after it,
 // and `gap` says rows logged meanwhile were not recorded. `cleared` is when
-// the rows before the first were cleared.
+// the rows before the first were cleared; `stopped` is when the user last
+// stopped the capture, until it records again.
 export function captureState(value) {
   if (!value || typeof value !== 'object' || !CAPTURE_STATES.has(value.state)) return null;
   const text = (v, n = 300) => typeof v === 'string' ? v.slice(0, n) : '';
   const time = v => Number.isSafeInteger(v) ? v : null;
-  const breaks = Array.isArray(value.breaks) ? value.breaks.slice(0, 1000).filter(b => number(b?.row) && b.row > 0).map(b => ({row:b.row, lost:time(b.lost), resumed:time(b.resumed), reboot:b.reboot === true, gap:b.gap === true})) : [];
+  const breaks = Array.isArray(value.breaks) ? value.breaks.slice(0, 1000).filter(b => number(b?.row) && b.row > 0).map(b => ({row:b.row, lost:time(b.lost), resumed:time(b.resumed), reboot:b.reboot === true, gap:b.gap === true, stopped:b.stopped === true})) : [];
   // Apps the device started with their private values shown.
   const launches = Array.isArray(value.launches) ? value.launches.slice(0, 1000).filter(l => number(l?.row) && l.row > 0).map(l => ({row:l.row, at:time(l.at), app:text(l.app, 120), process:text(l.process, 120)})) : [];
-  return {state:value.state, device:text(value.device), serial:text(value.serial), bytes:number(value.bytes) ? value.bytes : 0, error:text(value.error, 500), breaks, launches, lost:time(value.lost), cleared:time(value.cleared), reason:text(value.reason), unsaved:value.unsaved === true, recovered:value.recovered === true, platform:value.platform === 'ios' ? 'ios' : 'android'};
+  return {state:value.state, device:text(value.device), serial:text(value.serial), bytes:number(value.bytes) ? value.bytes : 0, error:text(value.error, 500), breaks, launches, lost:time(value.lost), stopped:time(value.stopped), cleared:time(value.cleared), reason:text(value.reason), unsaved:value.unsaved === true, recovered:value.recovered === true, platform:value.platform === 'ios' ? 'ios' : 'android'};
 }
 const CONDITION_STATES = new Set(['some', 'none', 'pending', null]);
 // The engine's state of each condition a logs pane query sent, or null.

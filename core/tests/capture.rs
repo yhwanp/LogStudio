@@ -365,6 +365,166 @@ fn stopping_while_waiting_ends_at_once() {
 }
 
 #[test]
+fn a_stopped_capture_records_on_into_its_file_from_its_resume() {
+    let s = setup();
+    let c = s.start("SER1");
+    s.link.log("SER1", &row(1, 0, "one"));
+    written(&c, &row(1, 0, "one"));
+    // Only a stopped capture resumes.
+    assert_eq!(
+        public_message(&c.resume().err().unwrap(), ""),
+        logstudio_core::capture::NOT_STOPPED
+    );
+    c.stop();
+    let path = c.path();
+    // Rows logged while stopped are not recorded.
+    s.link.log("SER1", &row(2, 0, "while stopped"));
+    c.resume().unwrap();
+    assert_eq!(c.phase(), Phase::Recording);
+    assert_eq!(c.path(), path);
+    s.link.log("SER1", &row(3, 0, "three"));
+    written(&c, &[row(1, 0, "one"), row(3, 0, "three")].concat());
+    assert!(c.unsaved());
+    let breaks = c.breaks();
+    assert_eq!(breaks.len(), 1);
+    assert_eq!(
+        (
+            breaks[0].row,
+            breaks[0].reboot,
+            breaks[0].gap,
+            breaks[0].stopped
+        ),
+        (2, false, true, true)
+    );
+    assert!(breaks[0].lost <= breaks[0].resumed);
+    assert_eq!(c.json()["breaks"][0]["stopped"], true);
+    // It starts after the rows the device held, as a new capture does.
+    assert_eq!(
+        s.link.opened().last().unwrap().1.as_deref(),
+        Some("10-23 14:00:02.000")
+    );
+    // Away later, it continues after its rows as before.
+    s.link.unplug("SER1");
+    wait("waiting", || c.phase() == Phase::Waiting);
+    s.link.log("SER1", &row(4, 0, "four"));
+    s.link.plug("SER1");
+    written(
+        &c,
+        &[row(1, 0, "one"), row(3, 0, "three"), row(4, 0, "four")].concat(),
+    );
+    assert!(!c.breaks()[1].gap && !c.breaks()[1].stopped);
+    c.stop();
+    assert_eq!(c.phase(), Phase::Stopped);
+    // Closed, it never records again.
+    c.close();
+    assert!(c.resume().is_err());
+}
+
+#[test]
+fn a_capture_resumed_without_its_device_waits_for_it() {
+    let s = setup();
+    let c = s.start("SER1");
+    s.link.log("SER1", &row(1, 0, "one"));
+    written(&c, &row(1, 0, "one"));
+    c.stop();
+    s.link.unplug("SER1");
+    s.link.reboot("SER1");
+    thread::sleep(Duration::from_millis(5));
+    let resumed = chrono::Utc::now().timestamp_millis();
+    c.resume().unwrap();
+    assert_eq!(c.phase(), Phase::Waiting);
+    // It waits from its resume, and says it is recording on from a stop.
+    let stopped = c.json()["stopped"].as_i64().unwrap();
+    assert!(stopped < resumed);
+    assert!(c.json()["lost"].as_i64().unwrap() >= resumed);
+    // Stopped again while waiting, it still breaks where it first stopped.
+    c.stop();
+    assert_eq!(c.json()["stopped"], stopped);
+    assert_eq!(c.phase(), Phase::Stopped);
+    c.resume().unwrap();
+    s.link.log("SER1", &row(5, 0, "boot"));
+    s.link.plug("SER1");
+    wait("recording", || c.phase() == Phase::Recording);
+    assert!(c.json()["stopped"].is_null());
+    s.link.log("SER1", &row(6, 0, "back"));
+    written(&c, &[row(1, 0, "one"), row(6, 0, "back")].concat());
+    let breaks = c.breaks();
+    assert_eq!(breaks.len(), 1);
+    assert_eq!(
+        (breaks[0].row, breaks[0].reboot, breaks[0].stopped),
+        (2, true, true)
+    );
+    assert!(breaks[0].lost < resumed);
+    c.stop();
+}
+
+#[test]
+fn a_row_cut_short_by_stopping_ends_before_the_resumed_rows() {
+    let s = setup();
+    let c = s.start("SER1");
+    s.link.log("SER1", &row(1, 0, "one"));
+    s.link
+        .log("SER1", "10-23 14:00:02.000  1234  5678 I Tag: cut");
+    wait("received", || c.json()["rows"] == 1);
+    thread::sleep(Duration::from_millis(20));
+    c.stop();
+    let cut = [
+        row(1, 0, "one"),
+        "10-23 14:00:02.000  1234  5678 I Tag: cut".into(),
+    ]
+    .concat();
+    assert_eq!(content(&c), cut.as_bytes());
+    // The device ends the row the closed stream cut.
+    s.link.log("SER1", "\n");
+    c.resume().unwrap();
+    s.link.log("SER1", &row(3, 0, "three"));
+    written(&c, &format!("{cut}\n{}", row(3, 0, "three")));
+    assert_eq!(c.breaks()[0].row, 3);
+    assert_eq!(c.rows(), 3);
+    c.stop();
+}
+
+#[test]
+fn an_iphone_capture_resumed_records_only_rows_logged_since() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::new(dir.path().join("captures"));
+    let link = FakeLink::live();
+    link.add_ios("QA0UDID0000000000000001", "Test iPhone", "27.0");
+    let slot = store.create(Platform::Ios, "Test iPhone").unwrap();
+    let c = Capture::start(link.clone(), "QA0UDID0000000000000001", slot, options()).unwrap();
+    let first = "2026-10-24 14:00:01.000001 SampleApp[812:4410] [INFO] [Sync] first\n";
+    link.log("QA0UDID0000000000000001", first);
+    written(&c, first);
+    c.stop();
+    link.log(
+        "QA0UDID0000000000000001",
+        "2026-10-24 14:00:02.000001 SampleApp[812:4410] [INFO] [Sync] stopped\n",
+    );
+    c.resume().unwrap();
+    assert_eq!(c.phase(), Phase::Recording);
+    let back = "2026-10-24 14:00:03.000001 SampleApp[812:4410] [INFO] [Sync] back\n";
+    link.log("QA0UDID0000000000000001", back);
+    written(&c, &format!("{first}{back}"));
+    let b = c.breaks()[0];
+    assert_eq!((b.row, b.gap, b.stopped), (2, true, true));
+    c.stop();
+}
+
+#[test]
+fn a_capture_left_by_an_earlier_run_does_not_resume() {
+    let s = setup();
+    let c = s.start("SER1");
+    s.link.log("SER1", &row(1, 0, "one"));
+    written(&c, &row(1, 0, "one"));
+    c.stop();
+    let path = c.path();
+    drop(c);
+    let again = Capture::adopt(s.store.adopt(&path).unwrap()).unwrap();
+    assert!(again.resume().is_err());
+    assert_eq!(again.phase(), Phase::Stopped);
+}
+
+#[test]
 fn a_device_that_cannot_be_used_fails_at_once() {
     let s = setup();
     let fails = |serial: &str| {
@@ -454,6 +614,42 @@ fn an_engine_follows_a_capture_until_it_stops() {
     assert!(e.stop_capture(id + 1).is_err());
     e.close();
     assert!(e.capture(id).is_none());
+}
+
+#[test]
+fn a_resumed_capture_log_follows_its_new_rows() {
+    let s = setup();
+    let e = Arc::new(Engine::default());
+    let id = e.begin_open();
+    let c = s.start("SER1");
+    e.open_capture(id, c.clone()).unwrap();
+    let state = || e.request(json!({"action":"status"})).unwrap();
+    wait("following", || state()["following"] == true);
+    e.request(json!({"datasetId":id,"queryId":1,"action":"query","filters":Filters::default()}))
+        .unwrap();
+    s.link
+        .log("SER1", &[row(1, 0, "one"), row(2, 0, "two")].concat());
+    wait("rows", || c.json()["rows"] == 2);
+    e.stop_capture(id).unwrap();
+    wait("complete", || {
+        let s = state();
+        s["following"] == false && s["query"]["status"] == "complete" && s["total"] == 2
+    });
+    assert!(e.resume_capture(id + 1).is_err());
+    let status = e.resume_capture(id).unwrap();
+    assert_eq!(status["state"], "recording");
+    assert_eq!(state()["datasetId"], id);
+    wait("following again", || state()["following"] == true);
+    s.link.log("SER1", &row(3, 0, "three"));
+    wait("new row", || {
+        let s = state();
+        s["total"] == 3 && s["query"]["count"] == 3 && s["capture"]["breaks"][0]["row"] == 3
+    });
+    // Recording, it cannot resume again.
+    assert!(e.resume_capture(id).is_err());
+    e.close();
+    assert_eq!(c.phase(), Phase::Stopped);
+    assert!(c.resume().is_err());
 }
 
 #[test]

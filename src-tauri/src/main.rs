@@ -610,6 +610,19 @@ async fn stop_capture(
         .await
         .map_err(|_| "Request failed".to_string())?
 }
+/// Records again into the stopped capture the shown log holds, from now on.
+#[tauri::command]
+async fn resume_capture(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+    dataset_id: u64,
+) -> Result<Value, String> {
+    main_window(&window)?;
+    let engine = state.0.clone();
+    tauri::async_runtime::spawn_blocking(move || engine.resume_capture(dataset_id).map_err(message))
+        .await
+        .map_err(|_| "Request failed".to_string())?
+}
 /// Discards the rows a recording capture has so far: it records into a new
 /// file from now on, shown as a new log that keeps the page's filters.
 #[tauri::command]
@@ -1308,6 +1321,7 @@ fn main() {
                 list_devices,
                 start_capture,
                 stop_capture,
+                resume_capture,
                 clear_capture,
                 save_capture,
                 discard_capture,
@@ -1353,6 +1367,7 @@ fn main() {
             list_devices,
             start_capture,
             stop_capture,
+            resume_capture,
             clear_capture,
             save_capture,
             discard_capture,

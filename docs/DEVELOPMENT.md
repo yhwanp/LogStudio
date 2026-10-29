@@ -137,6 +137,13 @@
   - 기록 상태의 `cleared`(비운 시각)로 화면은 새 로그의 첫 행에 재연결 구분선과 같은 방식의 표시를 그립니다. 목록의 첫 행에는 위에 걸칠 행이 없으므로 표시를 행 안 끝에 둡니다(`capture-break-start`).
   - 화면은 비우는 동안 `기록 중지`·`저장`을 막고, 비울 로그가 없거나 저장 중이면 휴지통을 `aria-disabled`로 둡니다. 더블클릭의 두 번째 누름(600 ms 안)은 무시합니다. 알림이 비운 일을 읽어 주는 동안 상단 바 상태의 라이브 영역은 잠시 끕니다.
   - 새 데이터셋의 `opened` 이벤트에 실린 작업 정보는 `reloadOf`로 이전 데이터셋을 가리킵니다. 화면은 다시 열기와 같은 경로로 필터·저장된 필터·검색어를 이어 받고, 북마크와 위치는 넘기지 않습니다.
+- **이어서 기록:** `Capture::resume`이 사용자가 멈춘 기록에 같은 파일로 기록 스레드를 새로 띄웁니다. 기기가 끊긴 동안 비운 경우처럼 `fresh`로 표시해 기기의 최근 줄을 경계로 받으므로(iPhone은 원래 새 줄만 보냄) 멈춘 동안의 줄은 기록하지 않습니다. 이어서 기록한 첫 행에는 `stopped`와 `gap`이 붙은 끊긴 지점을 남기며, `lost`는 멈춘 시각입니다.
+  - 기기를 바로 찾으면 그 자리에서 스트림을 열어 대기 상태를 거치지 않고, 찾지 못하면 대기 상태로 재연결 루프를 돕니다. 대기 중에 다시 멈췄다가 이어 가도 끊긴 지점은 처음 멈춘 시각부터입니다. adb 버전 불일치는 오류로 돌려주고 기록은 멈춘 채 둡니다.
+  - 기록을 멈추어 스트림이 닫힐 때 줄바꿈 없이 끝난 조각이 남아 있으면, LF 하나를 먼저 써서 이어지는 줄과 한 물리 행으로 합쳐지지 않게 합니다.
+  - 중지와 재개는 `worker` 잠금을 잡고 이뤄져 서로 엇갈리지 않습니다. 닫힌 기록(`close`), 오류로 끝난 기록, 이전 실행이 남긴 기록(`adopt`)은 다시 기록하지 않습니다.
+  - `Engine::resume_capture`는 보이는 데이터셋의 기록만 재개하고 따라가기를 다시 켭니다. 화면은 같은 버튼(`captureStop`)의 이름을 `기록 중지`와 `이어서 기록`으로 바꾸며, 누르는 동안에는 포커스를 둔 채 `aria-disabled`로만 막고 더블클릭의 두 번째 누름(`detail` 2 이상)은 무시합니다.
+  - 버튼은 누르기 전 자리에 그대로 있어야 다시 누를 수 있습니다. 그래서 다른 이름을 보이지 않게 함께 두어 폭을 유지하고, 멈춘 동안에는 휴지통도 보이지 않게 자리만 지킵니다(`place-only`). 누른 뒤에는 상태 조회가 새 상태를 가져올 때까지 바쁜 표시를 유지해, 이전 이름으로 다시 눌리지 않게 합니다.
+  - 기록 JSON의 `stopped`는 사용자가 마지막으로 멈춘 시각이며, 다시 기록할 때까지 남습니다. 화면은 이 값으로 멈춘 뒤 기기를 기다리는 대기를 연결이 끊긴 대기와 구분해 `기기 연결을 기다리는 중`이라고 씁니다.
 - **임시 파일(`store.rs`):** 기록 파일 옆 잠금 파일(`.lock`)을 실행 중인 앱이 잡고 있으며, 잡히지 않은 파일은 비정상 종료로 남은 기록입니다. 닫을 때 사용자가 버리기로 했거나 저장하지 않은 바이트가 없으면 파일을 지웁니다.
 - **닫기와 종료:** 기록 로그가 열려 있으면 드롭과 창 닫기를 보류하고 화면에 묻습니다(`drop-held`·`close-held`). macOS의 기본 종료 메뉴 항목은 창 닫기를 거치지 않고 앱을 바로 끝냅니다. 그래서 앱 메뉴의 종료(`Cmd+Q`)는 창을 먼저 닫는 메뉴 항목으로 바꿔, 창을 닫을 때와 같은 저장 확인을 거치게 합니다. Dock의 종료와 로그아웃은 여전히 바로 끝나며, 그 기록은 다음 실행의 남은 기록이 됩니다.
 
@@ -164,7 +171,7 @@
 | `follow` | `follow:true`/`false`로 실시간 따라가기 켜기·끄기(단일 텍스트 파일 전용) |
 | `cancel`, `close` | 진행 중인 쿼리 취소 및 파일 닫기(동시 요청 수 제한과 별도로 즉시 처리) |
 
-기기 기록은 별도 Tauri 명령을 씁니다: `adb_status`·`pick_adb`(adb 탐지·지정), `list_devices`(Android 기기와 iPhone·iPad 목록, 종류별로 목록을 받지 못한 이유), `start_capture`·`stop_capture`, `clear_capture`(기록 중인 로그를 새 파일로 비우고 새 데이터셋으로 표시), `save_capture`·`discard_capture`(저장·버리기 표시), `capture_leftovers`·`open_leftover`·`delete_leftover`(남은 기록, ID로만 지칭), `capture_apps`·`launch_capture_app`(기록 중인 iPhone·iPad의 개발용 서명 앱 목록과 실행, 데이터셋 ID와 마지막 앱 목록의 bundle ID로만 지칭), `finish_drop`·`answer_close`(기록 로그가 열려 있을 때 보류한 드롭과 창 닫기에 대한 화면의 답). 엔진은 기록 상태가 바뀌면 `capture-changed` 이벤트를 보내고, 상태 응답과 `query-progress`에는 `capture`가 함께 실립니다.
+기기 기록은 별도 Tauri 명령을 씁니다: `adb_status`·`pick_adb`(adb 탐지·지정), `list_devices`(Android 기기와 iPhone·iPad 목록, 종류별로 목록을 받지 못한 이유), `start_capture`·`stop_capture`·`resume_capture`(멈춘 기록을 같은 파일에 이어서 기록), `clear_capture`(기록 중인 로그를 새 파일로 비우고 새 데이터셋으로 표시), `save_capture`·`discard_capture`(저장·버리기 표시), `capture_leftovers`·`open_leftover`·`delete_leftover`(남은 기록, ID로만 지칭), `capture_apps`·`launch_capture_app`(기록 중인 iPhone·iPad의 개발용 서명 앱 목록과 실행, 데이터셋 ID와 마지막 앱 목록의 bundle ID로만 지칭), `finish_drop`·`answer_close`(기록 로그가 열려 있을 때 보류한 드롭과 창 닫기에 대한 화면의 답). 엔진은 기록 상태가 바뀌면 `capture-changed` 이벤트를 보내고, 상태 응답과 `query-progress`에는 `capture`가 함께 실립니다.
 
 동시 데이터 요청은 최대 4개까지 허용하며, 초과 시 `Local engine is busy; retry`를 반환해 프론트엔드가 짧게 재시도합니다. 엔진은 상태 변화 시 `source-changed`(`opened`·`validated`·`rollback`·`error`), `files-ordered`, `query-progress` 이벤트를 발행합니다.
 
@@ -247,7 +254,7 @@ python3 tests/e2e/run.py target/qa/release/logstudio-desktop
 
 ### 실제 기기·에뮬레이터 검사
 
-`core/tests/ios_device.rs`는 이 컴퓨터를 신뢰한 iPhone·iPad(USB나 Wi-Fi 연결)로 제품의 iOS 기기 연결을 검증하며, 평소 테스트에서는 건너뜁니다. 시작한 뒤의 줄만 기록되는지, 모든 줄이 iOS 로그로 읽히는지(이어지는 줄 제외)와 초당 줄 수를 확인하고, 케이블을 뽑았다 꽂는 재연결 검사는 사람이 직접 해야 합니다. Finder에서 Wi-Fi 보기를 켠 기기는 케이블을 뽑아도 Wi-Fi로 이어지므로, 케이블 재연결을 확인하려면 이 설정을 끄고 합니다. 여러 대가 연결되어 있으면 `LOGSTUDIO_IOS_UDID`로 고릅니다. 개발용 서명 앱 실행 검사는 Xcode와 기기의 개발용 서명 앱이 필요하며, `LOGSTUDIO_IOS_APP`에 그 앱의 bundle ID를 지정하면 기록 중에 앱을 다시 실행해 그 앱 프로세스의 줄에 `<private>`가 없는지 확인합니다. 지정한 앱은 종료된 뒤 다시 실행됩니다.
+`core/tests/ios_device.rs`는 이 컴퓨터를 신뢰한 iPhone·iPad(USB나 Wi-Fi 연결)로 제품의 iOS 기기 연결을 검증하며, 평소 테스트에서는 건너뜁니다. 시작한 뒤의 줄만 기록되는지, 모든 줄이 iOS 로그로 읽히는지(이어지는 줄 제외)와 초당 줄 수, 기록을 멈췄다가 이어서 기록할 때 멈춘 동안의 줄이 빠지는지를 확인하고, 케이블을 뽑았다 꽂는 재연결 검사는 사람이 직접 해야 합니다. Finder에서 Wi-Fi 보기를 켠 기기는 케이블을 뽑아도 Wi-Fi로 이어지므로, 케이블 재연결을 확인하려면 이 설정을 끄고 합니다. 여러 대가 연결되어 있으면 `LOGSTUDIO_IOS_UDID`로 고릅니다. 개발용 서명 앱 실행 검사는 Xcode와 기기의 개발용 서명 앱이 필요하며, `LOGSTUDIO_IOS_APP`에 그 앱의 bundle ID를 지정하면 기록 중에 앱을 다시 실행해 그 앱 프로세스의 줄에 `<private>`가 없는지 확인합니다. 지정한 앱은 종료된 뒤 다시 실행됩니다.
 
 ```sh
 cargo test -p logstudio-core --test ios_device -- --ignored --test-threads 1 --nocapture
