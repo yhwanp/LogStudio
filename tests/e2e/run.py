@@ -26,7 +26,7 @@ sys.path.insert(0, str(HERE))
 from harness import App  # noqa: E402
 
 # Run order: quick UI checks first, slow and window-moving ones last.
-SCENARIOS = ['basics', 'time_filter', 'bookmarks', 'field_filters', 'saved_filters', 'conditions', 'filter_place', 'formats', 'dlt', 'entries', 'tips', 'launch',
+SCENARIOS = ['basics', 'time_filter', 'bookmarks', 'field_filters', 'saved_filters', 'conditions', 'filter_place', 'filters_off', 'formats', 'dlt', 'entries', 'tips', 'launch',
              'multi_file', 'follow', 'devices', 'reopen', 'zoom', 'window', 'row_numbers', 'extras']
 
 

@@ -46,6 +46,7 @@ async function rig({rows=[],detail=null,query=null,page=null,startupError=null,f
     if(action==='pick_file')return picker.promise;
     if(action==='cancel_open')return cancel(args);
     if(action==='take_startup_error')return startupError;
+    if(action==='export_results')return {rows:3000};
     if(action!=='log_request')return {};
     const b=args.request,id={datasetId:dataset};
     if(b.action==='close')return {closed:true};
@@ -1755,4 +1756,134 @@ test('an undo leaves a row marked again meanwhile alone, so a full list takes it
   key({key:'b',ctrlKey:true});await settle();assert.equal(r.get('bookmarkTab').textContent,'북마크 1,000','marked again');
   await undo.dispatch('click');await settle();
   assert.equal(r.get('bookmarkTab').textContent,'북마크 1,000');assert.doesNotMatch(r.get('toast').textContent,/최대/,'the row already back is not counted twice');
+});
+
+// The filter switched off as a whole.
+function filtersOffRig(r){
+  const sent=pane=>r.calls.filter(c=>c.args.request?.action==='query'&&c.args.request.pane===pane).at(-1)?.args.request.filters;
+  const enter=async(id,value)=>{r.get(id).value=value;await r.get(id).dispatch('input');await r.get(id).dispatch('keydown',{key:'Enter',preventDefault(){}});await settle();};
+  const press=async()=>{const box=r.get('filtersOn');box.checked=!box.checked;await box.dispatch('change');await settle();};
+  const undo=async()=>{await r.get('toast').children[1].dispatch('click');await settle();};
+  return {sent,enter,press,undo,off:()=>r.get('filtersOn').checked===false,chips:()=>chipNodes(r.get('activeFilters')).map(chip=>chip.textContent)};
+}
+
+test('switching the filter off shows every row with its conditions kept, and on brings them back',async t=>{
+  const r=await rig();t.after(()=>r.controller.close());const f=filtersOffRig(r);
+  assert.equal(r.get('filtersSwitch').hidden,true,'there is nothing to switch off yet');
+  await f.enter('tagFilter','Wifi');await r.get('includeRaw').dispatch('change');await settle();
+  await f.enter('searchInput','timeout');
+  assert.equal(r.get('filtersSwitch').hidden,false);assert.equal(r.get('filtersOn').checked,true);
+  assert.equal(r.get('filterRow').hidden,false);assert.match(r.get('largeTotal').textContent,/^ · 필터 결과/);
+  assert.equal(r.get('filtersOn').attributes['aria-keyshortcuts'],'Control+Shift+F');
+  await f.press();
+  assert.deepEqual([f.sent('logs').include,f.sent('logs').exclude,f.sent('logs').includeRaw],[[],[],true],'the list shows every row');
+  assert.deepEqual([f.sent('search').include,f.sent('search').query],[[],'timeout'],'the search finds in the rows shown');
+  assert.equal(r.get('tagFilter').value,'Wifi');assert.deepEqual(f.chips(),['태그: Wifi×'],'the conditions stay to read');
+  assert.equal(r.get('activeFilters').dataset.off,'true');assert.equal(r.get('filterBadge').dataset.off,'true');assert.equal(r.get('filterRow').dataset.off,'true');
+  assert.equal(r.get('filtersOffNote').textContent,'필터 꺼짐 · 모든 줄 표시');assert.equal(r.get('filtersOffNote').className,'filters-off-note');
+  assert.equal(r.get('filtersOffHint').hidden,false,'the panel says so too');
+  assert.equal(r.get('activeFilters').attributes['aria-label'],'꺼 둔 필터');assert.match(r.get('toggleFilters').attributes['aria-label'],/1개 조건 꺼 둠/);
+  assert.equal(r.get('searchInput').placeholder,'모든 줄의 원문에서 검색');assert.equal(r.get('exportLogs').title,'모든 줄의 원문을 파일로 저장');
+  assert.match(r.get('largeTotal').textContent,/^ · 모든 줄/,'the search count says what it counts');assert.equal(r.get('logsJump').title,'행 번호(행 칸의 번호)로 이동합니다.','every row is there to jump to');
+  assert.doesNotMatch(chipNodes(r.get('activeFilters'))[0].attributes['aria-label'],/필터/,'the last chip leaves no filter to switch on');
+  await f.press();
+  assert.deepEqual([f.sent('logs').include.map(c=>c.tag),f.sent('search').include.map(c=>c.tag)],[['Wifi'],['Wifi']]);
+  assert.equal(r.get('filterBadge').dataset.off,'false');assert.equal(r.get('filtersOffHint').hidden,true);
+  assert.equal(r.get('filtersOffNote').textContent,'필터 켜짐','a screen reader is told it is on again');assert.equal(r.get('filtersOffNote').className,'visually-hidden');
+  assert.equal(r.get('searchInput').placeholder,'필터 결과의 원문에서 검색');assert.match(r.get('largeTotal').textContent,/^ · 필터 결과/);
+});
+
+test('a filter switched off keeps the lists in place, and the shortcut needs a filter to switch',async t=>{
+  const rows=Array.from({length:30},(_,i)=>({lineNumber:i+1,kind:'raw',raw:`row ${i+1}`}));
+  const r=await rig({rows,detail:{text:'x',startByte:0,nextByte:1,totalBytes:1,complete:true,highlights:[]}});t.after(()=>r.controller.close());const f=filtersOffRig(r);
+  const key=async more=>{let prevented=false;await r.handlers.get('keydown')({key:'F',code:'KeyF',metaKey:true,shiftKey:true,target:new Element(),preventDefault(){prevented=true;},...more});await settle();return prevented;};
+  assert.equal(await key(),false,'without conditions the key is left alone');
+  await f.enter('tagFilter','Wifi');
+  await r.get('logsRows').children.find(n=>n.dataset.lineNumber==='5').dispatch('click',{detail:1});await settle();
+  assert.equal(await key(),true);assert.equal(f.off(),true);
+  assert.equal(r.controller.logs.getState().selectedLine,5,'the selected row stays');
+  assert.equal(await key({repeat:true}),true);assert.equal(f.off(),true,'a held key switches once');
+  assert.equal(await key({metaKey:false,ctrlKey:true}),true);assert.equal(f.off(),false);
+  assert.equal(r.controller.logs.getState().selectedLine,5);
+});
+
+test('changing a condition switches the filter back on and says so, and its undo puts all of it back',async t=>{
+  const r=await rig();t.after(()=>r.controller.close());const f=filtersOffRig(r);
+  await f.enter('tagFilter','Wifi');await f.press();
+  await f.enter('searchInput','timeout');
+  assert.equal(f.off(),true,'a new search keeps it off');assert.deepEqual(f.sent('search').include,[]);
+  await f.enter('tagFilter','Wifi, Net');
+  assert.equal(f.off(),false);assert.deepEqual([f.sent('logs').include[0].tag,f.sent('search').include[0].tag],['Wifi, Net','Wifi, Net']);
+  assert.equal(r.get('toast').children[0].textContent,'조건이 바뀌어 필터를 켰습니다.');
+  await f.undo();
+  assert.equal(f.off(),true);assert.equal(r.get('tagFilter').value,'Wifi');assert.deepEqual(f.sent('logs').include,[]);
+  // A chip's × is a change too; removing the last one leaves nothing off.
+  await chipNodes(r.get('activeFilters'))[0].dispatch('click');await settle();
+  assert.equal(f.off(),false);assert.equal(r.get('filtersSwitch').hidden,true);assert.deepEqual(f.chips(),[]);
+  assert.equal(r.get('toast').children[0].textContent,'마지막 조건을 해제했습니다.');
+  await f.undo();
+  assert.equal(f.off(),true,'the undo puts the filter back off');assert.deepEqual(f.chips(),['태그: Wifi×']);
+  // A row action's own undo takes the condition away and the filter off.
+  await f.press();
+  await f.enter('pidFilter','100');await f.press();
+  await r.get('resetFilters').dispatch('click');await settle();
+  assert.equal(f.off(),false,'초기화 leaves no filter to be off');
+  await f.undo();
+  assert.equal(f.off(),true,'and its undo puts it back off');assert.deepEqual(f.sent('logs').include,[]);assert.equal(r.get('tagFilter').value,'Wifi');
+});
+
+test('with the filter off a chip and a card say what changing them does',async t=>{
+  const r=await rig();t.after(()=>r.controller.close());const f=filtersOffRig(r);
+  await f.enter('tagFilter','Wifi');await f.enter('pidFilter','100');await f.press();
+  const chip=chipNodes(r.get('activeFilters'))[0],toggle=()=>r.get('showList').children[0].children[0].children[0];
+  assert.match(chip.title,/나머지 조건으로 필터가 켜집니다$/);assert.match(chip.attributes['aria-label'],/해제 \(나머지 조건으로 필터 켜짐\)$/);
+  assert.equal(toggle().title,'켜진 조건 · 끄면 이 조건을 빼고 필터가 켜집니다');
+  toggle().checked=false;await toggle().dispatch('change');await settle();
+  assert.equal(f.off(),false);assert.equal(toggle().title,'꺼진 조건 · 켜면 적용합니다');
+  await f.undo();assert.equal(f.off(),true);
+});
+
+test('a condition that cannot apply neither traps the filter on nor switches it on',async t=>{
+  const query=async b=>{if(b.filters.include.some(c=>c.message==='('))throw 'Invalid or unsupported message pattern: unclosed group';return {status:'complete',count:6,complete:true};};
+  const r=await rig({query});t.after(()=>r.controller.close());const f=filtersOffRig(r);
+  await f.enter('tagFilter','Wifi');
+  // With a wrong PID the filter still switches off, and the field stays wrong.
+  await f.enter('pidFilter','abc');assert.equal(f.sent('logs').include[0].pid,'');
+  await f.press();
+  assert.equal(f.off(),true);assert.deepEqual(f.sent('logs').include,[]);assert.equal(r.get('idFilterError').hidden,false);
+  // It cannot switch on until the field is right, and says so.
+  await f.press();
+  assert.equal(f.off(),true,'the box goes back');assert.equal(r.get('toast').textContent,'조건에 오류가 있어 필터를 켜지 못했습니다.');assert.deepEqual(f.sent('logs').include,[]);
+  await f.enter('pidFilter','abcd');
+  assert.equal(f.off(),true,'a wrong edit leaves it off');assert.equal(r.get('activeFilters').dataset.off,'true');
+  await f.enter('pidFilter','');
+  assert.equal(f.off(),true,'back to the conditions it left');assert.equal(r.get('idFilterError').hidden,true);
+  // Off, then a pattern the engine rejects: the rows are all still shown, so
+  // the filter stays off, and the conditions kept are the ones that were in use.
+  await f.enter('messageFilter','(');
+  assert.equal(f.off(),true);assert.ok(r.controller.logs.getState().rejected);assert.deepEqual(f.sent('logs').include.length,1);
+  assert.deepEqual(f.chips(),['태그: Wifi×'],'the chips read the kept conditions');
+  // The pattern gone is a change that applies, so the filter comes on.
+  await f.enter('messageFilter','');
+  assert.equal(r.controller.logs.getState().rejected,'');assert.equal(f.off(),false);assert.equal(f.sent('logs').include[0].tag,'Wifi');
+});
+
+test('the logs exported with the filter off are named as every row',async t=>{
+  const r=await rig();t.after(()=>r.controller.close());const f=filtersOffRig(r);
+  const named=()=>r.calls.filter(c=>c.action==='export_results').at(-1)?.args.suggestedName;
+  await f.enter('tagFilter','Wifi');
+  await r.get('exportLogs').dispatch('click');await settle();
+  assert.match(named(),/-filtered\./);assert.equal(r.get('toast').children[0].textContent,'3,000행을 내보냈습니다.');
+  await f.press();
+  await r.get('exportLogs').dispatch('click');await settle();
+  assert.match(named(),/-all\./);assert.equal(r.get('toast').children[0].textContent,'전체 3,000행을 내보냈습니다.');
+});
+
+test('a filter switched off lasts through a rollback, and another file starts with its filter on',async t=>{
+  const r=await rig();t.after(()=>r.controller.close());const f=filtersOffRig(r);
+  await f.enter('tagFilter','Wifi');await f.press();
+  r.source(2);await r.emit({status:'opened',datasetId:2});await settle();
+  assert.equal(f.off(),false,'the next log has its own filter');
+  r.source(1,true);await r.emit({status:'rollback',datasetId:2,error:'invalid UTF-8'});await settle();
+  assert.equal(f.off(),true);assert.deepEqual(f.sent('logs').include,[]);assert.equal(r.get('tagFilter').value,'Wifi');
 });

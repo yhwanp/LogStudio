@@ -24,7 +24,7 @@ export function rowlessText(list, following=false) {
   return `${none} · ${list === 'include' ? '이 조건으로 보이는 줄이 없습니다' : '이 조건이 숨기는 줄이 없습니다'}`;
 }
 
-export function mountConditions({document, lists, hints, adders, editor, onSelect, onToggle, onRemove, onAdd, rowless=() => ({include:new Set(), exclude:new Set(), following:false}), problem:engineProblem=() => ''}) {
+export function mountConditions({document, lists, hints, adders, editor, onSelect, onToggle, onRemove, onAdd, rowless=() => ({include:new Set(), exclude:new Set(), following:false}), problem:engineProblem=() => '', filterOff=() => false}) {
   let cards = {include:[], exclude:[]};
   for (const list of LISTS) adders[list].addEventListener('click', () => onAdd(list));
   function card(list, index) {
@@ -75,7 +75,7 @@ export function mountConditions({document, lists, hints, adders, editor, onSelec
         view.box.classList.toggle('solo', solo && list === 'include');
         view.toggle.checked = c.enabled !== false;
         view.toggle.setAttribute('aria-label', `${name} 켜기`);
-        view.toggle.title = c.enabled === false ? '꺼진 조건 · 켜면 적용합니다' : '켜진 조건 · 끄면 적용하지 않습니다';
+        view.toggle.title = c.enabled === false ? `꺼진 조건 · 켜면 ${filterOff() ? '필터도 켜집니다' : '적용합니다'}` : `켜진 조건 · 끄면 ${filterOff() ? '이 조건을 빼고 필터가 켜집니다' : '적용하지 않습니다'}`;
         view.summary.textContent = problem ? `${text} · 확인 필요` : text;
         view.summary.title = problem || (current ? `${name} · 편집 중` : `${name} · 눌러서 편집`);
         view.summary.setAttribute('aria-expanded', String(current));

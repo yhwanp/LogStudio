@@ -323,6 +323,17 @@ def run(ctx):
         shown = app.wait(lambda: js("return [...document.querySelectorAll('#logsRows .log-row .tag')].map(t=>t.textContent)") or None, what='rows after clearing')
         check('the cleared log applies the kept filters', 'Choreographer' not in shown, shown)
         app.capture('07c-cleared')
+        # A filter switched off stays off through a clear.
+        tags = "return [...document.querySelectorAll('#logsRows .log-row .tag')].map(t=>t.textContent)"
+        app.click('filtersOn')
+        app.wait(lambda: 'Choreographer' in js(tags), what='every row with the filter off')
+        time.sleep(.7)
+        app.wait(lambda: js("return document.getElementById('captureClear').getAttribute('aria-disabled')!=='true'"), what='rows to clear')
+        app.click('captureClear')
+        app.wait(lambda: (lambda f: len(f) == 1 and f[0] not in after and f[0].stat().st_size > 0)(recorded()), what='another capture file')
+        app.wait(lambda: 'Choreographer' in js(tags), what='every row after clearing')
+        off = js("return [document.getElementById('filtersOn').checked,document.querySelectorAll('#hideList .cond-card').length]")
+        check('clearing keeps the filter switched off and its conditions', off == [False, 1], off)
         app.exclude_tags('')
         until(lambda v: not js("return !!document.querySelector('#hideList .cond-card')"), 'filter removed again')
 
