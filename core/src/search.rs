@@ -16,23 +16,33 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 /// One condition of a filter: a row matches when it has one of the levels
-/// and every listed field: a tag containing one of the tag items, one of the
-/// PIDs, one of the TIDs, a timestamp in the range and a message containing
-/// the message text. A row without the field a condition tests never
-/// matches it.
+/// and every field the condition sets. A field holds one value, or with its
+/// `_regex` switch a pattern of the search's grammar that matches anywhere in
+/// the field and ignores case unless it says `(?-i)`. As a value, a tag or a
+/// message is text the field contains, ignoring case; a PID, a TID or a DLT
+/// ID is the field's whole value. A row without the field a condition tests
+/// never matches it.
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq, Hash)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct Condition {
     pub levels: Vec<String>,
+    /// A tag; on a DLT row, any of its ECU, APID and CTID.
     pub tag: String,
+    pub tag_regex: bool,
     pub pid: String,
+    pub pid_regex: bool,
     pub tid: String,
+    pub tid_regex: bool,
+    pub ecu: String,
+    pub ecu_regex: bool,
+    pub apid: String,
+    pub apid_regex: bool,
+    pub ctid: String,
+    pub ctid_regex: bool,
     pub time_from: String,
     pub time_to: String,
-    /// Text the row's message contains, ignoring case as the search does: a
-    /// string, or with `message_regex` a pattern of the search's grammar. A
-    /// DLT row's message is its payload; continuation rows take their
-    /// entry's decision, so only an entry's first row is read.
+    /// A DLT row's message is its payload; continuation rows take their
+    /// entry's decision, so only an entry's first row is read. Used as typed.
     pub message: String,
     pub message_regex: bool,
 }
@@ -41,8 +51,17 @@ impl Default for Condition {
         Self {
             levels: LEVELS.iter().map(|s| s.to_string()).collect(),
             tag: String::new(),
+            tag_regex: false,
             pid: String::new(),
+            pid_regex: false,
             tid: String::new(),
+            tid_regex: false,
+            ecu: String::new(),
+            ecu_regex: false,
+            apid: String::new(),
+            apid_regex: false,
+            ctid: String::new(),
+            ctid_regex: false,
             time_from: String::new(),
             time_to: String::new(),
             message: String::new(),
@@ -61,18 +80,16 @@ pub const MAX_CONDITIONS: usize = 32;
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct Filters {
     pub levels: Vec<String>,
-    /// Comma-separated tag substrings (at most 32); a parsed row matches when
-    /// any of its tags contains any of them. Rows without tags never match.
+    /// Text a parsed row's tag contains. Rows without tags never match.
     pub tag: String,
-    /// Comma-separated tag substrings; a parsed row with any matching tag is
-    /// excluded. Rows without tags are never excluded by this field.
+    /// Text a tag contains: such a parsed row is excluded. Rows without tags
+    /// are never excluded by this field.
     pub exclude_tags: String,
     /// Inclusive timestamp bounds in the log's own format, given as a prefix:
     /// `[YYYY-MM-DD | MM-DD] [HH[:MM[:SS[.fraction]]]]`.
     pub time_from: String,
     pub time_to: String,
-    /// Exact ASCII-digit IDs (at most 32 each) separated by commas or
-    /// whitespace; a parsed row matches when its ID equals any of them.
+    /// An ASCII-digit ID a parsed row's ID equals.
     pub pid: String,
     pub tid: String,
     /// More showing conditions, at most `MAX_CONDITIONS` with `exclude`.
@@ -134,14 +151,32 @@ fn level_bit(level: &str) -> u16 {
         .position(|l| *l == level)
         .map_or(0, |i| 1 << i)
 }
+/// What a field must hold: a whole value, or a pattern.
+#[derive(Clone)]
+enum Value {
+    Is(String),
+    Found(RegexMatcher),
+}
+impl Value {
+    /// An absent field ("") holds no value, whatever the pattern accepts.
+    fn accepts(&self, field: &str) -> bool {
+        !field.is_empty()
+            && match self {
+                Value::Is(value) => value == field,
+                Value::Found(m) => m.is_match(field.as_bytes()).unwrap_or(false),
+            }
+    }
+}
 /// A condition ready to test rows, with its normal form.
 #[derive(Clone)]
 pub struct Cond {
     /// Bits over `LEVELS`.
     levels: u16,
     tag: Option<RegexMatcher>,
-    pids: Vec<String>,
-    tids: Vec<String>,
+    pid: Option<Value>,
+    tid: Option<Value>,
+    /// ECU, APID and CTID, in `dlt::Head::ids` order.
+    ids: [Option<Value>; 3],
     time: Option<TimeRange>,
     message: Option<RegexMatcher>,
     source: Condition,
@@ -152,8 +187,9 @@ impl Cond {
         if c.tag.len() > 4000
             || c.time_from.len() > 64
             || c.time_to.len() > 64
-            || c.pid.len() > 1000
-            || c.tid.len() > 1000
+            || [&c.pid, &c.tid, &c.ecu, &c.apid, &c.ctid]
+                .iter()
+                .any(|v| v.len() > 1000)
             || c.message.len() > 4000
             || c.levels.len() > 8
         {
@@ -161,27 +197,37 @@ impl Cond {
         }
         Ok(())
     }
-    /// The ID lists; `finish` reads the rest once every condition has them,
-    /// so errors keep the order a single condition always reported.
-    fn ids(mut c: Condition) -> io::Result<(Condition, Vec<String>, Vec<String>)> {
-        let (pid, pids) = id_list(&c.pid)?;
-        let (tid, tids) = id_list(&c.tid)?;
-        (c.pid, c.tid) = (pid, tid);
-        Ok((c, pids, tids))
+    /// The PID and TID; `finish` reads the rest once every condition has
+    /// them, so errors keep the order a single condition always reported.
+    fn ids(mut c: Condition) -> io::Result<(Condition, Option<Value>, Option<Value>)> {
+        let pid = number(&mut c.pid, &mut c.pid_regex, "PID")?;
+        let tid = number(&mut c.tid, &mut c.tid_regex, "TID")?;
+        Ok((c, pid, tid))
     }
     fn valid_levels(c: &Condition) -> bool {
         c.levels.iter().all(|l| LEVELS.contains(&l.as_str()))
     }
-    /// The levels, tags, time and message. `keep_tag` drops tag items that
+    /// The levels, tag, DLT IDs, time and message. `keep_tag` drops a tag that
     /// can change nothing.
     fn finish(
-        (mut c, pids, tids): (Condition, Vec<String>, Vec<String>),
+        (mut c, pid, tid): (Condition, Option<Value>, Option<Value>),
         keep_tag: impl Fn(&str) -> bool,
     ) -> io::Result<Self> {
         c.levels.sort();
         c.levels.dedup();
-        let (tag, tags) = tag_list(&c.tag, keep_tag)?;
-        c.tag = tag;
+        c.tag = parser::trim(&c.tag).to_owned();
+        if !keep_tag(&c.tag) {
+            c.tag.clear();
+        }
+        c.tag_regex &= !c.tag.is_empty();
+        let tag = (!c.tag.is_empty())
+            .then(|| found(&c.tag, c.tag_regex, "tag"))
+            .transpose()?;
+        let ids = [
+            identifier(&mut c.ecu, &mut c.ecu_regex, "ECU")?,
+            identifier(&mut c.apid, &mut c.apid_regex, "APID")?,
+            identifier(&mut c.ctid, &mut c.ctid_regex, "CTID")?,
+        ];
         let (from, to) = (
             parse_bound(&c.time_from, false)?,
             parse_bound(&c.time_to, true)?,
@@ -191,21 +237,14 @@ impl Cond {
         // A message is used as typed; without one the mode means nothing.
         c.message_regex &= !c.message.is_empty();
         let message = (!c.message.is_empty())
-            .then(|| {
-                let mode = if c.message_regex { "regex" } else { "literal" };
-                matcher(&c.message, mode, false).map_err(|e| {
-                    error(
-                        e.to_string()
-                            .replacen("search pattern", "message pattern", 1),
-                    )
-                })
-            })
+            .then(|| found(&c.message, c.message_regex, "message"))
             .transpose()?;
         Ok(Self {
             levels: c.levels.iter().fold(0, |bits, l| bits | level_bit(l)),
-            tag: tags,
-            pids,
-            tids,
+            tag,
+            pid,
+            tid,
+            ids,
             time: TimeRange::new(from, to),
             message,
             source: c,
@@ -217,24 +256,21 @@ impl Cond {
     }
     /// Whether only the level decides the condition.
     pub fn levels_only(&self) -> bool {
-        self.tag.is_none() && self.pids.is_empty() && self.tids.is_empty() && !self.reads_rows()
+        self.tag.is_none() && self.pid.is_none() && self.tid.is_none() && !self.reads_rows()
     }
     /// Bits over `LEVELS` of the levels the condition matches.
     pub fn level_bits(&self) -> u16 {
         self.levels
     }
-    /// Whether the PID, TID and tag lists can reject a value, in that order.
+    /// Whether the PID, TID and tag can reject a value, in that order.
     pub fn tests(&self) -> [bool; 3] {
-        [
-            !self.pids.is_empty(),
-            !self.tids.is_empty(),
-            self.tag.is_some(),
-        ]
+        [self.pid.is_some(), self.tid.is_some(), self.tag.is_some()]
     }
-    /// Whether only a row's text decides the condition: its time range or
-    /// message. Field metadata cannot.
+    /// Whether only a row itself decides the condition: its time range,
+    /// message or DLT IDs, which the field metadata holds as tags, without
+    /// saying which ID is which.
     pub(crate) fn reads_rows(&self) -> bool {
-        self.time.is_some() || self.message.is_some()
+        self.time.is_some() || self.message.is_some() || self.ids.iter().any(Option::is_some)
     }
     /// Whether the condition tests the message.
     fn has_message(&self) -> bool {
@@ -250,25 +286,32 @@ impl Cond {
     pub fn condition(&self) -> &Condition {
         &self.source
     }
-    /// Whether one tag contains a listed item; true without a tag list. A
-    /// row matches with one such tag, so a row without tags matches only
-    /// without a list.
+    /// Whether one tag holds the condition's tag; true without one. A row
+    /// matches with one such tag, so a row without tags matches only without
+    /// one.
     pub fn accepts_tag(&self, tag: &str) -> bool {
         self.tag
             .as_ref()
-            .is_none_or(|t| t.is_match(tag.as_bytes()).unwrap_or(false))
+            .is_none_or(|t| !tag.is_empty() && t.is_match(tag.as_bytes()).unwrap_or(false))
     }
     /// The tag part of a parsed row's decision over all of its tags.
     pub fn tags_match(&self, tags: &[&str]) -> bool {
         self.tag.is_none() || tags.iter().any(|t| self.accepts_tag(t))
     }
-    /// Whether a PID equals a listed one; true without a PID list.
+    /// Whether a row's PID is the condition's; true without one.
     pub fn accepts_pid(&self, pid: &str) -> bool {
-        listed(&self.pids, pid)
+        self.pid.as_ref().is_none_or(|v| v.accepts(pid))
     }
-    /// Whether a TID equals a listed one; true without a TID list.
+    /// Whether a row's TID is the condition's; true without one.
     pub fn accepts_tid(&self, tid: &str) -> bool {
-        listed(&self.tids, tid)
+        self.tid.as_ref().is_none_or(|v| v.accepts(tid))
+    }
+    /// Whether a row's ECU, APID and CTID are the condition's.
+    fn accepts_ids(&self, ids: [&str; 3]) -> bool {
+        self.ids
+            .iter()
+            .zip(ids)
+            .all(|(test, id)| test.as_ref().is_none_or(|v| v.accepts(id)))
     }
     /// Whether a timestamp is in the range; true without one.
     fn accepts_time(&self, stamp: impl FnOnce() -> Option<Stamp>) -> bool {
@@ -293,6 +336,7 @@ impl Cond {
             && self.accepts_pid(p.pid)
             && self.accepts_tid(p.tid)
             && self.tags_match(p.tag_list())
+            && self.accepts_ids(p.dlt.map_or(["", "", ""], |d| [d.ecu, d.apid, d.ctid]))
             && self.accepts_time(|| *stamp.get_or_init(|| row_stamp(p.date, p.time)))
             && self.accepts_message(p.message)
     }
@@ -521,66 +565,47 @@ pub fn row_tags<'a, 'b>(tags: &'b [&'a str]) -> &'b [&'a str] {
         tags
     }
 }
-const MAX_LIST_ITEMS: usize = 32;
-/// Whitespace as `parser::trim` (and JavaScript `\s`) defines it.
-fn is_space(c: char) -> bool {
-    parser::trim(c.encode_utf8(&mut [0; 4])).is_empty()
+/// A PID or TID, trimmed: digits, or with `regex` a pattern.
+fn number(text: &mut String, regex: &mut bool, name: &str) -> io::Result<Option<Value>> {
+    *text = parser::trim(text).to_owned();
+    *regex &= !text.is_empty();
+    if text.is_empty() {
+        Ok(None)
+    } else if *regex {
+        found(text, true, name).map(Value::Found).map(Some)
+    } else if text.bytes().all(|b| b.is_ascii_digit()) {
+        Ok(Some(Value::Is(text.clone())))
+    } else {
+        Err(error("PID and TID must contain ASCII digits"))
+    }
 }
-/// Trimmed, non-empty, distinct items in first-occurrence order, at most 32.
-/// `keep` drops items that can change nothing.
-fn items(
-    list: &str,
-    split: impl Fn(char) -> bool,
-    keep: impl Fn(&str) -> bool,
-) -> io::Result<Vec<&str>> {
-    let mut items: Vec<&str> = Vec::new();
-    for item in list.split(split).map(parser::trim) {
-        if !item.is_empty() && keep(item) && !items.contains(&item) {
-            items.push(item);
-        }
+/// An ECU, APID or CTID, trimmed: the whole ID ignoring case, or with `regex`
+/// a pattern.
+fn identifier(text: &mut String, regex: &mut bool, name: &str) -> io::Result<Option<Value>> {
+    *text = parser::trim(text).to_owned();
+    *regex &= !text.is_empty();
+    if text.is_empty() {
+        Ok(None)
+    } else if *regex {
+        found(text, true, name).map(Value::Found).map(Some)
+    } else {
+        Ok(Some(Value::Found(built(text, "literal", false, true)?)))
     }
-    if items.len() > MAX_LIST_ITEMS {
-        return Err(error("Filter budget exceeded"));
-    }
-    Ok(items)
 }
-/// Case-insensitive literal alternation for a tag list, and its normal form.
-fn tag_list(list: &str, keep: impl Fn(&str) -> bool) -> io::Result<(String, Option<RegexMatcher>)> {
-    let items = items(list, |c| c == ',', keep)?;
-    if items.is_empty() {
-        return Ok((String::new(), None));
-    }
-    let matcher = RegexMatcherBuilder::new()
-        .case_insensitive(true)
-        .unicode(true)
-        .fixed_strings(true)
-        .size_limit(16 * 1024 * 1024)
-        .dfa_size_limit(8 * 1024 * 1024)
-        .build_literals(&items)
-        .map_err(|_| error("Invalid filter"))?;
-    Ok((items.join(","), Some(matcher)))
-}
-/// Exact PID/TID values separated by commas or whitespace: their normal form
-/// and the values sorted for `listed`.
-fn id_list(list: &str) -> io::Result<(String, Vec<String>)> {
-    let items = items(list, |c| c == ',' || is_space(c), |_| true)?;
-    if items.iter().any(|s| !s.bytes().all(|b| b.is_ascii_digit())) {
-        return Err(error("PID and TID must contain ASCII digits"));
-    }
-    let mut sorted: Vec<String> = items.iter().map(|s| s.to_string()).collect();
-    sorted.sort_unstable();
-    Ok((items.join(","), sorted))
-}
-/// One ID stays a plain comparison. A row's ID usually matches none of a
-/// list, and a linear scan would compare it with all 32 values.
-fn listed(ids: &[String], id: &str) -> bool {
-    match ids {
-        [] => true,
-        [one] => one == id,
-        many => many.binary_search_by(|p| p.as_str().cmp(id)).is_ok(),
-    }
+/// A field's text, or with `regex` a pattern. An error names the field.
+fn found(text: &str, regex: bool, name: &str) -> io::Result<RegexMatcher> {
+    let mode = if regex { "regex" } else { "literal" };
+    matcher(text, mode, false).map_err(|e| {
+        error(
+            e.to_string()
+                .replacen("search pattern", &format!("{name} pattern"), 1),
+        )
+    })
 }
 fn matcher(q: &str, mode: &str, sensitive: bool) -> io::Result<RegexMatcher> {
+    built(q, mode, sensitive, false)
+}
+fn built(q: &str, mode: &str, sensitive: bool, whole: bool) -> io::Result<RegexMatcher> {
     let impossible = mode == "literal" && (q.contains('\r') || q.contains('\n'));
     RegexMatcherBuilder::new()
         .case_insensitive(!sensitive)
@@ -588,6 +613,7 @@ fn matcher(q: &str, mode: &str, sensitive: bool) -> io::Result<RegexMatcher> {
         .unicode(true)
         .line_terminator(Some(b'\n'))
         .fixed_strings(mode == "literal" && !impossible)
+        .whole_line(whole)
         .size_limit(16 * 1024 * 1024)
         .dfa_size_limit(8 * 1024 * 1024)
         .nest_limit(128)
@@ -656,10 +682,10 @@ impl Filter {
             )?)
         };
         let mut ids = ids.into_iter();
-        // An included item with a line break matches no tag but still
-        // filters. The shorthand excluded tags drop such items, which can
-        // remove nothing; a listed hiding condition keeps them, as it may
-        // test other fields too.
+        // An included tag with a line break matches no tag but still
+        // filters. The shorthand excluded tag drops such a tag, which can
+        // remove nothing; a listed hiding condition keeps it, as it may test
+        // other fields too.
         let own = Cond::finish(ids.next().unwrap(), |_| true)?;
         let own_hide = Cond::finish(ids.next().unwrap(), |t| !t.contains(['\r', '\n']))?;
         let include = (0..include.len())
@@ -1111,36 +1137,9 @@ impl Filter {
         }
         let orphan = self.admits_unparsed();
         // Showing conditions, then hiding ones; bit `i` of a mask is the
-        // condition at `i`. PID and TID are constant over DLT rows, which
-        // have none.
-        let conds: Vec<&Cond> = self.conditions().collect();
-        let (shows, all) = (self.shows.len(), conds.len());
-        let ids_ok: u64 = conds
-            .iter()
-            .enumerate()
-            .filter(|(_, c)| c.accepts_pid("") && c.accepts_tid(""))
-            .fold(0, |bits, (i, _)| bits | 1 << i);
-        let tagged: u64 = conds
-            .iter()
-            .enumerate()
-            .filter(|(_, c)| c.tag.is_some())
-            .fold(0, |bits, (i, _)| bits | 1 << i);
-        // The conditions whose tag list accepts an ID, by the ID's bytes; a
-        // block repeats few IDs. An absent ID is no tag of the row.
-        let mut seen: HashMap<u32, u64, BuildHasherDefault<IdHasher>> = HashMap::default();
-        let mut accepted = |id: [u8; 4]| {
-            *seen.entry(u32::from_ne_bytes(id)).or_insert_with(|| {
-                let mut buf = [0; 4];
-                match dlt::id_field(&id, &mut buf) {
-                    "" => 0,
-                    text => conds
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, c)| c.tag.is_some() && c.accepts_tag(text))
-                        .fold(0, |bits, (i, _)| bits | 1 << i),
-                }
-            })
-        };
+        // condition at `i`.
+        let (shows, all) = (self.shows.len(), self.conditions().count());
+        let mut tests = HeadTests::new(self);
         decoder.heads(raw, |head| {
             if row >= rows || (row % 4096 == 0 && stop.load(Ordering::Acquire)) {
                 row += 1;
@@ -1149,27 +1148,8 @@ impl Filter {
             let pass = match head {
                 None => orphan,
                 Some(h) => {
-                    let level = level_bit(h.level);
-                    let tags = if tagged == 0 {
-                        0
-                    } else {
-                        h.ids
-                            .into_iter()
-                            .flatten()
-                            .fold(0, |bits, id| bits | accepted(id))
-                    };
-                    let stamp = Stamp {
-                        year: Some(h.year),
-                        month_day: Some(h.month_day),
-                        nanos: h.nanos,
-                    };
-                    let matches = |i: usize| {
-                        let c = conds[i];
-                        c.levels & level != 0
-                            && ids_ok & 1 << i != 0
-                            && (tagged & 1 << i == 0 || tags & 1 << i != 0)
-                            && c.accepts_time(|| Some(stamp))
-                    };
+                    let accepted = tests.accepted(h);
+                    let matches = |i: usize| tests.matches(i, h, accepted);
                     (shows == 0 || (0..shows).any(matches)) && !(shows..all).any(matches)
                 }
             };
@@ -1259,31 +1239,7 @@ impl Filter {
             decoder.render(raw, 0, &mut text);
             return self.row_hits(&text, wanted, stop, false);
         }
-        let conds: Vec<&Cond> = self.conditions().collect();
-        let ids_ok: u64 = conds
-            .iter()
-            .enumerate()
-            .filter(|(_, c)| c.accepts_pid("") && c.accepts_tid(""))
-            .fold(0, |bits, (i, _)| bits | 1 << i);
-        let tagged: u64 = conds
-            .iter()
-            .enumerate()
-            .filter(|(_, c)| c.tag.is_some())
-            .fold(0, |bits, (i, _)| bits | 1 << i);
-        let mut seen: HashMap<u32, u64, BuildHasherDefault<IdHasher>> = HashMap::default();
-        let mut accepted = |id: [u8; 4]| {
-            *seen.entry(u32::from_ne_bytes(id)).or_insert_with(|| {
-                let mut buf = [0; 4];
-                match dlt::id_field(&id, &mut buf) {
-                    "" => 0,
-                    text => conds
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, c)| c.tag.is_some() && c.accepts_tag(text))
-                        .fold(0, |bits, (i, _)| bits | 1 << i),
-                }
-            })
-        };
+        let mut tests = HeadTests::new(self);
         let (mut found, mut row) = (0, 0usize);
         decoder.heads(raw, |head| {
             row += 1;
@@ -1293,32 +1249,106 @@ impl Filter {
             let Some(h) = head else {
                 return;
             };
-            let level = level_bit(h.level);
-            let tags = if tagged == 0 {
-                0
-            } else {
-                h.ids
-                    .into_iter()
-                    .flatten()
-                    .fold(0, |bits, id| bits | accepted(id))
-            };
-            let stamp = Stamp {
-                year: Some(h.year),
-                month_day: Some(h.month_day),
-                nanos: h.nanos,
-            };
-            found |= hits(wanted & !found, |i| {
-                let c = conds[i];
-                c.levels & level != 0
-                    && ids_ok & 1 << i != 0
-                    && (tagged & 1 << i == 0 || tags & 1 << i != 0)
-                    && c.accepts_time(|| Some(stamp))
-            });
+            let accepted = tests.accepted(h);
+            found |= hits(wanted & !found, |i| tests.matches(i, h, accepted));
         });
         found
     }
 }
 
+/// A filter's conditions as message headers test them; bit `i` of a mask is
+/// `conditions()` item `i`. The tests of each ID are kept by the ID's bytes,
+/// as a block repeats few IDs.
+struct HeadTests<'a> {
+    conds: Vec<&'a Cond>,
+    /// Conditions that pass the PID and TID DLT rows lack.
+    numbers: u64,
+    /// Conditions that test the tag, ECU, APID and CTID.
+    tested: [u64; 4],
+    seen: HashMap<u32, [u64; 4], BuildHasherDefault<IdHasher>>,
+}
+impl<'a> HeadTests<'a> {
+    fn new(filter: &'a Filter) -> Self {
+        let conds: Vec<&Cond> = filter.conditions().collect();
+        let bits = |test: &dyn Fn(&Cond) -> bool| {
+            conds
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| test(c))
+                .fold(0u64, |bits, (i, _)| bits | 1 << i)
+        };
+        let numbers = bits(&|c| c.accepts_pid("") && c.accepts_tid(""));
+        let tested = [
+            bits(&|c| c.tag.is_some()),
+            bits(&|c| c.ids[0].is_some()),
+            bits(&|c| c.ids[1].is_some()),
+            bits(&|c| c.ids[2].is_some()),
+        ];
+        Self {
+            conds,
+            numbers,
+            tested,
+            seen: HashMap::default(),
+        }
+    }
+    /// Which conditions accept an ID as a tag, and as the ECU, APID and CTID.
+    /// An absent ID is no value of the row.
+    fn id(&mut self, id: [u8; 4]) -> [u64; 4] {
+        let conds = &self.conds;
+        *self.seen.entry(u32::from_ne_bytes(id)).or_insert_with(|| {
+            let mut buf = [0; 4];
+            let text = dlt::id_field(&id, &mut buf);
+            let mut out = [0; 4];
+            if !text.is_empty() {
+                for (i, c) in conds.iter().enumerate() {
+                    let tests = [
+                        c.tag.is_some() && c.accepts_tag(text),
+                        c.ids[0].as_ref().is_some_and(|v| v.accepts(text)),
+                        c.ids[1].as_ref().is_some_and(|v| v.accepts(text)),
+                        c.ids[2].as_ref().is_some_and(|v| v.accepts(text)),
+                    ];
+                    for (bits, passed) in out.iter_mut().zip(tests) {
+                        *bits |= u64::from(passed) << i;
+                    }
+                }
+            }
+            out
+        })
+    }
+    /// The conditions whose PID, TID, tag and IDs a message passes.
+    fn accepted(&mut self, h: &dlt::Head) -> u64 {
+        let mut tags = 0;
+        let mut each = [0; 3];
+        for (k, id) in h.ids.into_iter().enumerate() {
+            if let Some(id) = id {
+                let got = self.id(id);
+                tags |= got[0];
+                each[k] = got[k + 1];
+            }
+        }
+        let mut accepted = self.numbers;
+        for (tested, got) in self
+            .tested
+            .into_iter()
+            .zip([tags, each[0], each[1], each[2]])
+        {
+            accepted &= !tested | got;
+        }
+        accepted
+    }
+    fn matches(&self, i: usize, h: &dlt::Head, accepted: u64) -> bool {
+        let c = self.conds[i];
+        accepted & 1 << i != 0
+            && c.levels & level_bit(h.level) != 0
+            && c.accepts_time(|| {
+                Some(Stamp {
+                    year: Some(h.year),
+                    month_day: Some(h.month_day),
+                    nanos: h.nanos,
+                })
+            })
+    }
+}
 /// One block's matches and what the blocks around it need to know.
 #[derive(Debug)]
 pub struct Mask {

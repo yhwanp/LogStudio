@@ -20,6 +20,12 @@ import urllib.request
 from pathlib import Path
 
 
+# Typing into a filter field goes through the condition editor, which opens on
+# the selected condition, or on a new one.
+OPEN_EDITOR = """const openEditor=i=>{const e=document.getElementById('filterEditor');if(!e.contains(i)||!e.hidden)return;
+const item=document.querySelector('.cond-item[data-active=true] .cond-summary');(item||document.getElementById('addCondition')).click();};"""
+
+
 class Timeout(Exception):
     pass
 
@@ -193,13 +199,13 @@ class App:
 
     def enter(self, id, value):
         """Types a value into a field and presses Enter."""
-        self.js("const i=document.getElementById(arguments[0]);i.focus();i.value=arguments[1];"
+        self.js(OPEN_EDITOR + "const i=document.getElementById(arguments[0]);openEditor(i);i.focus();i.value=arguments[1];"
                 "i.dispatchEvent(new Event('input',{bubbles:true}));"
                 "i.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));return true;", id, value)
 
     def type(self, id, value):
         """Types a value into a field without pressing Enter (search runs as you type)."""
-        self.js("const i=document.getElementById(arguments[0]);i.focus();i.value=arguments[1];"
+        self.js(OPEN_EDITOR + "const i=document.getElementById(arguments[0]);openEditor(i);i.focus();i.value=arguments[1];"
                 "i.dispatchEvent(new Event('input',{bubbles:true}));return true;", id, value)
 
     def key(self, key, meta=False, shift=False, alt=False, code=None, target=None):
@@ -208,22 +214,34 @@ class App:
                 "t.dispatchEvent(new KeyboardEvent('keydown',{key:arguments[0],code:arguments[4]||'',metaKey:arguments[1],shiftKey:arguments[2],altKey:arguments[3],bubbles:true,cancelable:true}));return true;",
                 key, meta, shift, alt, code, target)
 
-    def exclude_tags(self, value, enter=True):
-        """Types tags into the first hiding condition (adding one if there is
-        none) and presses Enter; an empty value removes that condition, and
-        the first showing condition is edited again."""
-        self.js("""const list=document.getElementById('hideList');let c=list.querySelector('.cond-card');
-if(!arguments[0]){if(c)c.querySelector('.cond-remove').click();return true;}
-if(!c){document.getElementById('addHide').click();c=list.querySelector('.cond-card');}else c.querySelector('.cond-summary').click();
-const i=document.getElementById('tagFilter');i.focus();i.value=arguments[0];i.dispatchEvent(new Event('input',{bubbles:true}));
-if(arguments[1])i.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));return true;""", value, enter)
+    def exclude_tags(self, value, enter=True, regex=False):
+        """Types a tag into the first hiding condition (making one if there is
+        none) and presses Enter, as a pattern with `regex`; an empty value
+        removes that condition."""
+        self.js("""const $=id=>document.getElementById(id),hide=[...document.querySelectorAll('.cond-item')].find(c=>c.querySelector('.cond-kind.hide'));
+if(!$('filterEditor').hidden)$('closeEditor').click();
+if(!arguments[0]){if(hide){hide.querySelector('.cond-summary').click();$('removeCondition').click();}return true;}
+if(hide)hide.querySelector('.cond-summary').click();else{$('addCondition').click();$('kindHide').click();}
+if($('tagRegex').checked!==arguments[2])$('tagRegex').click();
+const i=$('tagFilter');i.focus();i.value=arguments[0];i.dispatchEvent(new Event('input',{bubbles:true}));
+if(arguments[1])i.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));
+return true;""", value, enter, regex)
+
+    def add_condition(self, hide=False):
+        """Opens the editor on a new condition, of the hiding kind with `hide`."""
+        self.js("""const $=id=>document.getElementById(id);if(!$('filterEditor').hidden)$('closeEditor').click();
+$('addCondition').click();if(arguments[0])$('kindHide').click();return true;""", hide)
+
+    def close_editor(self):
+        """Closes the condition editor if it is open."""
+        self.js("const e=document.getElementById('filterEditor');if(!e.hidden)document.getElementById('closeEditor').click();return true;")
 
     def count(self):
         return self.text('logsCount')
 
     def wait_count(self, n, timeout=30):
         want = f'로그 · 전체 {n:,}건'
-        return self.wait(lambda: self.count() == want, timeout, what=want)
+        return self.wait(lambda: self.count() in (want, want.replace('전체', '결과')), timeout, what=want)
 
     def open_fixture(self, name):
         self.js("window.__TAURI__.core.invoke('qa_open_fixture',{name:arguments[0]});return true;", name)

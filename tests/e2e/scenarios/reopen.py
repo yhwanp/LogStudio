@@ -76,7 +76,7 @@ def run(ctx):
         app.capture('02-error-bar', hover='errorReopen')
         started = time.monotonic()
         app.click('errorReopen')
-        a = until(lambda v: v['count'] == '로그 · 전체 480건' and v['status'].startswith('파일 3,600행') and v['top'] == before['top'] and v['selected'] == before['selected'], 'reloaded')
+        a = until(lambda v: v['count'] == '로그 · 결과 480건' and v['status'].startswith('파일 3,600행') and v['top'] == before['top'] and v['selected'] == before['selected'], 'reloaded')
         keys = ('tag', 'query', 'raw', 'tab', 'marks')
         check('a reload keeps filters, search, view, lower tab, bookmarks, top row and selection',
               [a[k] for k in keys] == [before[k] for k in keys] and a['error'] is None and a['marker'] == 'page-1',
@@ -93,7 +93,7 @@ def run(ctx):
         time.sleep(.2)
         fixtures.grow(ctx.fixtures, 2400, 'v2-')
         app.key('r', meta=True)
-        b = until(lambda v: v['status'].startswith('파일 2,400행') and '북마크 1개 해제·2개 내용 바뀜' in (v['toast'] or '') and v['count'] == '로그 · 전체 320건', 'Cmd+R reload')
+        b = until(lambda v: v['status'].startswith('파일 2,400행') and '북마크 1개 해제·2개 내용 바뀜' in (v['toast'] or '') and v['count'] == '로그 · 결과 320건', 'Cmd+R reload')
         check('Cmd+R reloads; marks past the end drop, changed rows are reported, a lost place shows the list end',
               b['marks'] == '북마크 2' and b['marker'] == 'page-1' and b['error'] is None and b['range'].endswith('–320 / 320건') and not b['range'].startswith('1–'), b)
         app.capture('04-reload-bookmarks-toast')

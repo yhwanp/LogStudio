@@ -1,7 +1,7 @@
 """A new filter keeps the lists' places: the selected row at its height on
 screen with its detail, in the logs and in the search results, and the next
 result in its place when the row is filtered out. Message conditions: the
-field, its .* switch, a pattern the engine rejects (the last conditions stay)
+field, its 정규식 switch, a pattern the engine rejects (the last conditions stay)
 and the row menu with text selected in a row (ui.log)."""
 import time
 
@@ -14,7 +14,7 @@ return {logs:sel('logsRows'),search:sel('largeRows'),logsTop:top('logsRows',sel(
  detail:$('largeDetail').hidden?null:$('largeDetailTitle').textContent,toast:$('toast').hidden?null:$('toast').textContent,
  count:$('logsCount').textContent,searchCount:$('largeCount').textContent,chips:[...$('activeFilters').querySelectorAll('.chip-joint,.filter-chip')].map(e=>e.textContent),
  messageError:$('messageFilterError').hidden?null:$('messageFilterError').textContent,invalid:$('messageFilter').getAttribute('aria-invalid'),
- pending:$('logsPending').hidden?null:$('logsPending').textContent,banner:$('largeError').hidden?null:$('largeError').textContent,regex:$('messageRegex').getAttribute('aria-pressed')};"""
+ pending:$('logsPending').hidden?null:$('logsPending').textContent,banner:$('largeError').hidden?null:$('largeError').textContent,regex:$('messageRegex').checked};"""
 ONLY = """const b=document.querySelector(`#levelFilters .level-chip[data-level="${arguments[0]}"]`);b.dispatchEvent(new MouseEvent('click',{bubbles:true,altKey:true}));return true;"""
 OPEN_PANEL = "const t=document.getElementById('toggleFilters');if(t.getAttribute('aria-expanded')!=='true')t.click();return true;"
 PIN = "const a=document.getElementById('autoHideFilters');a.checked=arguments[0];a.dispatchEvent(new Event('change',{bubbles:true}));return true;"
@@ -96,15 +96,8 @@ def run(ctx):
               s['logsTop'] == before['logsTop'] and s['detail'] == '1,004행 원문', s)
 
         # Message conditions: a hiding condition of its own.
-        app.click('addHide')
+        app.add_condition(hide=True)
         time.sleep(.2)
-        check('the message field waits behind its + button, as PID·TID and time do',
-              js("return [document.getElementById('messageFields').hidden,document.getElementById('openMessage').hidden]") == [True, False])
-        app.click('openMessage')
-        time.sleep(.2)
-        fit = js("""const c=document.createElement('canvas').getContext('2d'),e=document.getElementById('messageFilter'),s=getComputedStyle(e);c.font=s.font;
-          return [e.placeholder,Math.ceil(c.measureText(e.placeholder).width),e.clientWidth-parseFloat(s.paddingLeft)-parseFloat(s.paddingRight)];""")
-        check('the message placeholder fits beside the .* switch', fit[1] <= fit[2], fit)
         app.enter('messageFilter', 'frame RENDERED')
         app.wait_count(2571)
         s = st()
@@ -115,14 +108,14 @@ def run(ctx):
         time.sleep(.3)
         s = st()
         check('a pattern the engine rejects is explained by the field; the last conditions stay applied',
-              s['messageError'].startswith('메시지 정규식을 확인해 주세요') and s['invalid'] == 'true' and s['regex'] == 'true' and s['banner'] is None
-              and s['pending'] == '입력한 조건 미적용 · 이전 조건 결과' and s['count'] == '로그 · 전체 2,571건' and s['chips'] == ['제외', '메시지: “frame RENDERED”×'], s)
+              s['messageError'].startswith('메시지 정규식을 확인해 주세요') and s['invalid'] == 'true' and s['regex'] is True and s['banner'] is None
+              and s['pending'] == '입력한 조건 미적용 · 이전 조건 결과' and s['count'] == '로그 · 결과 2,571건' and s['chips'] == ['제외', '메시지: “frame RENDERED”×'], s)
         app.capture('02-message-pattern-error')
         app.enter('messageFilter', r'^Frame rendered in \d+ ms$')
         app.wait(lambda: st()['messageError'] is None, what='pattern accepted')
         app.wait_count(2571)
         check('a pattern reads the message only: ^ is where the message starts', st()['chips'] == ['제외', '메시지 정규식: “^Frame rendered in \\d+ ms$”×'], st())
-        js("document.querySelector('#hideList .cond-remove').click();return true;")
+        js("document.querySelector('.cond-kind.hide').parentElement.querySelector('.cond-summary').click();document.getElementById('removeCondition').click();return true;")
         app.wait_count(3000)
 
         # The row menu takes text selected in the row's message.

@@ -25,7 +25,7 @@ function rig(saved=null,setup=()=>{}){
   const window={localStorage:{getItem:()=>JSON.stringify(saved),setItem:(_key,value)=>writes.push(JSON.parse(value))},setTimeout:(fn,ms)=>{timers.set(++seq,{fn,ms});return seq;},clearTimeout:id=>timers.delete(id),listeners:new Map(),
     addEventListener(name,fn){(this.listeners.get(name)??this.listeners.set(name,[]).get(name)).push(fn);},removeEventListener(name,fn){const list=this.listeners.get(name)??[];if(list.includes(fn))list.splice(list.indexOf(fn),1);},
     fire(name,event={}){for(const fn of [...this.listeners.get(name)??[]])fn(event);},getComputedStyle:()=>({fontWeight:'400',fontSize:'12px',fontFamily:'mono',paddingLeft:'6px',paddingRight:'6px',lineHeight:'20px'})};
-  const get=document.getElementById,panel=get('filterPanel'),input=get('pidFilter');panel.append(input);
+  const get=document.getElementById,panel=get('filterPanel'),input=get('pidFilter');panel.append(input);get('filterEditor').hidden=true;
   const main=get('logsRows'),selected=new Element(document);main.append(selected);selected.focus();
   setup({get,panel,document});
   const layout=mountLogLayout({document,window});
@@ -344,4 +344,14 @@ test('a DLT log shows its own columns and keeps their widths apart from text log
   r.layout.setProfile('text');
   assert.deepEqual(labels(),['행','날짜 · 시간','PID','TID','레벨','태그','메시지']);
   assert.match(workspace.style['--columns'],/^52px 220px 56px 56px 76px 128px minmax/);
+});
+
+test('the open condition editor takes Escape before the panel',()=>{
+  const r=rig();r.get('toggleFilters').fire('click');
+  const editor=r.get('filterEditor');editor.hidden=false;
+  r.document.listeners.get('keydown')({key:'Escape',defaultPrevented:false,preventDefault(){}});
+  assert.equal(r.get('toggleFilters').attributes['aria-expanded'],'true','the panel stays');
+  editor.hidden=true;
+  r.document.listeners.get('keydown')({key:'Escape',defaultPrevented:false,preventDefault(){}});
+  assert.equal(r.get('toggleFilters').attributes['aria-expanded'],'false');
 });

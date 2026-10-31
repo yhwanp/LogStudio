@@ -276,7 +276,7 @@ test('a saved filter applies to another file, stays through a reload and returns
   const item=r.get('rowMenu').children.find(child=>child.textContent==='NAV');
   assert.equal(item.attributes.role,'menuitemradio');assert.equal(item.attributes['aria-checked'],'false');
   await item.dispatch('click');await settle();
-  assert.equal(r.get('tagFilter').value,'Net');assert.equal(r.get('hideList').children.length,1);
+  assert.equal(r.get('tagFilter').value,'Net');assert.equal(r.get('conditionList').children.filter(item=>item.children[1].textContent==='제외').length,1);
   assert.equal(r.get('searchInput').value,'raw','the search stays');
   const query=r.calls.filter(c=>c.args.request?.action==='query'&&c.args.request.pane==='logs').at(-1).args.request.filters;
   assert.deepEqual([query.include.map(c=>[c.tag,c.levels]),query.exclude.map(c=>c.tag)],[[['Net',['W','E','F','A']]],['chatty']]);

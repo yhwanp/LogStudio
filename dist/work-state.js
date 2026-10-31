@@ -2,12 +2,13 @@
 // and search, the saved filter they came from, bookmarked physical rows, and
 // the first visible and selected row of each list. Native code names the files; the page saves and asks only by
 // dataset ID. No log text is saved: restored bookmarks read their rows again.
-import {validateFilters, defaultFilters, readCondition, emptyCondition, tagList, MAX_CONDITIONS} from './filter-model.js';
+import {validateFilters, defaultFilters, readCondition, upgradeCondition, emptyCondition, MAX_CONDITIONS} from './filter-model.js';
 import {sameFields} from './saved-filters.js';
 import {MAX_BOOKMARKS, markOf} from './bookmarks.js';
 import {formatNumber} from './describe.js';
 
-export const WORK_VERSION = 1;
+// Version 1 held lists in a condition's tag, PID and TID fields.
+export const WORK_VERSION = 2;
 export const SAVE_DELAY_MS = 500;
 // Rows one native `lines` request may name.
 export const LINES_PER_REQUEST = 200;
@@ -21,19 +22,20 @@ const sameFilters = (a, b) => sameFields(a, b) && ['query', 'caseSensitive', 're
 // falls back to the defaults as a whole rather than half-applied. Work saved
 // before conditions has a filter's fields: one showing condition and the
 // excluded tags as one hiding condition.
-export function readSavedFilters(value) {
+export function readSavedFilters(value, version=WORK_VERSION) {
   const filters = defaultFilters();
   if (!value || typeof value !== 'object') return filters;
   if (typeof value.query === 'string') filters.query = value.query.slice(0, TEXT);
   for (const key of ['caseSensitive', 'includeRaw']) if (typeof value[key] === 'boolean') filters[key] = value[key];
   if (value.recognizeLineNumbers === null || typeof value.recognizeLineNumbers === 'boolean') filters.recognizeLineNumbers = value.recognizeLineNumbers;
   if (value.searchMode === 'regex' || value.searchMode === 'literal') filters.searchMode = value.searchMode;
-  const list = v => (Array.isArray(v) ? v : []).slice(0, MAX_CONDITIONS).map(readCondition).filter(Boolean);
+  const read = v => readCondition(version === 1 && v && typeof v === 'object' ? upgradeCondition(v) : v);
+  const list = v => (Array.isArray(v) ? v : []).slice(0, MAX_CONDITIONS).map(read).filter(Boolean);
   if (Array.isArray(value.include) || Array.isArray(value.exclude)) {
     [filters.include, filters.exclude] = [list(value.include), list(value.exclude)];
   } else {
-    filters.include = [readCondition(value)];
-    if (typeof value.excludeTags === 'string' && tagList(value.excludeTags).length) filters.exclude = [{...emptyCondition(), tag:value.excludeTags.slice(0, TEXT)}];
+    filters.include = [read(value)];
+    if (typeof value.excludeTags === 'string' && value.excludeTags.replace(/[\s,]/g, '')) filters.exclude = [read({...emptyCondition(), tag:value.excludeTags.slice(0, TEXT)})];
   }
   if (!filters.include.length) filters.include = [emptyCondition()];
   try {validateFilters(filters); return filters;} catch {return defaultFilters();}
@@ -41,9 +43,9 @@ export function readSavedFilters(value) {
 const readPosition = value => ({top:line(value?.top), selected:line(value?.selected)});
 // A state this page saved, or null.
 export function readWork(value) {
-  if (!value || typeof value !== 'object' || value.v !== WORK_VERSION) return null;
+  if (!value || typeof value !== 'object' || ![1, WORK_VERSION].includes(value.v)) return null;
   const marks = Array.isArray(value.bookmarks) ? [...new Set(value.bookmarks.map(line).filter(Boolean))].sort((a, b) => a - b).slice(0, MAX_BOOKMARKS) : [];
-  return {filters:readSavedFilters(value.filters), savedFilter:line(value.savedFilter), bookmarks:marks, upper:readPosition(value.upper), lower:readPosition(value.lower)};
+  return {filters:readSavedFilters(value.filters, value.v), savedFilter:line(value.savedFilter), bookmarks:marks, upper:readPosition(value.upper), lower:readPosition(value.lower)};
 }
 // Work with nothing to restore is forgotten instead of saved.
 export const isEmptyWork = work => sameFilters(work.filters, defaultFilters()) && !work.bookmarks.length && ![work.upper, work.lower].some(p => p?.top || p?.selected);

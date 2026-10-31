@@ -103,12 +103,27 @@ fn main() {
     if let (Some(date), Some(time)) = (mid["date"].as_str(), mid["time"].as_str()) {
         // A minute of rows from the middle of the log.
         let minute = format!("{date} {}", &time[..5]);
-        let filters = [
+        let mut filters = vec![
             ("level E", json!({"levels":["E"]})),
             ("tag A07", json!({"tag":"A07"})),
             ("exclude ECU1", json!({"excludeTags":"ECU1"})),
             ("time minute", json!({"timeFrom":minute,"timeTo":minute})),
         ];
+        // The IDs of a DLT row, which the field metadata cannot tell apart.
+        if st(&e, "logs")["format"] == "dlt" {
+            filters.extend([
+                ("apid A07", json!({"include":[{"apid":"A07"}]})),
+                (
+                    "apid A07 + ctid C007",
+                    json!({"include":[{"apid":"A07","ctid":"C007"}]}),
+                ),
+                ("hide apid A07", json!({"exclude":[{"apid":"A07"}]})),
+                (
+                    "apid pattern",
+                    json!({"include":[{"apid":"A0[1-3]","apidRegex":true}]}),
+                ),
+            ]);
+        }
         for (name, f) in &filters {
             let (_, done, n) = run(&e, id, qid, "logs", f);
             println!("{label}\tfilter {name}\t{done:.3}\t{n}");

@@ -26,42 +26,74 @@ export function isEmptyTimeRange(from, to) {
   if (!start || !end || (start.year === null) !== (end.year === null)) return false;
   return `${start.year ?? ''}${start.key}` > `${end.year ?? ''}${end.key}`;
 }
-// Filter lists as the core reads them: trimmed, empty items dropped, the
-// first of exact duplicates kept. Tags may contain spaces, so only commas
-// separate them; IDs are digits, so whitespace separates them too.
-export const MAX_LIST_ITEMS = 32;
-const unique = items => [...new Set(items.filter(Boolean))];
-export const tagList = value => unique(String(value ?? '').split(',').map(item => item.trim()));
-export const idList = value => unique(String(value ?? '').split(/[\s,]+/));
-export function idListError(value) {
-  const ids = idList(value);
-  if (ids.some(id => !/^\d+$/.test(id))) return 'PID와 TID에는 숫자만 쉼표나 공백으로 구분해 입력해 주세요.';
-  return ids.length > MAX_LIST_ITEMS ? `PID와 TID는 각각 최대 ${MAX_LIST_ITEMS}개까지 입력할 수 있습니다.` : '';
+// Fields that hold one value, or with their `Regex` switch a pattern.
+export const VALUE_FIELDS = ['tag', 'pid', 'tid', 'ecu', 'apid', 'ctid'];
+export const REGEX_FIELDS = [...VALUE_FIELDS, 'message'];
+export const regexKey = key => `${key}Regex`;
+const trimmed = value => String(value ?? '').trim();
+// Why a PID or TID value cannot apply. A comma says what it means to the
+// person who typed a list; a pattern may be any text.
+export function numberError(value) {
+  const text = trimmed(value);
+  if (!text || /^\d+$/.test(text)) return '';
+  return /[\s,]/.test(text) ? 'PID와 TID는 값 하나만 입력합니다. 여러 값은 정규식으로 찾습니다.' : 'PID와 TID에는 숫자만 입력해 주세요.';
 }
-export const tagListError = value => tagList(value).length > MAX_LIST_ITEMS ? `태그는 조건마다 최대 ${MAX_LIST_ITEMS}개까지 입력할 수 있습니다.` : '';
+// What a comma in a text field's value means, shown under the field.
+export const commaHint = (value, regex) => !regex && String(value ?? '').includes(',') ? '쉼표도 글자입니다. 여러 값은 정규식으로 찾습니다.' : '';
+
+// Conditions saved before fields held one value: a tag took a comma-separated
+// list and a PID or TID a list split by commas or spaces, each item matching
+// as a value does. One item stays a value, several become a pattern that
+// matches the same rows.
+const escapePattern = text => text.replace(/[\\.+*?()|[\]{}^$#&~-]/g, '\\$&');
+const items = (value, split) => [...new Set(String(value ?? '').split(split).map(item => item.trim()).filter(Boolean))];
+const listed = (key, value) => items(value, key === 'pid' || key === 'tid' ? /[\s,]+/ : ',');
+// The pattern of a list typed into a field: the items as they matched in a
+// tag, or whole in a field of whole values.
+const listPattern = (key, list) => {
+  const body = list.map(escapePattern).join('|');
+  return key === 'tag' ? body : `^(${body})$`;
+};
+// A field's value as a pattern when it lists several items, else ''.
+export const patternOfList = (key, value) => {
+  const list = listed(key, value);
+  return list.length > 1 ? listPattern(key, list) : '';
+};
+export function upgradeCondition(c) {
+  const out = {...c};
+  for (const key of ['tag', 'pid', 'tid']) {
+    const list = listed(key, c[key]);
+    out[key] = list.length > 1 ? listPattern(key, list) : list[0] ?? '';
+    out[regexKey(key)] = list.length > 1;
+  }
+  return out;
+}
 
 // A filter shows the rows that match one of its showing conditions (all rows
 // without one) and none of its hiding conditions. A condition holds levels and
-// the tag, PID, TID, time and message criteria a row must all match; the
-// message is text the row's message contains, a pattern with `messageRegex`.
+// the tag, PID, TID, DLT ID, time and message criteria a row must all match.
 // `enabled` is the page's own switch. A condition without criteria is skipped.
 export const MAX_CONDITIONS = 32;
-const TEXT = 1000;
-// The engine's error for a condition's message pattern starts so; only the
-// engine knows its grammar.
-export const MESSAGE_PATTERN_ERROR = 'Invalid or unsupported message pattern: ';
-export const emptyCondition = () => ({levels:[...LEVELS], tag:'', pid:'', tid:'', timeFrom:'', timeTo:'', message:'', messageRegex:false, enabled:true});
+const TEXT = 1000, TAG_TEXT = 4000;
+// The engine's error for a condition's pattern names its field; only the
+// engine knows the grammar.
+const PATTERN_ERROR = /^Invalid or unsupported (tag|PID|TID|ECU|APID|CTID|message) pattern: /;
+export const patternField = text => PATTERN_ERROR.exec(String(text ?? ''))?.[1]?.replace(/^[A-Z]+$/, name => name.toLowerCase()) ?? null;
+const noValues = () => Object.fromEntries(REGEX_FIELDS.flatMap(key => [[key, ''], [regexKey(key), false]]));
+export const emptyCondition = () => ({levels:[...LEVELS], ...noValues(), timeFrom:'', timeTo:'', enabled:true});
 // A condition without `levels` has every level.
 const levelsOf = c => Array.isArray(c.levels) ? LEVELS.filter(level => c.levels.includes(level)) : [...LEVELS];
-export const isEmptyCondition = c => levelsOf(c).length === LEVELS.length && !tagList(c.tag).length && !idList(c.pid).length && !idList(c.tid).length && !String(c.timeFrom ?? '').trim() && !String(c.timeTo ?? '').trim() && !String(c.message ?? '');
+export const isEmptyCondition = c => levelsOf(c).length === LEVELS.length && !VALUE_FIELDS.some(key => trimmed(c[key])) && !trimmed(c.timeFrom) && !trimmed(c.timeTo) && !String(c.message ?? '');
 export const isActiveCondition = c => c.enabled !== false && !isEmptyCondition(c);
 // A condition of known fields of the right type, or null.
 export function readCondition(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const c = emptyCondition();
   if (Array.isArray(value.levels)) c.levels = LEVELS.filter(level => value.levels.includes(level));
-  for (const key of ['tag', 'pid', 'tid', 'timeFrom', 'timeTo', 'message']) if (typeof value[key] === 'string') c[key] = value[key].slice(0, TEXT);
-  c.messageRegex = value.messageRegex === true;
+  // A list saved before patterns grows when it becomes one, within the core's
+  // bound for a tag.
+  for (const key of [...REGEX_FIELDS, 'timeFrom', 'timeTo']) if (typeof value[key] === 'string') c[key] = value[key].slice(0, key === 'tag' ? TAG_TEXT : TEXT);
+  for (const key of REGEX_FIELDS) c[regexKey(key)] = value[regexKey(key)] === true;
   c.enabled = value.enabled !== false;
   return c;
 }
@@ -74,9 +106,17 @@ export function normalizeFilters(f = {}) {
 // The filter switched off as a whole: no condition applies and every row
 // shows. The search and the reading options stay.
 export const withoutConditions = f => ({...f, include:[], exclude:[], includeRaw:true});
-// One condition as the core reads it; a message is used as typed, and
-// without one its mode means nothing.
-const coreCondition = c => ({levels:levelsOf(c), tag:c.tag ?? '', pid:c.pid ?? '', tid:c.tid ?? '', timeFrom:c.timeFrom ?? '', timeTo:c.timeTo ?? '', message:c.message ?? '', messageRegex:!!c.message && c.messageRegex === true});
+// One condition as the core reads it: values trimmed, a message as typed, and
+// a field without a value has no mode.
+function coreCondition(c) {
+  const out = {levels:levelsOf(c), timeFrom:c.timeFrom ?? '', timeTo:c.timeTo ?? ''};
+  for (const key of REGEX_FIELDS) {
+    out[key] = key === 'message' ? c.message ?? '' : trimmed(c[key]);
+    out[regexKey(key)] = !!out[key] && c[regexKey(key)] === true;
+  }
+  return out;
+}
+export const coreForm = coreCondition;
 // The filter as the core reads it: enabled conditions with criteria.
 export function coreFilters(f) {
   return {include:(f.include ?? []).filter(isActiveCondition).map(coreCondition), exclude:(f.exclude ?? []).filter(isActiveCondition).map(coreCondition), includeRaw:f.includeRaw !== false,
@@ -100,15 +140,19 @@ export function conditionsWithoutRows(conds, sent, states) {
   }
   return out;
 }
-// Why a condition cannot be applied, or ''.
-export function conditionProblem(c) {
-  const problem = idListError(c.pid) || idListError(c.tid) || tagListError(c.tag);
-  if (problem) return problem;
-  return isTimeBound(c.timeFrom) && isTimeBound(c.timeTo) ? '' : '시간 형식을 확인해 주세요.';
+// The field that keeps a condition from applying, with why, or null.
+export function conditionFault(c) {
+  for (const key of ['pid', 'tid']) {
+    const problem = c[regexKey(key)] === true ? '' : numberError(c[key]);
+    if (problem) return {key, problem};
+  }
+  return isTimeBound(c.timeFrom) && isTimeBound(c.timeTo) ? null : {key:'time', problem:'시간 형식을 확인해 주세요.'};
 }
+export const conditionProblem = c => conditionFault(c)?.problem ?? '';
 export function validateFilters(input = {}) {
   const conditions = [...(input.include ?? []), ...(input.exclude ?? [])];
-  if (conditions.length > MAX_CONDITIONS) throw new Error(`조건은 ${MAX_CONDITIONS}개까지 쓸 수 있습니다.`);
+  // The blank condition the panel keeps is no condition.
+  if (conditions.filter(c => !isEmptyCondition(c)).length > MAX_CONDITIONS) throw new Error(`조건은 ${MAX_CONDITIONS}개까지 쓸 수 있습니다.`);
   for (const c of conditions) {
     const problem = conditionProblem(c);
     if (problem) throw new Error(problem);

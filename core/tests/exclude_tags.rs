@@ -1,6 +1,6 @@
 use logstudio_core::{
     dataset::Dataset,
-    search::{Filter, Filters},
+    search::{Condition, Filter, Filters},
     source::Source,
 };
 use std::{
@@ -48,7 +48,11 @@ fn excluded_tags_remove_only_tagged_rows_with_literal_case_insensitive_matches()
         ),
         (
             Filters {
-                exclude_tags: " choreo, CHATTY ,,choreo".into(),
+                exclude: vec![Condition {
+                    tag: " choreo|CHATTY ".into(),
+                    tag_regex: true,
+                    ..Condition::default()
+                }],
                 ..Filters::default()
             },
             4,
@@ -105,7 +109,7 @@ fn excluded_tags_remove_only_tagged_rows_with_literal_case_insensitive_matches()
         ),
         (
             Filters {
-                exclude_tags: " , ".into(),
+                exclude_tags: "  ".into(),
                 ..Filters::default()
             },
             6,
@@ -118,30 +122,21 @@ fn excluded_tags_remove_only_tagged_rows_with_literal_case_insensitive_matches()
 }
 
 #[test]
-fn excluded_tag_list_is_normalized_and_bounded() {
+fn excluded_tag_is_normalized() {
     let filter = Filter::new(Filters {
-        exclude_tags: " a, B ,a,,".into(),
+        exclude_tags: " a, B ".into(),
         ..Filters::default()
     })
     .unwrap();
-    assert_eq!(filter.fields.exclude_tags, "a,B");
+    assert_eq!(filter.fields.exclude_tags, "a, B");
     assert!(!filter.identity());
     assert!(!filter.only_levels());
     assert!(Filter::new(Filters {
-        exclude_tags: " ,  ".into(),
+        exclude_tags: "   ".into(),
         ..Filters::default()
     })
     .unwrap()
     .identity());
-    let many = (0..33)
-        .map(|i| format!("t{i}"))
-        .collect::<Vec<_>>()
-        .join(",");
-    assert!(Filter::new(Filters {
-        exclude_tags: many,
-        ..Filters::default()
-    })
-    .is_err());
     let json = serde_json::json!({"excludeTags": "chatty"});
     let parsed: Filters = serde_json::from_value(json).unwrap();
     assert_eq!(parsed.exclude_tags, "chatty");

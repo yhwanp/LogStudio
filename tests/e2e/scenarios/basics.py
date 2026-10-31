@@ -109,16 +109,17 @@ def run(ctx):
         c = js(VISIBLE + "return {badge:document.getElementById('filterBadge').textContent,shown:v('filterBadge'),chips:[...document.querySelectorAll('#activeFilters .filter-chip')].map(e=>e.textContent)};")
         check('an applied tag filter shows the badge and a chip', c['badge'] == '1' and c['shown'] and c['chips'] == ['태그: Wifi×'], c)
         app.capture('03-chip')
-        js("document.querySelector('#activeFilters .filter-chip').click();return true;")
+        js("document.querySelector('#activeFilters .chip-remove').click();return true;")
         app.wait_count(3000)
         check('the chip clears only that condition', js("return document.getElementById('tagFilter').value") == '' and js(CHIPS) == [])
 
-        app.exclude_tags('Wifi, network')
+        app.exclude_tags('Wifi|network', regex=True)
         app.wait_count(2000)
         e = js("return {chips:[...document.querySelectorAll('#activeFilters .chip-joint,#activeFilters .filter-chip')].map(e=>e.textContent),tags:[...new Set([...document.querySelectorAll('#logsRows .tag')].map(e=>e.textContent))]};")
-        check('excluded tags remove rows case-insensitively and show a chip after 제외', e['chips'] == ['제외', '태그: Wifi, network×'] and not any(t in ('WifiMonitor', 'NetworkStack') for t in e['tags']), e)
-        js("document.querySelector('#activeFilters .filter-chip').click();return true;")
+        check('excluded tags remove rows case-insensitively and show a chip after 제외', e['chips'] == ['제외', '태그 정규식: Wifi|network×'] and not any(t in ('WifiMonitor', 'NetworkStack') for t in e['tags']), e)
+        js("document.querySelector('#activeFilters .chip-remove').click();return true;")
         app.wait_count(3000)
+        app.close_editor()
 
         # Alt+click keeps one level.
         js("document.querySelector('#levelFilters [data-level=W]').dispatchEvent(new MouseEvent('click',{bubbles:true,altKey:true}));return true;")
@@ -130,10 +131,11 @@ def run(ctx):
 
         # A non-digit PID is explained beside the field.
         app.enter('pidFilter', '12a')
-        e = app.wait(lambda: (lambda v: not v['hidden'] and v)(js("return {error:document.getElementById('idFilterError').textContent,hidden:document.getElementById('idFilterError').hidden,invalid:document.getElementById('pidFilter').getAttribute('aria-invalid')};")), what='PID error')
+        e = app.wait(lambda: (lambda v: not v['hidden'] and v)(js("return {error:document.getElementById('pidFilterError').textContent,hidden:document.getElementById('pidFilterError').hidden,invalid:document.getElementById('pidFilter').getAttribute('aria-invalid')};")), what='PID error')
         check('an invalid PID is explained beside the field', '숫자' in e['error'] and e['invalid'] == 'true', e)
         app.enter('pidFilter', '')
-        app.wait(lambda: js("return document.getElementById('idFilterError').hidden") and app.count() == '로그 · 전체 3,000건', what='PID cleared')
+        app.wait(lambda: js("return document.getElementById('pidFilterError').hidden") and app.count() == '로그 · 전체 3,000건', what='PID cleared')
+        app.close_editor()
 
         # A press on the last row in view opens the raw detail, which shrinks
         # the list under the pointer: the pressed row stays in view, and a
@@ -436,7 +438,7 @@ return {error,ratio:getComputedStyle(document.getElementById('workspace')).getPr
         app.click_row(4, event='contextmenu')
         m = app.wait(lambda: (lambda v: not v['hidden'] and v)(js(menu)), what='row menu')
         check('right-click opens the row menu inside the window with focus on the first item',
-              m['items'][:2] == ["태그 'ExampleApp' 보기 조건 추가", "태그 'ExampleApp' 제외"] and m['active'] == m['items'][0] and m['inside'], m)
+              m['items'][:3] == ['이 행으로 조건 추가…', "태그 'ExampleApp' 보기 조건 추가", "태그 'ExampleApp' 제외"] and m['active'] == m['items'][0] and m['inside'], m)
         app.capture('07-row-menu')
         app.key('ArrowDown', target='rowMenu')
         check('arrow keys move through the menu items', js("return document.activeElement.textContent") == m['items'][1])
@@ -448,11 +450,13 @@ return {error,ratio:getComputedStyle(document.getElementById('workspace')).getPr
         app.wait_count(1000)
         q = js("return {pid:document.getElementById('pidFilter').value,chips:[...document.querySelectorAll('#activeFilters .filter-chip')].map(e=>e.textContent),hidden:document.getElementById('rowMenu').hidden};")
         check('the menu PID action applies a removable PID filter', q['pid'] == '2983' and q['chips'] == ['PID: 2983×'] and q['hidden'], q)
+        # The count shows before the rows are drawn.
+        app.wait(lambda: js("return !!document.querySelector('#logsRows .log-row')"), what='rows of the new count')
         js("document.querySelector('#logsRows .log-row').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:200,clientY:200}));return true;")
         app.wait(lambda: not js("return document.getElementById('rowMenu').hidden"), what='row menu')
         js("document.getElementById('logsViewport').dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));return true;")
         check('clicking elsewhere closes the menu', js("return document.getElementById('rowMenu').hidden"))
-        js("document.querySelector('#activeFilters .filter-chip').click();return true;")
+        js("document.querySelector('#activeFilters .chip-remove').click();return true;")
         app.wait_count(3000)
 
         # Shortcut handler (synthetic keydown; native key delivery is not covered).

@@ -202,7 +202,7 @@ return {chip:document.getElementById('selection').textContent,apart:t.top>=c.bot
             switch('main')
             time.sleep(.3)
             check('closing the track window leaves the main window and its log as they were',
-                  left == ['main'] and app.count() == '로그 · 전체 1,200건' and js(SELECTED) == '697', [left, app.count()])
+                  left == ['main'] and app.count() in ('로그 · 전체 1,200건', '로그 · 결과 1,200건') and js(SELECTED) == '697', [left, app.count()])
             saved = json.loads((ctx.data / 'extras-windows.json').read_text())
             open_track()
             switch('extra-track')

@@ -142,7 +142,8 @@ fn condition(r: &mut Rng) -> Condition {
         c.tag = TAGS[r.below(TAGS.len())].into();
     }
     if r.chance(20) {
-        c.pid = ["101", "4242", "999", "103 104"][r.below(4)].into();
+        c.pid = ["101", "4242", "999", "^(?:103|104)$"][r.below(4)].into();
+        c.pid_regex = c.pid.starts_with('^');
     }
     if r.chance(15) {
         c.tid = ["7", "9001", "55555"][r.below(3)].into();

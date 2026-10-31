@@ -11,9 +11,9 @@ const entry = (id, name, format='text', extra={}) => ({id, name, format, filter:
 async function settle() {for (let i = 0; i < 5; i++) await nextTurn();}
 
 test('a filter is stored as the fields its conditions set', () => {
-  const f = fields({levels:['W', 'E', 'F', 'A'], tag:'MyApp, Net', excludeTags:'chatty', pid:'2983 3120', timeFrom:'06-18 19:24', includeRaw:false});
+  const f = fields({levels:['W', 'E', 'F', 'A'], tag:'MyApp|Net', tagRegex:true, excludeTags:'chatty', pid:'2983', timeFrom:'06-18 19:24', includeRaw:false});
   const stored = toStored({...f, query:'boom', caseSensitive:true, searchMode:'regex', recognizeLineNumbers:false});
-  assert.deepEqual(stored, {v:SAVED_VERSION, include:[{levels:['W', 'E', 'F', 'A'], tag:'MyApp, Net', pid:'2983 3120', timeFrom:'06-18 19:24'}], exclude:[{tag:'chatty'}], includeRaw:false}, 'the search and reading options are not saved');
+  assert.deepEqual(stored, {v:SAVED_VERSION, include:[{levels:['W', 'E', 'F', 'A'], timeFrom:'06-18 19:24', tag:'MyApp|Net', tagRegex:true, pid:'2983'}], exclude:[{tag:'chatty'}], includeRaw:false}, 'the search and reading options are not saved');
   assert.deepEqual(fromStored(stored), f);
   assert.deepEqual(toStored(defaultFields()), {v:SAVED_VERSION, include:[], exclude:[], includeRaw:true}, 'empty conditions are not stored');
   assert.deepEqual(fromStored(toStored(fields({excludeTags:'Binder'}))), fields({excludeTags:'Binder'}));
@@ -24,24 +24,44 @@ test('a filter is stored as the fields its conditions set', () => {
   assert.deepEqual(fromStored(toStored(many)), many);
   // A filter saved before conditions could be switched off reads the same.
   assert.deepEqual(fromStored({v:SAVED_VERSION, include:[{levels:['E'], tag:'a', pid:'', tid:'', timeFrom:'', timeTo:''}], exclude:[{tag:'b'}], includeRaw:true}), fields({levels:['E'], tag:'a', excludeTags:'b'}));
+  // DLT IDs and their patterns.
+  const ids = {include:[cond({ecu:'HU', apid:'NAV|MAP', apidRegex:true, ctid:'ROUT'})], exclude:[], includeRaw:true};
+  assert.deepEqual(toStored(ids).include, [{ecu:'HU', apid:'NAV|MAP', apidRegex:true, ctid:'ROUT'}]);
+  assert.deepEqual(fromStored(toStored(ids)), ids);
+});
+
+test('a filter saved with lists reads as the same rows, with values kept as values', () => {
+  const old = fromStored({v:1, include:[{tag:'MyApp, Net', pid:'2983 3120'}, {tag:'Wifi'}], exclude:[{tag:'a.b, c', levels:['V']}], includeRaw:true});
+  assert.deepEqual(old.include.map(c => [c.tag, c.tagRegex, c.pid, c.pidRegex]), [['MyApp|Net', true, '^(2983|3120)$', true], ['Wifi', false, '', false]]);
+  assert.deepEqual(old.exclude.map(c => [c.tag, c.tagRegex]), [['a\\.b|c', true]]);
+  assert.equal(toStored(old).v, SAVED_VERSION, 'saved again in the new form');
+  assert.ok(sameFields(old, fromStored(toStored(old))));
+  // A long list stays whole as it grows, within the core's bound for a tag.
+  const items = Array.from({length:31}, (_, i) => `com.example.feature.service.m${String(i).padStart(2, '0')}`), long = fromStored({v:1, include:[{tag:items.join(', ')}], exclude:[], includeRaw:true}).include[0];
+  assert.equal(long.tag.split('|').length, 31);assert.ok(long.tag.endsWith('m30'), long.tag.slice(-12));
+  // A saved list of a DLT filter looks in every ID as before.
+  assert.equal(fromStored({v:1, include:[{tag:'NAV, HU'}], exclude:[], includeRaw:true}).include[0].tag, 'NAV|HU');
 });
 
 test('filters with unknown fields or values the filter rejects are not applied', () => {
   assert.equal(fromStored({v:SAVED_VERSION, include:[{tag:'a', payload:'x'}]}), null, 'an unknown field');
   assert.equal(fromStored({v:SAVED_VERSION, include:Array.from({length:MAX_CONDITIONS + 1}, (_, i) => ({tag:`t${i}`}))}), null, 'too many conditions');
-  assert.equal(fromStored({v:2, include:[]}), null);
+  assert.equal(fromStored({v:SAVED_VERSION + 1, include:[]}), null);
   for (const bad of [null, [], 'x', {v:SAVED_VERSION, include:'a'}, {v:SAVED_VERSION, include:[[1]]}]) assert.equal(fromStored(bad), null);
   assert.equal(fromStored({v:SAVED_VERSION, include:[{pid:'abc'}]}), null, 'an invalid PID');
   assert.equal(fromStored({v:SAVED_VERSION, include:[{timeFrom:'25:00'}]}), null, 'an invalid time');
-  assert.equal(fromStored({v:SAVED_VERSION, include:[{tag:Array(33).fill('t').map((t, i) => t + i).join(',')}]}), null, 'too many tags');
+  assert.equal(fromStored({v:SAVED_VERSION, include:[{pid:'1, 2'}]}), null, 'a list is no value');
 });
 
 test('filters compare as the core reads them, with each condition switch', () => {
-  assert.ok(sameFields({include:[cond({tag:'a'}), cond()], exclude:[cond({tag:' , '})]}, fields({tag:'a'})), 'conditions without criteria do not count');
+  assert.ok(sameFields({include:[cond({tag:'a'}), cond()], exclude:[cond({tag:'  '})]}, fields({tag:'a'})), 'conditions without criteria do not count');
   assert.ok(!sameFields({include:[cond({tag:'a', enabled:false})], exclude:[]}, fields({tag:'a'})), 'switching a condition off changes the filter');
   assert.ok(!sameFields({include:[cond({tag:'a'}), cond({tag:'b'})], exclude:[]}, {include:[cond({tag:'b'}), cond({tag:'a'})], exclude:[]}), 'conditions keep their order');
-  assert.ok(sameFields(fields({tag:' MyApp ,, MyApp', levels:['E', 'W']}), fields({tag:'MyApp', levels:['W', 'E']})));
-  assert.ok(sameFields(fields({pid:'1,2'}), fields({pid:' 1  2 '})));
+  assert.ok(sameFields(fields({tag:' MyApp ', levels:['E', 'W']}), fields({tag:'MyApp', levels:['W', 'E']})));
+  assert.ok(!sameFields(fields({tag:'a,b'}), fields({tag:'a, b'})), 'a comma is text');
+  assert.ok(!sameFields(fields({tag:'a', tagRegex:true}), fields({tag:'a'})), 'a pattern is not the value');
+  assert.ok(sameFields(fields({tagRegex:true}), fields()), 'a blank field has no mode');
+  assert.ok(!sameFields(fields({ecu:'HU'}), fields({apid:'HU'})), 'IDs are apart');
   assert.ok(!sameFields(fields({pid:'0100'}), fields({pid:'100'})), 'IDs are strings');
   assert.ok(!sameFields(fields({includeRaw:false}), fields()));
   assert.ok(isDefaultFields(fieldsOf({query:'x', include:[{levels:[...LEVELS].reverse()}]})), 'the search is not part of the filter');
@@ -50,7 +70,7 @@ test('filters compare as the core reads them, with each condition switch', () =>
 
 test('the list keeps valid entries by name and marks those this version cannot apply', () => {
   const list = readList([
-    entry(3, 'b 10'), entry(4, 'b 9', 'dlt'), {id:5, name:'later', format:'text', filter:{v:2}},
+    entry(3, 'b 10'), entry(4, 'b 9', 'dlt'), {id:5, name:'later', format:'text', filter:{v:SAVED_VERSION + 1}},
     {id:3, name:'same id', format:'text', filter:{}}, {id:0, name:'zero', format:'text'}, {id:6, name:'', format:'text'}, {id:7, name:'csv', format:'csv'}, null,
   ]);
   assert.deepEqual(list.map(e => [e.id, e.name, !!e.fields]), [[4, 'b 9', true], [3, 'b 10', true], [5, 'later', false]]);
@@ -73,7 +93,7 @@ test('names are required, bounded and unique ignoring case', () => {
 });
 
 test('the menu offers this format’s filters and what fits the current filter', () => {
-  const list = readList([entry(1, 'NAV', 'text', {tag:'NAV'}), entry(2, 'ECU', 'dlt', {tag:'ECU1'}), {id:3, name:'later', format:'text', filter:{v:2}}]);
+  const list = readList([entry(1, 'NAV', 'text', {tag:'NAV'}), entry(2, 'ECU', 'dlt', {tag:'ECU1'}), {id:3, name:'later', format:'text', filter:{v:SAVED_VERSION + 1}}]);
   const ids = s => s.actions.map(a => a.id);
   let s = savedState({list, applied:null, fields:defaultFields(), format:'text'});
   assert.deepEqual(s.usable.map(e => e.id), [1]);

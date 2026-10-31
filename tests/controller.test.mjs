@@ -341,7 +341,7 @@ test('active filter summary names only conditions that hide rows', async () => {
 
 test('each chip names its condition; switched off and empty conditions show none', async () => {
   const {describeActiveFilters, describeFilter} = await import('../dist/describe.js');
-  const filters = {include:[{tag:'NAV'}, {levels:['E','F']}, {tag:'X', enabled:false}, {tag:' , '}], exclude:[{tag:'chatty'}, {levels:['V'], tag:'Binder'}], includeRaw:true};
+  const filters = {include:[{tag:'NAV'}, {levels:['E','F']}, {tag:'X', enabled:false}, {tag:'  '}], exclude:[{tag:'chatty'}, {levels:['V'], tag:'Binder'}], includeRaw:true};
   assert.deepEqual(describeActiveFilters(filters).map(chip => [chip.list, chip.index, chip.key, chip.label]), [
     ['include', 0, 'tag', '태그: NAV'], ['include', 1, 'levels', '레벨: Error·Fatal'],
     ['exclude', 0, 'tag', '태그: chatty'], ['exclude', 1, 'levels', '레벨: Verbose'], ['exclude', 1, 'tag', '태그: Binder']]);
@@ -349,32 +349,40 @@ test('each chip names its condition; switched off and empty conditions show none
   assert.equal(describeFilter({include:[{tag:'A', levels:['E']}, {tag:'B'}]}), '(레벨: Error · 태그: A) 또는 태그: B', 'a group of several fields is bracketed');
   assert.equal(describeFilter({include:[{tag:'A', levels:['E']}], includeRaw:false}), '레벨: Error · 태그: A · 미인식 줄 제외');
   assert.equal(describeFilter({include:[{}], exclude:[]}), '');
-  assert.equal(describeActiveFilters({include:[{tag:'ECU1'}]}, 'dlt')[0].label, 'ID: ECU1');
+  assert.equal(describeActiveFilters({include:[{tag:'ECU1'}]}, 'dlt')[0].label, '모든 ID: ECU1');
 });
 
-test('tag and ID lists read like the core parses them and show as one chip per field', async () => {
+test('a field holds one value or a pattern, and old lists become the pattern that matches the same rows', async () => {
   const {describeActiveFilters} = await import('../dist/describe.js');
-  const {tagList, idList, idListError, tagListError, validateFilters, MAX_LIST_ITEMS, MAX_CONDITIONS} = await import('../dist/filter-model.js');
-  assert.equal(MAX_LIST_ITEMS, 32);
-  assert.deepEqual(tagList(' ActivityManager , MyApp,,MyApp, my app '), ['ActivityManager', 'MyApp', 'my app'], 'spaces stay inside a tag');
-  assert.deepEqual(idList(' 2983, 3120\t2983,,　 41 '), ['2983', '3120', '41'], 'commas and whitespace separate IDs');
-  assert.deepEqual([tagList(' , '), idList(' , ')], [[], []]);
-  for (const ok of ['', ' ', '2983', '2983, 3120', '1 2 3', Array.from({length:32}, (_, i) => i).join(',')]) assert.equal(idListError(ok), '', ok);
-  for (const bad of ['12a', '１２', '12, abc', '-1', '1;2']) assert.match(idListError(bad), /숫자만/, bad);
-  assert.match(idListError(Array.from({length:33}, (_, i) => i).join(' ')), /최대 32개/);
-  assert.equal(idListError(`${'7,'.repeat(40)}7`), '', 'duplicates do not count');
-  assert.equal(tagListError(Array.from({length:32}, (_, i) => `t${i}`).join(',')), '');
-  assert.match(tagListError(Array.from({length:33}, (_, i) => `t${i}`).join(',')), /최대 32개/);
-  const tags = Array.from({length:33}, (_, i) => `t${i}`).join(',');
-  assert.doesNotThrow(() => validateFilters({include:[{pid:'2983, 3120', tid:'1 2', tag:'a, b'}], exclude:[{tag:'c'}]}));
-  for (const input of [{include:[{pid:'1, x'}]}, {exclude:[{tid:'x'}]}, {include:[{tag:tags}]}, {exclude:[{tag:tags}]}, {exclude:[{timeFrom:'25:00'}]}, {include:Array.from({length:MAX_CONDITIONS + 1}, () => ({}))}])
+  const {numberError, commaHint, upgradeCondition, patternField, validateFilters, emptyCondition, isEmptyCondition, coreFilters, MAX_CONDITIONS} = await import('../dist/filter-model.js');
+  for (const ok of ['', ' ', '2983', ' 2983 ']) assert.equal(numberError(ok), '', ok);
+  for (const bad of ['12a', '１２', '-1', '1;2']) assert.match(numberError(bad), /숫자만/, bad);
+  for (const list of ['2983, 3120', '1 2']) assert.match(numberError(list), /여러 값은 정규식으로/, list);
+  assert.equal(commaHint('a, b', false), '쉼표도 글자입니다. 여러 값은 정규식으로 찾습니다.');
+  assert.equal(commaHint('a, b', true), '', 'a pattern reads its own commas');
+  assert.equal(commaHint('ab', false), '');
+  assert.doesNotThrow(() => validateFilters({include:[{pid:'^(2983|3120)$', pidRegex:true, tid:'1', tag:'a, b'}], exclude:[{tag:'c'}]}));
+  for (const input of [{include:[{pid:'1, 2'}]}, {exclude:[{tid:'x'}]}, {exclude:[{timeFrom:'25:00'}]}, {include:Array.from({length:MAX_CONDITIONS + 1}, () => ({tag:'a'}))}])
     assert.throws(() => validateFilters(input), JSON.stringify(input).slice(0, 40));
-  const chips = describeActiveFilters({include:[{tag:' ActivityManager ,MyApp,MyApp', pid:'2983 3120', tid:'4241'}], exclude:[{tag:'chatty,,chatty'}]});
-  assert.deepEqual(chips.map(chip => [chip.list, chip.key, chip.label]), [['include', 'tag', '태그: ActivityManager, MyApp'], ['include', 'pid', 'PID: 2983, 3120'], ['include', 'tid', 'TID: 4241'], ['exclude', 'tag', '태그: chatty']]);
-  assert.equal(describeActiveFilters({include:[{tag:'  Wifi '}]})[0].label, '태그: Wifi', 'one value reads as before');
-  const long = describeActiveFilters({include:[{pid:Array.from({length:32}, (_, i) => 1000 + i).join(',')}]})[0];
-  assert.equal(long.label, `PID: ${Array.from({length:32}, (_, i) => 1000 + i).join(', ').slice(0, 40)}…`);
-  assert.equal(long.full, `PID: ${Array.from({length:32}, (_, i) => 1000 + i).join(', ')}`, 'the tooltip keeps every item');
+  assert.doesNotThrow(() => validateFilters({include:[{}], exclude:Array.from({length:MAX_CONDITIONS}, () => ({tag:'a'}))}), 'the blank condition is not counted');
+  // Lists saved before fields held one value.
+  const up = c => {const {tag, tagRegex, pid, pidRegex, tid, tidRegex} = upgradeCondition(c); return {tag, tagRegex, pid, pidRegex, tid, tidRegex};};
+  assert.deepEqual(up({tag:' Wifi ', pid:' 12 ', tid:'3'}), {tag:'Wifi', tagRegex:false, pid:'12', pidRegex:false, tid:'3', tidRegex:false}, 'one value stays a value');
+  assert.deepEqual(up({tag:'ActivityManager, MyApp,MyApp', pid:'2983 3120', tid:'4,5,4'}), {tag:'ActivityManager|MyApp', tagRegex:true, pid:'^(2983|3120)$', pidRegex:true, tid:'^(4|5)$', tidRegex:true});
+  assert.deepEqual(up({tag:' , ', pid:' , ', tid:''}), {tag:'', tagRegex:false, pid:'', pidRegex:false, tid:'', tidRegex:false}, 'separators alone are no filter');
+  assert.equal(upgradeCondition({tag:'a.b, c(d'}).tag, 'a\\.b|c\\(d', 'items stay literal');
+  assert.deepEqual(['tag', 'PID', 'TID', 'ECU', 'APID', 'CTID', 'message'].map(name => patternField(`Invalid or unsupported ${name} pattern: x`)), ['tag', 'pid', 'tid', 'ecu', 'apid', 'ctid', 'message']);
+  assert.equal(patternField('Invalid or unsupported search pattern: x'), null, 'the search is not a condition');
+  // What goes to the core, and how chips read it.
+  const sent = coreFilters({include:[{...emptyCondition(), apid:' NAV ', apidRegex:true, ctid:'', ctidRegex:true}]}).include[0];
+  assert.deepEqual([sent.apid, sent.apidRegex, sent.ctid, sent.ctidRegex], ['NAV', true, '', false]);
+  assert.equal(isEmptyCondition({...emptyCondition(), ecu:'  ', tagRegex:true}), true);
+  assert.deepEqual(describeActiveFilters({include:[{apid:'NAV|MAP', apidRegex:true, ctid:'ROUT', ecu:'HU'}]}, 'dlt').map(chip => [chip.key, chip.label]), [['ecu', 'ECU: HU'], ['apid', 'APID 정규식: NAV|MAP'], ['ctid', 'CTID: ROUT']]);
+  const chips = describeActiveFilters({include:[{tag:' a|b ', tagRegex:true, pid:'2983', tid:'4241'}], exclude:[{tag:'chatty'}]});
+  assert.deepEqual(chips.map(chip => [chip.list, chip.key, chip.label]), [['include', 'tag', '태그 정규식: a|b'], ['include', 'pid', 'PID: 2983'], ['include', 'tid', 'TID: 4241'], ['exclude', 'tag', '태그: chatty']]);
+  const text = Array.from({length:32}, (_, i) => 1000 + i).join('|'), long = describeActiveFilters({include:[{pid:text, pidRegex:true}]})[0];
+  assert.equal(long.label, `PID 정규식: ${text.slice(0, 40)}…`);
+  assert.equal(long.full, `PID 정규식: ${text}`, 'the tooltip keeps all of it');
 });
 
 test('a detail or copy covers the entry span the engine reports, or only the requested row', () => {

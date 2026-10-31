@@ -1,6 +1,6 @@
 // One pane's query lifecycle against the native engine: status polling,
 // pushed progress, paging, location and detail reads. No DOM access.
-import {validateFilters, defaultFilters, normalizeFilters, coreFilters, MESSAGE_PATTERN_ERROR} from './filter-model.js';
+import {validateFilters, defaultFilters, normalizeFilters, coreFilters, patternField} from './filter-model.js';
 
 export const PAGE_SIZE = 200;
 export const DETAIL_BYTES = 65536;
@@ -282,8 +282,8 @@ export function createLargeLogController({transport, onChange=()=>{}, onLocate=(
       if (sequence !== serial) return;
       if (error?.userMessage === BUSY && retryAttempt < MAX_QUERY_RETRIES) {
         retryTimer = setTimer(() => {retryTimer = null; if (!disposed && sequence === serial) void setFilters(desiredFilters, {retryAttempt:retryAttempt + 1, place:relocating()});}, Math.min(2000, 250 * 2 ** retryAttempt));
-      } else if (String(error?.userMessage ?? '').startsWith(MESSAGE_PATTERN_ERROR) && previous.queryAccepted) {
-        // A message pattern the engine rejects leaves its previous query, and
+      } else if (patternField(error?.userMessage) && previous.queryAccepted) {
+        // A pattern the engine rejects leaves its previous query, and
         // the list returns to it and its place; `rejected` says why.
         const place = relocating(), {filters:kept, ...query} = previous;
         endRelocation(); desiredFilters = kept; Object.assign(state, query);

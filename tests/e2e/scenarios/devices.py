@@ -291,7 +291,7 @@ def run(ctx):
         # are: the capture goes on into a new file, shown as a new log that
         # keeps the filters and follows again, and the old file goes.
         app.exclude_tags('Choreographer')
-        until(lambda v: js("return !!document.querySelector('#hideList .cond-card')"), 'filter applied')
+        until(lambda v: js("return !!document.querySelector('.cond-kind.hide')"), 'filter applied')
         button = js("""const b=document.getElementById('captureClear');return {hidden:b.hidden,label:b.getAttribute('aria-label'),title:b.title,
           hint:document.getElementById(b.getAttribute('aria-describedby')).textContent,icon:!!b.querySelector('svg'),text:b.textContent.trim(),
           last:document.getElementById('captureSave').nextElementSibling===b,border:getComputedStyle(b).borderTopColor}""")
@@ -318,7 +318,7 @@ def run(ctx):
         first = after[0].read_text(encoding='utf-8').splitlines()[0][:18]
         check('the rows so far go with their file, and the new file holds only rows from then on',
               len(before) == 1 and not before[0].exists() and first > last, {'before': [p.name for p in before], 'after': [p.name for p in after], 'last': last, 'first': first})
-        kept = js("return [...document.querySelectorAll('#hideList .cond-card')].map(c=>c.textContent)")
+        kept = js("return [...document.querySelectorAll('.cond-kind.hide')].map(c=>c.parentElement.textContent)")
         check('clearing keeps the filters', len(kept) == 1 and 'Choreographer' in kept[0], kept)
         shown = app.wait(lambda: js("return [...document.querySelectorAll('#logsRows .log-row .tag')].map(t=>t.textContent)") or None, what='rows after clearing')
         check('the cleared log applies the kept filters', 'Choreographer' not in shown, shown)
@@ -332,10 +332,10 @@ def run(ctx):
         app.click('captureClear')
         app.wait(lambda: (lambda f: len(f) == 1 and f[0] not in after and f[0].stat().st_size > 0)(recorded()), what='another capture file')
         app.wait(lambda: 'Choreographer' in js(tags), what='every row after clearing')
-        off = js("return [document.getElementById('filtersOn').checked,document.querySelectorAll('#hideList .cond-card').length]")
+        off = js("return [document.getElementById('filtersOn').checked,document.querySelectorAll('.cond-kind.hide').length]")
         check('clearing keeps the filter switched off and its conditions', off == [False, 1], off)
         app.exclude_tags('')
-        until(lambda v: not js("return !!document.querySelector('#hideList .cond-card')"), 'filter removed again')
+        until(lambda v: not js("return !!document.querySelector('.cond-kind.hide')"), 'filter removed again')
 
         js("document.getElementById('captureStop').focus();return true;")
         box = js(STATE)['bar']['stopBox']
@@ -505,7 +505,7 @@ def run(ctx):
         app.capture('11g-ios-app-starting', hover='captureApp')
         # A notice that comes on its own waits for a toast offering an undo:
         # the start ends while a filter from the row menu can still be undone.
-        hides = app.text('hideList')
+        hides = app.text('conditionList')
         app.click_row(app.wait(lambda: js(NEAR_END), what='rows shown'), event='contextmenu')
         menu(lambda v: any(x.endswith(' 제외') for x in v), 'row menu while the app starts')
         js("[...document.querySelectorAll('#rowMenu>button')].find(b=>b.textContent.endsWith(' 제외')).click();return true;")
@@ -519,7 +519,7 @@ def run(ctx):
         after = app.wait(lambda: (lambda t: '앱을 실행했습니다' in t and t)(app.text('toast')), what='start notice after the undo')
         check('a start that ends while an undo is offered says so once the undo notice goes',
               kept == undo and after == 'SampleApp 앱을 실행했습니다. 이번 실행의 로그는 <private> 없이 기록합니다.', {'undo': undo, 'kept': kept, 'after': after})
-        app.wait(lambda: app.text('hideList') == hides, what='filter undone')
+        app.wait(lambda: app.text('conditionList') == hides, what='filter undone')
         frame = app.rect()
         app.rect(width=900, height=frame['height'])
         time.sleep(.5)

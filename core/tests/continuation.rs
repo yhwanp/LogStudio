@@ -261,7 +261,11 @@ fn workload_filters() -> Vec<Filters> {
                 ..base.clone()
             },
             Filters {
-                exclude_tags: "alerts,androidruntime".into(),
+                exclude: vec![logstudio_core::search::Condition {
+                    tag: "alerts|androidruntime".into(),
+                    tag_regex: true,
+                    ..Default::default()
+                }],
                 ..base.clone()
             },
             Filters {

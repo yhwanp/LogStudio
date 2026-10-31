@@ -10,6 +10,10 @@ async function settle(){for(let i=0;i<10;i++)await nextTurn();}
 // The chip row's joining words and chips in reading order, through the groups
 // that keep a joining word with its chip.
 const chipNodes=row=>row.children.flatMap(node=>node.className==='chip-group'?node.children:[node]);
+// A chip's text edits its condition and its × clears the field. A list item
+// is the condition's switch, its kind and its summary.
+const chipEdit=chip=>chip.children[0],chipClear=chip=>chip.children[1];
+const listItems=r=>r.get('conditionList').children,itemKinds=r=>listItems(r).map(item=>item.children[1].textContent),itemSummaries=r=>listItems(r).map(item=>item.children[2].textContent);
 class Element {
   constructor(tag='div'){this.tagName=tag.toUpperCase();this.children=[];this.listeners={};this.dataset={};this.attributes={};this.value='';this.checked=false;this.hidden=false;this._text='';this.style={setProperty(key,value){this[key]=value;},removeProperty(key){delete this[key];}};this.clientHeight=280;this.scrollTop=0;this.classList={toggle(){},add:(...names)=>{this.className=[...new Set([...String(this.className??'').split(' ').filter(Boolean),...names])].join(' ');}};}
   get textContent(){return this._text+this.children.map(child=>child.textContent).join('');}
@@ -222,7 +226,7 @@ test('mounted log heading keeps its full total and removes only the duplicate fo
   assert.equal(r.get('logsCount').textContent,'로그 · 전체 6건');
   assert.equal(r.get('largeStatus').textContent,'');
   await r.controller.logs.setFilters({include:[{pid:'007'}]});await settle();
-  assert.equal(r.get('logsCount').textContent,'로그 · 전체 6건');
+  assert.equal(r.get('logsCount').textContent,'로그 · 결과 6건');
   assert.equal(r.get('largeStatus').textContent,'파일 6행','equal filtered counts still convey a different scope');
   const state=r.controller.logs.getState();
   await r.emitProgress({pane:'logs',state:{datasetId:state.datasetId,status:'ready',size:100,total:6,textComplete:true,summaryComplete:true,complete:true,query:{id:state.queryId,status:'complete',count:6,complete:true}}});
@@ -619,7 +623,7 @@ test('applied field filters stay visible as removable chips and a rail badge',as
   assert.equal(r.get('filterBadge').textContent,'1');assert.equal(r.get('filterBadge').hidden,false);
   assert.equal(chipNodes(r.get('activeFilters'))[0].textContent,'태그: Wifi×');
   assert.match(r.get('toggleFilters').attributes['aria-label'],/1개 조건/);
-  await chipNodes(r.get('activeFilters'))[0].dispatch('click');await settle();
+  await chipClear(chipNodes(r.get('activeFilters'))[0]).dispatch('click');await settle();
   assert.equal(r.get('tagFilter').value,'');assert.equal(r.get('filterBadge').hidden,true);
   assert.equal(r.controller.logs.getState().fieldFiltering,false,'removing the chip reapplies the upper query');
 });
@@ -788,156 +792,153 @@ test('invalid IDs are explained beside the fields and the empty state follows th
   const r=await rig();t.after(()=>r.controller.close());
   assert.equal(r.get('emptyState').hidden,true);assert.equal(r.get('logContent').hidden,false);
   r.get('pidFilter').value='12a';await r.get('pidFilter').dispatch('input');await r.get('pidFilter').dispatch('keydown',{key:'Enter',preventDefault(){}});await settle();
-  assert.equal(r.get('idFilterError').hidden,false);assert.equal(r.get('pidFilter').attributes['aria-invalid'],'true');assert.equal(r.get('tidFilter').attributes['aria-invalid'],'false');
-  assert.equal(r.get('largeError').hidden,true,'an open filter panel shows the error inline only');
+  assert.equal(r.get('pidFilterError').hidden,false);assert.equal(r.get('pidFilter').attributes['aria-invalid'],'true');assert.equal(r.get('tidFilter').attributes['aria-invalid'],'false');
+  assert.equal(r.get('largeError').hidden,true,'an open editor shows the error inline only');
   r.get('pidFilter').value='12';await r.get('pidFilter').dispatch('input');await r.get('pidFilter').dispatch('keydown',{key:'Enter',preventDefault(){}});await settle();
-  assert.equal(r.get('idFilterError').hidden,true);
+  assert.equal(r.get('pidFilterError').hidden,true);
   await r.get('largeClose').dispatch('click');await settle();
   assert.equal(r.get('emptyState').hidden,false);assert.equal(r.get('logContent').hidden,true);
 });
 
-test('ID and tag lists are validated beside their fields and sent as typed strings',async t=>{
+test('a field takes one value or a pattern, validated beside it and sent as typed',async t=>{
   const r=await rig();t.after(()=>r.controller.close());
   const enter=async(id,value)=>{r.get(id).value=value;await r.get(id).dispatch('input');await r.get(id).dispatch('keydown',{key:'Enter',preventDefault(){}});await settle();};
+  const check=async(id,on)=>{r.get(id).checked=on;await r.get(id).dispatch('change');await r.get(id.replace('Regex','Filter')).dispatch('keydown',{key:'Enter',preventDefault(){}});await settle();};
   const upper=()=>r.calls.filter(c=>c.args.request?.action==='query'&&c.args.request.pane==='logs').at(-1).args.request.filters;
   const shown=()=>upper().include[0]??{};
-  await enter('pidFilter','2983, 3120');await enter('tidFilter','41 42');await enter('tagFilter','ActivityManager, MyApp');
-  assert.deepEqual([shown().pid,shown().tid,shown().tag],['2983, 3120','41 42','ActivityManager, MyApp'],'the core parses the lists');
-  assert.deepEqual(chipNodes(r.get('activeFilters')).map(chip=>chip.textContent),['태그: ActivityManager, MyApp×','PID: 2983, 3120×','TID: 41, 42×']);
-  assert.equal(r.get('filterBadge').textContent,'3');
-  await enter('pidFilter','2983, x');
-  assert.equal(r.get('idFilterError').hidden,false);assert.match(r.get('idFilterError').textContent,/숫자만/);
+  await enter('pidFilter','2983');await enter('tidFilter','41');await enter('tagFilter','ActivityManager');
+  assert.deepEqual([shown().pid,shown().tid,shown().tag],['2983','41','ActivityManager']);
+  assert.deepEqual(chipNodes(r.get('activeFilters')).map(chip=>chip.textContent),['태그: ActivityManager×','PID: 2983×','TID: 41×']);
+  assert.equal(r.get('filterBadge').textContent,'1','the badge counts conditions, not fields');
+  // A typed list is no value: the field says what to do instead.
+  await enter('pidFilter','2983, 3120');
+  assert.equal(r.get('pidFilterError').hidden,false);assert.match(r.get('pidFilterError').textContent,/여러 값은 정규식으로/);
   assert.equal(r.get('pidFilter').attributes['aria-invalid'],'true');assert.equal(r.get('tidFilter').attributes['aria-invalid'],'false');
-  assert.equal(shown().pid,'2983, 3120','invalid input keeps the last applied list');assert.equal(r.get('logsPending').hidden,false);
-  await enter('pidFilter',Array.from({length:33},(_,i)=>1000+i).join(','));
-  assert.match(r.get('idFilterError').textContent,/최대 32개/);
-  await enter('pidFilter',Array.from({length:32},(_,i)=>1000+i).join(','));
-  assert.equal(r.get('idFilterError').hidden,true);assert.equal(r.get('pidFilter').attributes['aria-invalid'],'false');
+  assert.equal(shown().pid,'2983','invalid input keeps the last applied value');assert.equal(r.get('logsPending').hidden,false);
+  await check('pidRegex',true);await enter('pidFilter','2983|3120');
+  assert.equal(r.get('pidFilterError').hidden,true);assert.deepEqual([shown().pid,shown().pidRegex],['2983|3120',true]);
+  assert.equal(chipNodes(r.get('activeFilters'))[1].textContent,'PID 정규식: 2983|3120×');
+  // A comma in a tag is text, and the field says so until a pattern reads it.
+  await enter('tagFilter','ActivityManager, MyApp');
+  assert.equal(r.get('tagFilterHint').hidden,false);assert.equal(r.get('tagFilterHint').children[0].textContent,'쉼표도 글자입니다. 여러 값은 정규식으로 찾습니다.');
+  assert.equal(shown().tag,'ActivityManager, MyApp');
+  await check('tagRegex',true);assert.equal(r.get('tagFilterHint').hidden,true);assert.equal(shown().tagRegex,true);
+  // A clipped chip keeps all of its value in its tooltip.
+  const long=Array.from({length:32},(_,i)=>1000+i).join('|');
+  await enter('pidFilter',long);
   const pid=chipNodes(r.get('activeFilters'))[1];
-  assert.match(pid.textContent,/…×$/);assert.match(pid.title,/1031 · 클릭하면 조건을 해제합니다$/,'a clipped list chip keeps every item in its tooltip');
+  assert.match(pid.textContent,/…×$/);assert.match(chipEdit(pid).title,/1031 · 클릭하면 편집합니다$/);
   // A hiding condition is edited in the same fields.
-  await r.get('addHide').dispatch('click');await settle();
-  assert.equal(r.get('hideList').children.length,1);assert.equal(r.get('tagFilter').value,'','a new condition starts empty');
-  await enter('tagFilter',Array.from({length:33},(_,i)=>`t${i}`).join(', '));
-  assert.equal(r.get('tagFilterError').hidden,false);assert.match(r.get('tagFilterError').textContent,/최대 32개/);
-  assert.equal(r.get('tagFilter').attributes['aria-invalid'],'true');
-  assert.equal(r.get('idFilterError').hidden,true);
+  await enter('pidFilter','');await check('pidRegex',false);await enter('tidFilter','');await check('tagRegex',false);await enter('tagFilter','NAV');
+  await r.get('addCondition').dispatch('click');await settle();
+  assert.equal(r.get('tagFilter').value,'','a new condition starts empty');
+  await r.get('kindHide').dispatch('click');await settle();
   await enter('tagFilter','chatty');
-  assert.equal(r.get('tagFilterError').hidden,true);assert.deepEqual(upper().exclude.map(c=>c.tag),['chatty']);
-  assert.deepEqual(chipNodes(r.get('activeFilters')).map(chip=>chip.textContent),['태그: ActivityManager, MyApp×',`PID: ${Array.from({length:32},(_,i)=>1000+i).join(', ').slice(0,40)}…×`,'TID: 41, 42×','제외','태그: chatty×'],'the chips read as the filter');
-  await chipNodes(r.get('activeFilters')).find(chip=>chip.textContent.startsWith('PID')).dispatch('click');await settle();
-  assert.equal(shown().pid,'','removing the chip clears the whole list of its condition');assert.equal(r.get('tagFilter').value,'chatty','the hiding condition stays in the fields');
-  // A condition left without criteria goes, and the showing one is edited again.
-  await chipNodes(r.get('activeFilters')).find(chip=>chip.textContent==='태그: chatty×').dispatch('click');await settle();
-  assert.equal(r.get('hideList').children.length,0);assert.deepEqual(upper().exclude,[]);assert.equal(r.get('tagFilter').value,'ActivityManager, MyApp');
-  r.get('tidFilter').value='';
-  await enter('tagFilter',' , ');await enter('pidFilter',' ,  ');
-  assert.equal(chipNodes(r.get('activeFilters')).length,0);assert.equal(r.controller.logs.getState().fieldFiltering,false,'separators alone filter nothing');
+  assert.deepEqual(upper().exclude.map(c=>c.tag),['chatty']);
+  assert.deepEqual(chipNodes(r.get('activeFilters')).map(chip=>chip.textContent),['태그: NAV×','제외','태그: chatty×'],'the chips read as the filter');
+  await chipClear(chipNodes(r.get('activeFilters')).find(chip=>chip.textContent==='태그: NAV×')).dispatch('click');await settle();
+  assert.deepEqual(upper().include,[],'removing the chip clears its field');assert.equal(r.get('tagFilter').value,'chatty','the hiding condition stays in the fields');
+  // A condition left without criteria goes.
+  await chipClear(chipNodes(r.get('activeFilters')).find(chip=>chip.textContent==='태그: chatty×')).dispatch('click');await settle();
+  assert.deepEqual(upper().exclude,[]);assert.equal(chipNodes(r.get('activeFilters')).length,0);
+  await enter('tagFilter','  ');await enter('pidFilter','  ');
+  assert.equal(chipNodes(r.get('activeFilters')).length,0);assert.equal(r.controller.logs.getState().fieldFiltering,false,'spaces alone filter nothing');
 });
 
-test('conditions are cards sharing one editor; switched off and removed conditions are not sent',async t=>{
+test('conditions are a list sharing one editor; switched off and removed conditions are not sent',async t=>{
   const r=await rig();t.after(()=>r.controller.close());
   const enter=async(id,value)=>{r.get(id).value=value;await r.get(id).dispatch('input');await r.get(id).dispatch('keydown',{key:'Enter',preventDefault(){}});await settle();};
   const upper=()=>r.calls.filter(c=>c.args.request?.action==='query'&&c.args.request.pane==='logs').at(-1)?.args.request.filters;
-  const cards=()=>r.get('showList').children,head=card=>card.children[0],summary=card=>head(card).children[1].textContent;
-  const editing=()=>cards().findIndex(card=>card.children.includes(r.get('condEditor')));
-  assert.equal(cards().length,1);assert.equal(editing(),0,'the editor is in the only card');
-  await enter('tagFilter','NAV');
-  await r.get('addShow').dispatch('click');await settle();
-  assert.equal(cards().length,2);assert.equal(editing(),1);assert.equal(r.get('tagFilter').value,'','a new condition starts empty');
-  assert.equal(r.get('showHint').textContent,'하나라도 맞으면 보입니다');
+  const close=async()=>{await r.get('closeEditor').dispatch('click');await settle();};
+  await close();
+  assert.equal(listItems(r).length,0,'a blank condition is no item');assert.equal(r.get('conditionsEmpty').hidden,false);
+  assert.equal(r.get('duplicateCondition').disabled,true);assert.equal(r.get('removeCondition').disabled,true);
+  await r.get('addCondition').dispatch('click');await settle();
+  assert.equal(r.get('filterEditor').hidden,false);assert.equal(r.get('filterEditorTitle').textContent,'새 조건');
+  assert.deepEqual(itemSummaries(r),['새 조건'],'the condition being made shows');assert.equal(r.document.activeElement,r.get('tagFilter'));
+  await enter('tagFilter','NAV');await close();
+  assert.equal(r.get('filterEditor').hidden,true);assert.deepEqual(itemSummaries(r),['태그: NAV']);
+  await r.get('addCondition').dispatch('click');await settle();
+  assert.equal(r.get('tagFilter').value,'','a new condition starts empty');
   await r.get('errorLevels').dispatch('click');await settle();
   assert.deepEqual(upper().include.map(c=>[c.tag,c.levels.join('')]),[['NAV','VDIWEFAU'],['','WEFA']]);
-  assert.deepEqual(cards().map(summary),['태그: NAV','레벨: Warn 이상']);
+  assert.deepEqual(itemSummaries(r),['태그: NAV','레벨: Warn 이상']);
   assert.deepEqual(chipNodes(r.get('activeFilters')).map(chip=>chip.textContent),['태그: NAV×','또는','레벨: Warn 이상×']);
-  // Switched off: kept in the panel, not sent, no chip.
-  const toggle=head(cards()[0]).children[0];toggle.checked=false;await toggle.dispatch('change');await settle();
-  assert.equal(cards()[0].dataset.off,'true');
+  // Switched off: kept in the list, not sent, no chip.
+  const toggle=listItems(r)[0].children[0];toggle.checked=false;await toggle.dispatch('change');await settle();
+  assert.equal(listItems(r)[0].dataset.off,'true');
   assert.deepEqual(upper().include.map(c=>c.levels.join('')),['WEFA']);
   assert.deepEqual(chipNodes(r.get('activeFilters')).map(chip=>chip.textContent),['레벨: Warn 이상×']);
-  // Selecting a card moves the editor and loads its fields.
-  await head(cards()[0]).children[1].dispatch('click');await settle();
-  assert.equal(editing(),0);assert.equal(r.get('tagFilter').value,'NAV');
+  // Selecting an item edits it.
+  await listItems(r)[0].children[2].dispatch('click');await settle();
+  assert.equal(r.get('filterEditorTitle').textContent,'조건 편집');assert.equal(r.get('tagFilter').value,'NAV');
   assert.equal(r.get('levelFilters').children.find(b=>b.dataset.level==='V').attributes['aria-pressed'],'true');
-  // Removing the other card leaves only the switched-off one: nothing is sent.
-  await head(cards()[1]).children[2].dispatch('click');await settle();
-  assert.equal(cards().length,1);assert.deepEqual(upper().include,[]);assert.equal(r.controller.logs.getState().fieldFiltering,false);
-  const again=head(cards()[0]).children[0];assert.equal(again.checked,false,'a rebuilt card keeps its switch');again.checked=true;await again.dispatch('change');await settle();
+  // A chip's text edits its condition too; its kind can change in place.
+  await chipEdit(chipNodes(r.get('activeFilters'))[0]).dispatch('click');await settle();
+  assert.equal(r.get('filterEditor').hidden,false);assert.equal(r.get('tagFilter').value,'');
+  assert.equal(r.get('kindHide').attributes['aria-checked'],'false');
+  await r.get('kindHide').dispatch('click');await settle();
+  assert.equal(r.get('kindHide').attributes['aria-checked'],'true');assert.deepEqual(itemKinds(r),['보기','제외']);
+  assert.deepEqual(upper().exclude.map(c=>c.levels.join('')),['WEFA']);assert.deepEqual(upper().include,[]);
+  await r.get('kindShow').dispatch('click');await settle();
+  assert.deepEqual(itemKinds(r),['보기','보기']);assert.deepEqual(upper().exclude,[]);
+  // Duplicating edits the copy.
+  await r.get('duplicateCondition').dispatch('click');await settle();
+  assert.deepEqual(itemSummaries(r),['태그: NAV','레벨: Warn 이상','레벨: Warn 이상']);
+  await r.get('errorLevels').dispatch('click');await settle();
+  await r.get('removeCondition').dispatch('click');await settle();
+  assert.deepEqual(itemSummaries(r),['태그: NAV','레벨: Warn 이상']);assert.equal(r.get('filterEditor').hidden,true,'removing the edited condition closes the editor');
+  // Removing the other item leaves only the switched-off one: nothing is sent.
+  await listItems(r)[1].children[2].dispatch('click');await settle();
+  await r.get('removeCondition').dispatch('click');await settle();
+  assert.equal(listItems(r).length,1);assert.deepEqual(upper().include,[]);assert.equal(r.controller.logs.getState().fieldFiltering,false);
+  const again=listItems(r)[0].children[0];assert.equal(again.checked,false,'a rebuilt item keeps its switch');again.checked=true;await again.dispatch('change');await settle();
   assert.deepEqual(upper().include.map(c=>c.tag),['NAV']);
   // Conditions are bounded.
-  for(let i=1;i<32;i++){await r.get('addHide').dispatch('click');}
-  await settle();
-  assert.equal(r.get('hideList').children.length,31);assert.equal(r.get('addShow').disabled,true);assert.equal(r.get('addHide').disabled,true);
-  await r.get('addHide').dispatch('click');await settle();
-  assert.equal(r.get('hideList').children.length,31);assert.match(r.get('toast').textContent,/32개까지/);
-  // 초기화 leaves one empty showing condition and clears the search; its
-  // toast puts every condition and the search back.
+  for(let i=1;i<32;i++){await r.get('addCondition').dispatch('click');await enter('pidFilter',String(i));await close();}
+  assert.equal(listItems(r).length,32);assert.equal(r.get('addCondition').disabled,true);assert.equal(r.get('duplicateCondition').disabled,true);
+  await r.get('addCondition').dispatch('click');await settle();
+  assert.equal(listItems(r).length,32);assert.match(r.get('toast').textContent,/32개까지/);
+  // 초기화 leaves no condition and clears the search; its toast puts every
+  // condition and the search back.
   r.get('searchInput').value='needle';
   await r.get('resetFilters').dispatch('click');await settle();
-  assert.equal(cards().length,1);assert.equal(r.get('hideList').children.length,0);assert.equal(r.get('tagFilter').value,'');assert.equal(r.get('searchInput').value,'');
+  assert.equal(listItems(r).length,0);assert.equal(r.get('tagFilter').value,'');assert.equal(r.get('searchInput').value,'');
   const toast=r.get('toast');assert.equal(toast.children[0].textContent,'필터를 초기화했습니다.');assert.equal(toast.children[1].textContent,'실행 취소');
   await toast.children[1].dispatch('click');await settle();
-  assert.equal(r.get('hideList').children.length,31);assert.equal(r.get('tagFilter').value,'NAV');assert.equal(r.get('searchInput').value,'needle');
-  assert.deepEqual(upper().include.map(c=>c.tag),['NAV']);
+  assert.equal(listItems(r).length,32);assert.equal(r.get('tagFilter').value,'NAV');assert.equal(r.get('searchInput').value,'needle');
+  assert.deepEqual(upper().include[0].tag,'NAV');
   // Resetting a filter that is already empty offers nothing to undo.
   await r.get('resetFilters').dispatch('click');await settle();
   toast.replaceChildren();await r.get('resetFilters').dispatch('click');await settle();
   assert.equal(toast.children.length,0);
 });
 
-test('PID·TID and time fields show for a condition that uses them, otherwise behind + buttons',async t=>{
-  const rows=[{lineNumber:1,kind:'parsed',raw:'06-18 19:24:00.000  100 200 I App: x',date:'06-18',time:'19:24:00.000',pid:'100',tid:'200',level:'I',tag:'App',message:'x'}];
-  const r=await rig({rows});t.after(()=>r.controller.close());
-  const enter=async(id,value)=>{r.get(id).value=value;await r.get(id).dispatch('input');await r.get(id).dispatch('keydown',{key:'Enter',preventDefault(){}});await settle();};
-  const shown=()=>({ids:!r.get('idFields').hidden,time:!r.get('timeFields').hidden,openIds:!r.get('openIds').hidden,openTime:!r.get('openTime').hidden});
-  const folded={ids:false,time:false,openIds:true,openTime:true};
-  const select=async(list,index)=>{await r.get(list).children[index].children[0].children[1].dispatch('click');await settle();};
-  assert.deepEqual(shown(),folded,'an empty condition shows its levels and tag only');
-  await r.get('openIds').dispatch('click');
-  assert.deepEqual(shown(),{ids:true,time:false,openIds:false,openTime:true});
-  assert.equal(r.document.activeElement,r.get('pidFilter'),'the opened fields take focus');
-  await enter('pidFilter','100');await enter('pidFilter','');
-  assert.equal(shown().ids,true,'a cleared field stays while its condition is edited');
-  // Another condition starts folded, and fields shown for it follow its values.
-  await r.get('addHide').dispatch('click');await settle();
-  assert.deepEqual(shown(),folded);
-  await enter('timeFrom','19:24');
-  assert.deepEqual(shown(),{ids:false,time:true,openIds:true,openTime:false});
-  await select('showList',0);
-  assert.deepEqual(shown(),folded,'empty fields fold once their condition is edited again');
-  await select('hideList',0);
-  assert.equal(shown().time,true,'a condition with a time shows its time fields');
-  // A row value brings its field into view in the condition it fills.
-  await select('showList',0);
-  await r.get('logsRows').children[0].dispatch('contextmenu',{clientX:10,clientY:20,preventDefault(){}});await settle();
-  await r.get('rowMenu').children.find(n=>n.textContent==='PID 100 보기 조건 추가').dispatch('click');await settle();
-  assert.equal(r.get('pidFilter').value,'100');assert.deepEqual(shown(),{ids:true,time:false,openIds:false,openTime:true});
-  // Its chip clears the field, which folds back.
-  await chipNodes(r.get('activeFilters')).find(chip=>chip.textContent.startsWith('PID')).dispatch('click');await settle();
-  assert.deepEqual(shown(),folded);
-  const calls=r.calls.filter(c=>c.args.request?.action==='query'&&c.args.request.pane==='logs');
-  assert.deepEqual(calls.at(-1).args.request.filters.exclude.map(c=>c.timeFrom),['19:24'],'folding never changes a condition');
+test('the editor shows the fields of the log format',async t=>{
+  const shown=r=>['ecu','apid','ctid','tag','pid','tid','message'].filter(key=>!r.get(`${key}Row`).hidden);
+  const text=await rig();t.after(()=>text.controller.close());
+  assert.deepEqual(shown(text),['tag','pid','tid','message']);
+  const dlt=await rig({format:'dlt'});t.after(()=>dlt.controller.close());
+  assert.deepEqual(shown(dlt),['ecu','apid','ctid','message'],'a DLT log has no PID or TID, and no tag of its own');
+  assert.equal(dlt.get('messageLabel').textContent,'페이로드');
+  assert.equal(dlt.get('tagLabel').textContent,'모든 ID');
 });
 
-test('a DLT condition offers the time fields but no PID or TID',async t=>{
-  const r=await rig({format:'dlt'});t.after(()=>r.controller.close());
-  assert.deepEqual([r.get('idFields').hidden,r.get('openIds').hidden,r.get('timeFields').hidden,r.get('openTime').hidden,r.get('fieldOpeners').hidden],[true,true,true,false,false]);
-});
-
-test('row menu adds removable conditions without changing existing ones, and excluded tags accumulate',async t=>{
+test('row menu adds removable conditions without changing existing ones',async t=>{
   const rows=[{lineNumber:1,kind:'parsed',raw:'06-18 19:24:00.000  100 200 I Choreographer: x',date:'06-18',time:'19:24:00.000',pid:'100',tid:'200',level:'I',tag:'Choreographer',message:'x'},{lineNumber:2,kind:'raw',raw:'plain'},
     {lineNumber:3,kind:'parsed',raw:'06-18 19:24:00.100  100 200 W Binder: y',date:'06-18',time:'19:24:00.100',pid:'100',tid:'200',level:'W',tag:'Binder',message:'y'}];
   const r=await rig({rows,detail:{text:'x',startByte:0,nextByte:1,totalBytes:1,complete:true,highlights:[]}});t.after(()=>r.controller.close());
+  await r.get('closeEditor').dispatch('click');await settle();
   const row=line=>r.get('logsRows').children.find(n=>n.dataset.lineNumber===String(line));
   const menu=()=>r.get('rowMenu').children.filter(n=>n.tagName==='BUTTON').map(n=>n.textContent);
   await row(1).dispatch('contextmenu',{clientX:10,clientY:20,preventDefault(){}});await settle();
   assert.equal(r.get('rowMenu').hidden,false);
-  assert.deepEqual(menu(),["태그 'Choreographer' 보기 조건 추가","태그 'Choreographer' 제외","메시지 'x' 보기 조건 추가","메시지 'x' 제외",'PID 100 보기 조건 추가','TID 200 보기 조건 추가','06-18 19:24:00.000부터 보기 조건 추가','06-18 19:24:00.000까지 보기 조건 추가','Info 레벨 보기 조건 추가','행 원문 복사','북마크 추가']);
+  assert.deepEqual(menu(),['이 행으로 조건 추가…',"태그 'Choreographer' 보기 조건 추가","태그 'Choreographer' 제외","메시지 'x' 보기 조건 추가","메시지 'x' 제외",'PID 100 보기 조건 추가','TID 200 보기 조건 추가','06-18 19:24:00.000부터 보기 조건 추가','06-18 19:24:00.000까지 보기 조건 추가','Info 레벨 보기 조건 추가','행 원문 복사','북마크 추가']);
   const title=label=>r.get('rowMenu').children.find(n=>n.textContent===label).title;
-  assert.equal(title('PID 100 보기 조건 추가'),'이 값에 맞는 줄만 보입니다','no showing condition is in use yet');
+  assert.equal(title('PID 100 보기 조건 추가'),'이 조건에 맞는 줄만 보여 줍니다','no showing condition is in use yet');
   assert.equal(r.controller.logs.getState().selectedLine,1,'right-click selects the row');
-  await r.get('rowMenu').children[1].dispatch('click');await settle();
-  assert.equal(r.get('rowMenu').hidden,true);assert.equal(r.get('hideList').children.length,1);
+  await r.get('rowMenu').children.find(n=>n.textContent==="태그 'Choreographer' 제외").dispatch('click');await settle();
+  assert.equal(r.get('rowMenu').hidden,true);assert.deepEqual(itemKinds(r),['제외']);
   assert.equal(r.get('tagFilter').value,'','the showing condition stays in the fields');
   assert.deepEqual(chipNodes(r.get('activeFilters')).map(chip=>chip.textContent),['제외','태그: Choreographer×']);
   const query=()=>r.calls.filter(c=>c.args.request?.action==='query'&&c.args.request.pane==='logs').at(-1).args.request;
@@ -945,66 +946,254 @@ test('row menu adds removable conditions without changing existing ones, and exc
   // Each row action says what it changed in a toast that undoes it.
   const toast=r.get('toast'),undo=async()=>{await toast.children[1].dispatch('click');await settle();};
   assert.equal(toast.children[0].textContent,'제외 조건을 추가했습니다 · 태그: Choreographer');assert.equal(toast.children[1].textContent,'실행 취소');
-  // Another excluded tag joins that hiding condition, and says so; one
-  // already excluded changes nothing.
+  // Another excluded tag is a condition of its own; one already excluded
+  // changes nothing.
   await row(3).dispatch('contextmenu',{clientX:10,clientY:20,preventDefault(){}});await settle();
   await r.get('rowMenu').children.find(n=>n.textContent==="태그 'Binder' 제외").dispatch('click');await settle();
-  assert.deepEqual(query().filters.exclude.map(c=>c.tag),['Choreographer, Binder']);
-  assert.equal(toast.children[0].textContent,'제외 조건을 수정했습니다 · 태그: Choreographer, Binder');
+  assert.deepEqual(query().filters.exclude.map(c=>c.tag),['Choreographer','Binder']);
+  assert.equal(toast.children[0].textContent,'제외 조건을 추가했습니다 · 태그: Binder');
   await undo();assert.deepEqual(query().filters.exclude.map(c=>c.tag),['Choreographer']);
   toast.replaceChildren();
   await row(1).dispatch('contextmenu',{clientX:10,clientY:20,preventDefault(){}});await settle();
   await r.get('rowMenu').children.find(n=>n.textContent==="태그 'Choreographer' 제외").dispatch('click');await settle();
-  assert.equal(toast.children.length,0);assert.equal(r.get('hideList').children.length,1);
+  assert.equal(toast.children.length,0);assert.deepEqual(itemKinds(r),['제외']);
   await row(1).dispatch('contextmenu',{clientX:10,clientY:20,preventDefault(){}});await settle();
   await r.get('rowMenu').children.find(n=>n.textContent==="TID 200 보기 조건 추가").dispatch('click');await settle();
   assert.deepEqual(query().filters.include.map(c=>c.tid),['200'],'the blank showing condition takes the value');
-  assert.equal(r.get('showList').children.length,1);assert.equal(toast.children[0].textContent,'보기 조건을 추가했습니다 · TID: 200');
+  assert.deepEqual(itemKinds(r),['보기','제외']);assert.equal(toast.children[0].textContent,'보기 조건을 추가했습니다 · TID: 200');
   await row(1).dispatch('contextmenu',{clientX:10,clientY:20,preventDefault(){}});await settle();
   await r.get('rowMenu').children.find(n=>n.textContent==="태그 'Choreographer' 보기 조건 추가").dispatch('click');await settle();
   assert.deepEqual(query().filters.include.map(c=>[c.tag,c.tid]),[['','200'],['Choreographer','']],'a new showing condition joins with 또는');
-  assert.equal(r.get('showList').children.length,2);assert.equal(r.get('tagFilter').value,'Choreographer','the new condition is edited');
+  assert.deepEqual(itemKinds(r),['보기','보기','제외']);assert.equal(r.get('tagFilter').value,'Choreographer','the new condition is selected');
   assert.equal(toast.children[0].textContent,'보기 조건을 추가했습니다 · 태그: Choreographer · 기존 보기 조건과 이 조건 중 하나라도 맞으면 보입니다');
-  // With showing conditions in use, a row value is added, not written into
-  // the condition being edited.
   await row(1).dispatch('contextmenu',{clientX:10,clientY:20,preventDefault(){}});await settle();
-  assert.equal(title('PID 100 보기 조건 추가'),'지금 보기 조건에 더해, 이 값에 맞는 줄도 보입니다');
+  assert.equal(title('PID 100 보기 조건 추가'),'기존 보기 조건에 더해, 이 조건에 맞는 줄도 함께 보여 줍니다');
   await r.get('rowMenu').children.find(n=>n.textContent==='PID 100 보기 조건 추가').dispatch('click');await settle();
   assert.deepEqual(query().filters.include.map(c=>[c.tag,c.pid,c.tid]),[['','','200'],['Choreographer','',''],['','100','']]);
-  assert.equal(r.get('showList').children.length,3);
   await undo();
   assert.deepEqual(query().filters.include.map(c=>[c.tag,c.pid,c.tid]),[['','','200'],['Choreographer','','']],'undo takes the added condition away');
-  assert.equal(r.get('showList').children.length,2);
   await row(2).dispatch('contextmenu',{clientX:10,clientY:20,preventDefault(){}});await settle();
   assert.deepEqual(menu(),['행 원문 복사','북마크 추가'],'raw rows offer no field actions');
   await r.get('rowMenu').dispatch('keydown',{key:'Escape',preventDefault(){},stopPropagation(){}});
   assert.equal(r.get('rowMenu').hidden,true);
 });
 
-test('a condition that goes as a whole, by its card or its last chip, comes back from the toast',async t=>{
+test('a row makes a condition of its values in the editor, as DLT Viewer does',async t=>{
+  const dlt=row=>({ecu:'HU',apid:'NAV',ctid:'ROUT',...row});
+  const rows=[{lineNumber:1,kind:'parsed',raw:'r',date:'2026-03-14',time:'09:26:01.120000',pid:'',tid:'',level:'I',tag:'NAV',message:'route updated',dlt:dlt()}];
+  const r=await rig({rows,format:'dlt'});t.after(()=>r.controller.close());
+  await r.get('closeEditor').dispatch('click');await settle();
+  const query=()=>r.calls.filter(c=>c.args.request?.action==='query'&&c.args.request.pane==='logs').at(-1).args.request;
+  const row=r.get('logsRows').children[0],menu=()=>r.get('rowMenu').children.filter(n=>n.tagName==='BUTTON').map(n=>n.textContent);
+  await row.dispatch('contextmenu',{clientX:10,clientY:20,preventDefault(){}});await settle();
+  assert.deepEqual(menu().slice(0,5),['이 행으로 조건 추가…',"ECU 'HU' 제외","APID 'NAV' 제외","CTID 'ROUT' 제외","페이로드 'route updated' 보기 조건 추가"]);
+  await r.get('rowMenu').children.find(n=>n.textContent==='이 행으로 조건 추가…').dispatch('click');await settle();
+  assert.equal(r.get('filterEditor').hidden,false);assert.equal(r.get('filterEditorTitle').textContent,'조건 편집');
+  assert.deepEqual(['ecuFilter','apidFilter','ctidFilter'].map(id=>r.get(id).value),['HU','NAV','ROUT']);
+  const c=query().filters.include[0];assert.deepEqual([c.ecu,c.apid,c.ctid,c.tag],['HU','NAV','ROUT',''],'the IDs go into one condition, tested apart');
+  assert.equal(r.document.activeElement,r.get('ecuFilter'));
+  const toast=r.get('toast');assert.equal(toast.children[1].textContent,'실행 취소');
+  await toast.children[1].dispatch('click');await settle();
+  assert.deepEqual(query().filters.include,[]);assert.equal(r.get('filterEditor').hidden,true,'undo closes the editor of the condition it takes away');
+  // A hidden ID hides that ID only.
+  await row.dispatch('contextmenu',{clientX:10,clientY:20,preventDefault(){}});await settle();
+  await r.get('rowMenu').children.find(n=>n.textContent==="APID 'NAV' 제외").dispatch('click');await settle();
+  assert.deepEqual(query().filters.exclude.map(c=>[c.apid,c.tag]),[['NAV','']]);
+  assert.equal(chipNodes(r.get('activeFilters')).at(-1).textContent,'APID: NAV×');
+});
+
+test('a hiding condition hides the levels pressed, and starts with none',async t=>{
+  const r=await rig();t.after(()=>r.controller.close());
+  const upper=()=>r.calls.filter(c=>c.args.request?.action==='query'&&c.args.request.pane==='logs').at(-1).args.request.filters;
+  const level=name=>r.get('levelFilters').children.find(b=>b.dataset.level===name),pressed=()=>r.get('levelFilters').children.filter(b=>b.attributes['aria-pressed']==='true').map(b=>b.dataset.level).join('');
+  const press=async(name,event={})=>{await level(name).dispatch('click',event);await settle();};
+  await r.get('addCondition').dispatch('click');await settle();
+  assert.equal(pressed(),'VDIWEFAU','a showing condition starts with every level');
+  await r.get('kindHide').dispatch('click');await settle();
+  assert.equal(pressed(),'','a hiding condition starts with none');
+  assert.deepEqual([r.get('allLevels').textContent,r.get('errorLevels').textContent],['선택 해제','Debug 이하']);
+  assert.match(r.get('levelHint').textContent,/누른 레벨을 숨깁니다/);
+  await press('V');
+  assert.equal(pressed(),'V');assert.deepEqual(upper().exclude.map(c=>c.levels),[['V']],'one press hides that level, not the others');
+  await press('D');assert.deepEqual(upper().exclude[0].levels,['V','D']);
+  await press('V');await press('D');
+  assert.equal(pressed(),'');assert.deepEqual(upper().exclude,[],'none pressed is no level test, so the condition is empty');
+  await r.get('errorLevels').dispatch('click');await settle();assert.equal(pressed(),'VD');
+  await r.get('allLevels').dispatch('click');await settle();assert.equal(pressed(),'');
+  // A list of levels reads as itself, never as "제외 … 제외".
+  for(const name of ['V','D','I','W','E','F'])await press(name);
+  assert.deepEqual(chipNodes(r.get('activeFilters')).map(chip=>chip.textContent),['제외','레벨: V·D·I·W·E·F×']);
+  await r.get('kindShow').dispatch('click');await settle();
+  assert.equal(r.get('allLevels').textContent,'전체 선택');assert.equal(r.get('errorLevels').textContent,'Warn 이상');
+});
+
+test('the kind moves with arrow keys, a chip opens its own field, and focus comes back to the item',async t=>{
+  const r=await rig();t.after(()=>r.controller.close());
+  const enter=async(id,value)=>{r.get(id).value=value;await r.get(id).dispatch('input');await r.get(id).dispatch('keydown',{key:'Enter',preventDefault(){}});await settle();};
+  await enter('tagFilter','NAV');await enter('pidFilter','100');
+  assert.deepEqual([r.get('kindShow').tabIndex,r.get('kindHide').tabIndex],[0,-1],'only the chosen kind is a tab stop');
+  r.get('kindShow').focus();await r.get('kindShow').dispatch('keydown',{key:'ArrowRight',preventDefault(){}});await settle();
+  assert.equal(r.get('kindHide').attributes['aria-checked'],'true');assert.equal(r.document.activeElement,r.get('kindHide'));assert.deepEqual(itemKinds(r),['제외']);
+  assert.deepEqual([r.get('kindShow').tabIndex,r.get('kindHide').tabIndex],[-1,0]);
+  await r.get('kindHide').dispatch('keydown',{key:'ArrowLeft',preventDefault(){}});await settle();
+  assert.deepEqual(itemKinds(r),['보기']);
+  await r.get('closeEditor').dispatch('click');await settle();
+  await chipEdit(chipNodes(r.get('activeFilters')).find(chip=>chip.textContent.startsWith('PID'))).dispatch('click');await settle();
+  assert.equal(r.document.activeElement,r.get('pidFilter'),'a chip opens on its own field');
+  await r.get('closeEditor').dispatch('click');await settle();
+  // The list was rebuilt while the editor was open: focus goes to the item.
+  const item=listItems(r)[0].children[2];item.focus();item.isConnected=false;
+  await item.dispatch('click');await settle();
+  await r.get('closeEditor').dispatch('click');await settle();
+  assert.equal(r.document.activeElement,listItems(r)[0].children[2]);
+});
+
+test('a typed list becomes the pattern it meant in one click',async t=>{
+  const r=await rig();t.after(()=>r.controller.close());
+  const enter=async(id,value)=>{r.get(id).value=value;await r.get(id).dispatch('input');await r.get(id).dispatch('keydown',{key:'Enter',preventDefault(){}});await settle();};
+  const upper=()=>r.calls.filter(c=>c.args.request?.action==='query'&&c.args.request.pane==='logs').at(-1).args.request.filters;
+  const convert=id=>r.get(id).children[1];
+  await enter('tagFilter','Net, a.b');
+  assert.equal(convert('tagFilterHint').hidden,false);
+  await convert('tagFilterHint').dispatch('click');await r.get('tagFilter').dispatch('keydown',{key:'Enter',preventDefault(){}});await settle();
+  assert.deepEqual([upper().include[0].tag,upper().include[0].tagRegex],['Net|a\\.b',true]);assert.equal(r.get('tagFilterHint').hidden,true);
+  await enter('pidFilter','2983, 3120');
+  assert.equal(r.get('pidFilterError').hidden,false);assert.equal(r.get('pidFilterHint').hidden,false);assert.equal(convert('pidFilterHint').hidden,false);
+  assert.equal(chipNodes(r.get('activeFilters')).some(chip=>chip.textContent.includes('2983')),false,'a value not applied shows no chip');
+  await convert('pidFilterHint').dispatch('click');await r.get('pidFilter').dispatch('keydown',{key:'Enter',preventDefault(){}});await settle();
+  assert.deepEqual([upper().include[0].pid,upper().include[0].pidRegex],['^(2983|3120)$',true]);assert.equal(r.get('pidFilterError').hidden,true);
+  await enter('tagFilter','plain');assert.equal(r.get('tagFilterHint').hidden,true);
+});
+
+test('removing goes by the condition, not its place, and the editor goes with it',async t=>{
+  const r=await rig();t.after(()=>r.controller.close());
+  const enter=async(id,value)=>{r.get(id).value=value;await r.get(id).dispatch('input');await r.get(id).dispatch('keydown',{key:'Enter',preventDefault(){}});await settle();};
+  const add=async tag=>{await r.get('addCondition').dispatch('click');await settle();await enter('tagFilter',tag);};
+  await enter('tagFilter','AAA');await add('BBB');await add('CCC');
+  // A blank condition is dropped when the editor closes, so places move.
+  await listItems(r)[0].children[2].dispatch('click');await settle();await enter('tagFilter','');
+  await listItems(r)[1].children[2].dispatch('click');await settle();
+  assert.equal(r.get('tagFilter').value,'BBB');
+  await r.get('removeCondition').dispatch('click');await settle();
+  assert.deepEqual(itemSummaries(r),['태그: CCC'],'the selected condition goes');assert.match(r.get('toast').textContent,/태그: BBB/);
+  assert.equal(r.document.activeElement,listItems(r)[0].children[2],'focus moves to what remains');
+  // A chip × that takes the edited condition takes the editor too.
+  await listItems(r)[0].children[2].dispatch('click');await settle();
+  await add('DDD');
+  await chipClear(chipNodes(r.get('activeFilters')).find(chip=>chip.textContent==='태그: DDD×')).dispatch('click');await settle();
+  assert.equal(r.get('filterEditor').hidden,true);assert.deepEqual(itemSummaries(r),['태그: CCC']);
+});
+
+test('chips of a rejected filter find their conditions, or do nothing',async t=>{
+  const query=async b=>{if(b.filters.include.some(c=>c.tag==='['))throw 'Invalid or unsupported tag pattern: bad class';return {status:'complete',count:6,complete:true};};
+  const r=await rig({query});t.after(()=>r.controller.close());
+  const enter=async(id,value)=>{r.get(id).value=value;await r.get(id).dispatch('input');await r.get(id).dispatch('keydown',{key:'Enter',preventDefault(){}});await settle();};
+  await enter('tagFilter','AAA');
+  await r.get('addCondition').dispatch('click');await settle();await enter('tagFilter','BBB');
+  await r.get('addCondition').dispatch('click');await settle();await enter('tagFilter','CCC');
+  r.get('tagRegex').checked=true;await r.get('tagRegex').dispatch('change');await enter('tagFilter','[');
+  for(const [id,task] of [...r.timers])if(task.ms===600){r.timers.delete(id);task.fn();}
+  assert.equal(r.get('tagFilterError').hidden,false);assert.match(r.get('tagFilterError').textContent,/태그 정규식을 확인해 주세요/);
+  const chips=()=>chipNodes(r.get('activeFilters')).filter(node=>node.className.startsWith('filter-chip'));
+  assert.deepEqual(chips().map(chip=>chip.textContent),['태그: AAA×','태그: BBB×','태그: CCC×'],'the chips show what still applies');
+  await listItems(r)[0].children[2].dispatch('click');await settle();await r.get('removeCondition').dispatch('click');await settle();
+  assert.deepEqual(itemSummaries(r),['태그: BBB','태그 정규식: [ · 확인 필요']);
+  const gone=chips().find(chip=>chip.textContent==='태그: AAA×');
+  await chipClear(gone).dispatch('click');await settle();
+  assert.deepEqual(itemSummaries(r),['태그: BBB','태그 정규식: [ · 확인 필요'],'a chip of a condition that has gone removes no other');
+  await chipEdit(gone).dispatch('click');await settle();
+  assert.equal(r.get('filterEditor').hidden,true,'and it opens nothing');
+});
+
+test('the Assert level a DLT log hides does not count as pressed in a hiding condition',async t=>{
+  const r=await rig({format:'dlt'});t.after(()=>r.controller.close());
+  const level=name=>r.get('levelFilters').children.find(b=>b.dataset.level===name),upper=()=>r.calls.filter(c=>c.args.request?.action==='query'&&c.args.request.pane==='logs').at(-1).args.request.filters;
+  await r.get('errorLevels').dispatch('click');await settle();
+  await r.get('kindHide').dispatch('click');await settle();
+  for(const name of ['W','E','F'])await level(name).dispatch('click');
+  await settle();
+  assert.deepEqual(upper().exclude,[],'no level left pressed is no level test');
+});
+
+test('Alt+R switches the field being typed in, and the head moves the editor by keys',async t=>{
+  const r=await rig();t.after(()=>r.controller.close());
+  const box2=r.get('tagRegex');box2.click=()=>{box2.checked=!box2.checked;};
+  await r.get('tagFilter').dispatch('keydown',{altKey:true,code:'KeyR',preventDefault(){}});
+  assert.equal(r.get('tagRegex').checked,true);assert.equal(r.get('pidRegex').checked,false);
+  const head=r.get('filterEditorHead'),box=r.get('filterEditor');
+  box.style.left='100px';box.style.top='100px';
+  await head.dispatch('keydown',{key:'ArrowRight',target:head,preventDefault(){}});
+  await head.dispatch('keydown',{key:'ArrowDown',shiftKey:true,target:head,preventDefault(){}});
+  assert.notEqual(box.style.left,'100px');assert.notEqual(box.style.top,'100px');
+});
+
+test('the row menu of a row with several tags, or none',async t=>{
+  const rows=[{lineNumber:1,kind:'parsed',ios:true,raw:'r',date:'2026-09-15',time:'10:47:35.134',pid:'3870',tid:'481516',level:'U',tag:'Memory',tags:['Memory','SDK','Gallery','Extra'],message:'x'},
+    {lineNumber:2,kind:'parsed',raw:'r',date:'2026-09-15',time:'10:47:35.200',pid:'3871',tid:'1',level:'U',tag:'',tags:[],message:'y'}];
+  const r=await rig({rows});t.after(()=>r.controller.close());
+  await r.get('closeEditor').dispatch('click');await settle();
+  const menu=()=>r.get('rowMenu').children.filter(n=>n.tagName==='BUTTON').map(n=>n.textContent),open=async line=>{await r.get('logsRows').children.find(n=>n.dataset.lineNumber===String(line)).dispatch('contextmenu',{clientX:10,clientY:20,preventDefault(){}});await settle();};
+  await open(2);assert.equal(menu().includes('이 행으로 조건 추가…'),false,'a row without a tag has nothing to fill');
+  await r.get('rowMenu').dispatch('keydown',{key:'Escape',preventDefault(){},stopPropagation(){}});
+  await open(1);
+  assert.equal(menu()[0],'이 행으로 조건 추가…');assert.equal(menu().filter(text=>text.endsWith(' 제외')&&text.startsWith('태그')).length,3,'three tags at most');
+  await r.get('rowMenu').children.find(n=>n.textContent==='이 행으로 조건 추가…').dispatch('click');await settle();
+  assert.equal(r.get('tagFilter').value,'Memory','the first tag fills the condition');
+});
+
+test('the same showing condition is not added twice from a row',async t=>{
+  const rows=[{lineNumber:1,kind:'parsed',raw:'06-18 19:24:00.000  100 200 I App: x',date:'06-18',time:'19:24:00.000',pid:'100',tid:'200',level:'I',tag:'App',message:'x'}];
+  const r=await rig({rows});t.after(()=>r.controller.close());
+  await r.get('closeEditor').dispatch('click');await settle();
+  const row=()=>r.get('logsRows').children[0],open=async()=>{await row().dispatch('contextmenu',{clientX:10,clientY:20,preventDefault(){}});await settle();};
+  await open();await r.get('rowMenu').children.find(n=>n.textContent==='이 행으로 조건 추가…').dispatch('click');await settle();
+  await r.get('closeEditor').dispatch('click');await settle();
+  await open();await r.get('rowMenu').children.find(n=>n.textContent==='이 행으로 조건 추가…').dispatch('click');await settle();
+  assert.equal(listItems(r).length,1);assert.equal(r.get('filterEditor').hidden,false,'the editor opens on the one there is');
+  await r.get('closeEditor').dispatch('click');await settle();
+  await open();await r.get('rowMenu').children.find(n=>n.textContent==="태그 'App' 보기 조건 추가").dispatch('click');await settle();
+  assert.equal(listItems(r).length,1);assert.equal(r.get('toast').children[0].textContent,'같은 보기 조건이 이미 있습니다.');
+});
+
+test('the editor stays open until it is closed, and a blank condition does not outlive it',async t=>{
+  const r=await rig();t.after(()=>r.controller.close());
+  const enter=async(id,value)=>{r.get(id).value=value;await r.get(id).dispatch('input');await r.get(id).dispatch('keydown',{key:'Enter',preventDefault(){}});await settle();};
+  await enter('tagFilter','NAV');
+  await r.get('addCondition').dispatch('click');await settle();
+  await r.get('kindHide').dispatch('click');await settle();
+  assert.deepEqual(itemKinds(r),['보기','제외']);
+  await r.get('filterEditor').dispatch('keydown',{key:'Escape',preventDefault(){},stopPropagation(){}});await settle();
+  assert.equal(r.get('filterEditor').hidden,true);assert.deepEqual(itemKinds(r),['보기'],'the blank hiding condition is gone');
+  assert.equal(r.get('tagFilter').value,'NAV','the editor shows the remaining condition');
+  await chipEdit(chipNodes(r.get('activeFilters'))[0]).dispatch('click');await settle();
+  assert.equal(r.get('filterEditor').hidden,false,'a chip opens it again');
+});
+
+test('a condition that goes as a whole, by its item or its last chip, comes back from the toast',async t=>{
   const r=await rig();t.after(()=>r.controller.close());
   const enter=async(id,value)=>{r.get(id).value=value;await r.get(id).dispatch('input');await r.get(id).dispatch('keydown',{key:'Enter',preventDefault(){}});await settle();};
   const upper=()=>r.calls.filter(c=>c.args.request?.action==='query'&&c.args.request.pane==='logs').at(-1)?.args.request.filters;
-  const cards=()=>r.get('showList').children,head=card=>card.children[0];
   const toast=r.get('toast'),chips=()=>chipNodes(r.get('activeFilters')),undo=async()=>{await toast.children[1].dispatch('click');await settle();};
   await enter('tagFilter','NAV');await enter('pidFilter','100');
-  await r.get('addShow').dispatch('click');await settle();await r.get('errorLevels').dispatch('click');await settle();
-  await r.get('addHide').dispatch('click');await settle();await enter('tagFilter','chatty');
+  await r.get('addCondition').dispatch('click');await settle();await r.get('errorLevels').dispatch('click');await settle();
+  await r.get('addCondition').dispatch('click');await settle();await r.get('kindHide').dispatch('click');await settle();await enter('tagFilter','chatty');
   assert.deepEqual(upper().include.map(c=>[c.tag,c.pid,c.levels.join('')]),[['NAV','100','VDIWEFAU'],['','','WEFA']]);
   // A chip that clears one of two fields leaves its condition, quietly.
   toast.replaceChildren();
-  await chips().find(chip=>chip.textContent==='PID: 100×').dispatch('click');await settle();
-  assert.equal(toast.children.length,0);assert.equal(cards().length,2);
+  await chipClear(chips().find(chip=>chip.textContent==='PID: 100×')).dispatch('click');await settle();
+  assert.equal(toast.children.length,0);assert.equal(listItems(r).length,3);
   // A chip that clears the last field takes the condition away, with an undo.
-  await chips().find(chip=>chip.textContent==='레벨: Warn 이상×').dispatch('click');await settle();
-  assert.equal(cards().length,1);assert.equal(toast.children[0].textContent,'보기 조건을 삭제했습니다 · 레벨: Warn 이상');
+  await chipClear(chips().find(chip=>chip.textContent==='레벨: Warn 이상×')).dispatch('click');await settle();
+  assert.equal(listItems(r).length,2);assert.equal(toast.children[0].textContent,'보기 조건을 삭제했습니다 · 레벨: Warn 이상');
   await undo();
-  assert.equal(cards().length,2);assert.deepEqual(upper().include.map(c=>[c.tag,c.levels.join('')]),[['NAV','VDIWEFAU'],['','WEFA']],'it is back where it was');
-  // A card's × does the same.
-  await head(r.get('hideList').children[0]).children[2].dispatch('click');await settle();
-  assert.equal(r.get('hideList').children.length,0);assert.equal(toast.children[0].textContent,'제외 조건을 삭제했습니다 · 태그: chatty');
+  assert.equal(listItems(r).length,3);assert.deepEqual(upper().include.map(c=>[c.tag,c.levels.join('')]),[['NAV','VDIWEFAU'],['','WEFA']],'it is back where it was');
+  // 삭제 does the same to the selected condition.
+  await r.get('closeEditor').dispatch('click');await settle();
+  await listItems(r)[2].children[2].dispatch('click');await settle();
+  await r.get('removeCondition').dispatch('click');await settle();
+  assert.equal(listItems(r).length,2);assert.equal(toast.children[0].textContent,'제외 조건을 삭제했습니다 · 태그: chatty');
   await undo();
-  assert.equal(r.get('hideList').children.length,1);assert.deepEqual(upper().exclude.map(c=>c.tag),['chatty']);
+  assert.equal(listItems(r).length,3);assert.deepEqual(upper().exclude.map(c=>c.tag),['chatty']);
 });
 
 test('untranslated engine errors keep their detail behind Korean context',async()=>{
@@ -1040,7 +1229,7 @@ test('time bounds are validated beside the fields, applied upward and shown as o
   const r=await rig();t.after(()=>r.controller.close());
   const enter=async(id,value)=>{r.get(id).value=value;await r.get(id).dispatch('input');await r.get(id).dispatch('keydown',{key:'Enter',preventDefault(){}});await settle();};
   await enter('timeFrom','6-18');
-  assert.equal(r.get('timeFilterError').hidden,false);assert.equal(r.get('timeFrom').attributes['aria-invalid'],'true');assert.equal(r.get('idFilterError').hidden,true);
+  assert.equal(r.get('timeFilterError').hidden,false);assert.equal(r.get('timeFrom').attributes['aria-invalid'],'true');assert.equal(r.get('pidFilterError').hidden,true);
   assert.equal(r.get('largeSearchPane').hidden,true,'a field edit without a search opens no empty search pane');
   assert.equal(r.get('largeCancel').disabled,true,'there is no search to cancel');
   assert.equal(r.get('logsPending').hidden,false);assert.match(r.get('logsPending').textContent,/미적용/);
@@ -1056,7 +1245,7 @@ test('time bounds are validated beside the fields, applied upward and shown as o
   assert.deepEqual([query.include[0].timeFrom,query.include[0].timeTo],['06-18 19:24','19:30:05.5']);
   const chip=chipNodes(r.get('activeFilters')).find(c=>c.textContent.startsWith('시간'));
   assert.equal(chip.textContent,'시간: 06-18 19:24 ~ 19:30:05.5×');
-  await chip.dispatch('click');await settle();
+  await chipClear(chip).dispatch('click');await settle();
   assert.deepEqual([r.get('timeFrom').value,r.get('timeTo').value],['','']);
 });
 
@@ -1324,6 +1513,7 @@ test('one Escape closes the raw detail unless the filter panel or a menu already
   const escape=defaultPrevented=>{let prevented=false;r.handlers.get('keydown')({key:'Escape',defaultPrevented,target:new Element(),preventDefault(){prevented=true;}});return prevented;};
   await r.get('logsRows').children[0].dispatch('click',{detail:1});await settle();
   assert.equal(r.get('largeDetail').hidden,false);
+  assert.equal(escape(false),true);assert.equal(r.get('filterEditor').hidden,true,'the open editor goes first');assert.equal(r.get('largeDetail').hidden,false);
   assert.equal(escape(true),false);await settle();assert.equal(r.get('largeDetail').hidden,false,'the panel closed instead');
   assert.equal(escape(false),true);await settle();assert.equal(r.get('largeDetail').hidden,true);
   assert.equal(escape(false),false,'nothing else to close');
@@ -1338,6 +1528,7 @@ test('the raw detail has its own splitter, the region splitter shows with result
   r.get('searchInput').value='raw';await r.get('searchInput').dispatch('input');await settle();
   assert.equal(r.get('largeSearchPane').hidden,false);assert.deepEqual(shown(),[true,true]);
   r.get('detailSplitter').focus();
+  await r.get('closeEditor').dispatch('click');
   r.handlers.get('keydown')({key:'Escape',target:r.get('detailSplitter'),preventDefault(){}});await settle();
   assert.equal(r.get('largeDetail').hidden,true);assert.deepEqual(shown(),[true,false]);
   assert.equal(r.document.activeElement,r.get('logsViewport'));
@@ -1487,30 +1678,27 @@ test('the pane whose row the detail does not show keeps a secondary selection',a
   assert.equal(lower.has('secondary-selection'),false);assert.equal(r.get('largeDetailTitle').textContent,'6행 원문');
 });
 
-test('a condition no row of the log matches says so on its card and its chip while it reads as sent',async t=>{
+test('a condition no row of the log matches says so in the list and on its chip while it reads as sent',async t=>{
   const none=new Set(['Nothing','Ghost']),states=list=>list.map(c=>none.has(c.tag)?'none':'some');
   const r=await rig({query:b=>({status:'complete',count:6,complete:true,...(b.pane==='logs'?{conditions:{include:states(b.filters.include),exclude:states(b.filters.exclude)}}:{})})});
   t.after(()=>r.controller.close());
   const enter=async(id,value)=>{r.get(id).value=value;await r.get(id).dispatch('input');await r.get(id).dispatch('keydown',{key:'Enter',preventDefault(){}});await settle();};
-  const shows=()=>r.get('showList').children,hides=()=>r.get('hideList').children,head=card=>card.children[0],note=card=>card.children.find(child=>child.className==='cond-alert');
+  const items=()=>listItems(r),rows=()=>items().map(item=>item.dataset.rows),summary=item=>item.children[2];
   const chips=()=>chipNodes(r.get('activeFilters')).filter(node=>node.className.startsWith('filter-chip'));
-  // A lone showing condition has no card header: the note is above its fields.
   await enter('tagFilter','Nothing');
-  assert.equal(shows()[0].dataset.rows,'none');
-  assert.equal(note(shows()[0]).hidden,false);assert.equal(note(shows()[0]).textContent,'이 로그에 이 조건과 맞는 줄이 없습니다 · 이 조건으로 보이는 줄이 없습니다.');
+  assert.deepEqual(rows(),['none']);assert.equal(summary(items()[0]).textContent,'태그: Nothing · 줄 없음');
+  assert.match(summary(items()[0]).title,/이 로그에 이 조건으로 보이는 줄이 없습니다$/);
   await enter('tagFilter','NAV');
-  assert.equal(shows()[0].dataset.rows,'');assert.equal(note(shows()[0]).hidden,true);
-  await r.get('addShow').dispatch('click');await settle();await enter('tagFilter','Nothing');
-  await r.get('addHide').dispatch('click');await settle();await enter('tagFilter','Ghost');
-  assert.deepEqual(shows().map(card=>card.dataset.rows),['','none']);assert.deepEqual(hides().map(card=>card.dataset.rows),['none']);
-  assert.equal(note(shows()[0]).hidden,true);assert.equal(note(shows()[1]).hidden,false);assert.equal(note(shows()[1]).textContent,'이 로그에 맞는 줄 없음');
-  assert.match(note(shows()[1]).title,/보이는 줄이 없습니다$/);assert.match(note(hides()[0]).title,/숨기는 줄이 없습니다$/);
-  assert.equal(head(shows()[1]).children[1].attributes['aria-label'],'보기 조건 2: 태그: Nothing (이 로그에 맞는 줄 없음)');
+  assert.deepEqual(rows(),['']);assert.equal(summary(items()[0]).textContent,'태그: NAV');
+  await r.get('addCondition').dispatch('click');await settle();await enter('tagFilter','Nothing');
+  await r.get('addCondition').dispatch('click');await settle();await r.get('kindHide').dispatch('click');await settle();await enter('tagFilter','Ghost');
+  assert.deepEqual(rows(),['','none','none']);
+  assert.match(summary(items()[1]).title,/보이는 줄이 없습니다$/);assert.match(summary(items()[2]).title,/숨기는 줄이 없습니다$/);
+  assert.equal(summary(items()[1]).attributes['aria-label'],'보기 조건: 태그: Nothing (이 로그에 맞는 줄 없음)');
   assert.deepEqual(chips().map(chip=>[chip.textContent,chip.className.includes('no-rows')]),[['태그: NAV×',false],['태그: Nothing줄 없음×',true],['태그: Ghost줄 없음×',true]]);
   // Switched off, a condition is not sent and says nothing; the others keep theirs.
-  const toggle=head(shows()[1]).children[0];toggle.checked=false;await toggle.dispatch('change');await settle();
-  assert.equal(shows()[1].dataset.rows,'');assert.equal(note(shows()[1]).hidden,true);
-  assert.deepEqual(hides().map(card=>card.dataset.rows),['none']);
+  const toggle=items()[1].children[0];toggle.checked=false;await toggle.dispatch('change');await settle();
+  assert.deepEqual(rows(),['','','none']);
   assert.deepEqual(chips().map(chip=>chip.className.includes('no-rows')),[false,true]);
 });
 
@@ -1518,7 +1706,7 @@ test('a condition known after its query is marked when the engine reports it, ne
   const r=await rig({query:b=>({status:'complete',count:6,complete:true,...(b.pane==='logs'?{conditions:{include:b.filters.include.map(()=>'pending'),exclude:[]}}:{})})});
   t.after(()=>r.controller.close());
   const enter=async(id,value)=>{r.get(id).value=value;await r.get(id).dispatch('input');await r.get(id).dispatch('keydown',{key:'Enter',preventDefault(){}});await settle();};
-  const card=()=>r.get('showList').children[0];
+  const card=()=>listItems(r)[0];
   const report=async(query,state)=>{await r.emitProgress({pane:'logs',state:{datasetId:1,status:'ready',size:100,total:6,textComplete:true,summaryComplete:true,complete:true,query:{id:query,status:'complete',count:6,complete:true,conditions:{include:[state],exclude:[]}}}});await new Promise(resolve=>setTimeout(resolve,5));};
   await enter('tagFilter','Late');
   const first=r.controller.logs.getState().queryId;
@@ -1533,7 +1721,7 @@ test('a condition known after its query is marked when the engine reports it, ne
   assert.equal(card().dataset.rows,'');
 });
 
-test('a message condition comes from a row, the field or its .* switch, and a rejected pattern keeps the last conditions',async t=>{
+test('a message condition comes from a row, the field or its 정규식 switch, and a rejected pattern keeps the last conditions',async t=>{
   const rows=[{lineNumber:1,kind:'parsed',raw:'06-18 19:24:00.000  100 200 I Choreographer: Skipped 12 frames!',date:'06-18',time:'19:24:00.000',pid:'100',tid:'200',level:'I',tag:'Choreographer',message:'Skipped 12 frames!'}];
   const query=async b=>{if(b.filters.include.some(c=>c.message==='('))throw 'Invalid or unsupported message pattern: unclosed group';return {status:'complete',count:1,complete:true};};
   const r=await rig({rows,query});t.after(()=>r.controller.close());
@@ -1550,13 +1738,12 @@ test('a message condition comes from a row, the field or its .* switch, and a re
   // The same message hidden again adds nothing.
   await row(1).dispatch('contextmenu',{clientX:10,clientY:20,preventDefault(){}});await settle();
   await r.get('rowMenu').children.find(n=>n.textContent===hide).dispatch('click');await settle();
-  assert.equal(r.get('hideList').children.length,1);
-  // The field takes a string; the .* switch makes it a pattern.
+  assert.deepEqual(itemKinds(r),['보기','제외']);
+  // The field takes a string; its 정규식 switch makes it a pattern.
   const field=r.get('messageFilter'),enter=async value=>{field.value=value;await field.dispatch('input');await field.dispatch('keydown',{key:'Enter',preventDefault(){}});await settle();};
   await enter('frames');
   assert.deepEqual(upper().include.map(c=>[c.message,c.messageRegex]),[['frames',false]]);
-  await r.get('messageRegex').dispatch('click');await field.dispatch('keydown',{key:'Enter',preventDefault(){}});await settle();
-  assert.equal(r.get('messageRegex').attributes['aria-pressed'],'true');
+  r.get('messageRegex').checked=true;await r.get('messageRegex').dispatch('change');await field.dispatch('keydown',{key:'Enter',preventDefault(){}});await settle();
   assert.deepEqual(upper().include.map(c=>[c.message,c.messageRegex]),[['frames',true]]);
   assert.deepEqual(chips(),['메시지 정규식: “frames”×','제외','메시지: “Skipped 12 frames!”×']);
   // A pattern only the engine can reject: the list and chips keep the last
@@ -1572,18 +1759,18 @@ test('a message condition comes from a row, the field or its .* switch, and a re
   assert.deepEqual(chips(),['메시지 정규식: “frames”×','제외','메시지: “Skipped 12 frames!”×']);
   // The mark stays on the condition whose pattern the engine may have
   // rejected, also while another condition is edited.
-  const summary=list=>r.get(list).children[0].children[0].children[1].textContent;
-  assert.match(summary('showList'),/확인 필요$/);
-  await r.get('hideList').children[0].children[0].children[1].dispatch('click');await settle();
-  assert.match(summary('showList'),/확인 필요$/);assert.doesNotMatch(summary('hideList'),/확인 필요/);
+  const summary=index=>itemSummaries(r)[index];
+  assert.match(summary(0),/확인 필요$/);
+  await listItems(r)[1].children[2].dispatch('click');await settle();
+  assert.match(summary(0),/확인 필요$/);assert.doesNotMatch(summary(1),/확인 필요/);
   assert.equal(r.get('messageFilterError').hidden,true,'the edited condition has no rejected pattern');
-  await r.get('showList').children[0].children[0].children[1].dispatch('click');await settle();
+  await listItems(r)[0].children[2].dispatch('click');await settle();
   await enter('(frames)');
   assert.equal(r.get('messageFilterError').hidden,true);assert.equal(r.get('logsPending').hidden,true);
   assert.deepEqual(chips(),['메시지 정규식: “(frames)”×','제외','메시지: “Skipped 12 frames!”×']);
   // Its chip clears the message and its mode.
-  await chipNodes(r.get('activeFilters'))[0].dispatch('click');await settle();
-  assert.equal(field.value,'');assert.equal(r.get('messageRegex').attributes['aria-pressed'],'false');
+  await chipClear(chipNodes(r.get('activeFilters'))[0]).dispatch('click');await settle();
+  assert.equal(field.value,'');assert.equal(r.get('messageRegex').checked,false);
 });
 
 // The lower region: bookmarks and search results with the upper logs.
@@ -1785,7 +1972,7 @@ test('switching the filter off shows every row with its conditions kept, and on 
   assert.equal(r.get('activeFilters').attributes['aria-label'],'꺼 둔 필터');assert.match(r.get('toggleFilters').attributes['aria-label'],/1개 조건 꺼 둠/);
   assert.equal(r.get('searchInput').placeholder,'모든 줄의 원문에서 검색');assert.equal(r.get('exportLogs').title,'모든 줄의 원문을 파일로 저장');
   assert.match(r.get('largeTotal').textContent,/^ · 모든 줄/,'the search count says what it counts');assert.equal(r.get('logsJump').title,'행 번호(행 칸의 번호)로 이동합니다.','every row is there to jump to');
-  assert.doesNotMatch(chipNodes(r.get('activeFilters'))[0].attributes['aria-label'],/필터/,'the last chip leaves no filter to switch on');
+  assert.doesNotMatch(chipClear(chipNodes(r.get('activeFilters'))[0]).attributes['aria-label'],/필터/,'the last chip leaves no filter to switch on');
   await f.press();
   assert.deepEqual([f.sent('logs').include.map(c=>c.tag),f.sent('search').include.map(c=>c.tag)],[['Wifi'],['Wifi']]);
   assert.equal(r.get('filterBadge').dataset.off,'false');assert.equal(r.get('filtersOffHint').hidden,true);
@@ -1812,13 +1999,13 @@ test('changing a condition switches the filter back on and says so, and its undo
   await f.enter('tagFilter','Wifi');await f.press();
   await f.enter('searchInput','timeout');
   assert.equal(f.off(),true,'a new search keeps it off');assert.deepEqual(f.sent('search').include,[]);
-  await f.enter('tagFilter','Wifi, Net');
-  assert.equal(f.off(),false);assert.deepEqual([f.sent('logs').include[0].tag,f.sent('search').include[0].tag],['Wifi, Net','Wifi, Net']);
+  await f.enter('tagFilter','Net');
+  assert.equal(f.off(),false);assert.deepEqual([f.sent('logs').include[0].tag,f.sent('search').include[0].tag],['Net','Net']);
   assert.equal(r.get('toast').children[0].textContent,'조건이 바뀌어 필터를 켰습니다.');
   await f.undo();
   assert.equal(f.off(),true);assert.equal(r.get('tagFilter').value,'Wifi');assert.deepEqual(f.sent('logs').include,[]);
   // A chip's × is a change too; removing the last one leaves nothing off.
-  await chipNodes(r.get('activeFilters'))[0].dispatch('click');await settle();
+  await chipClear(chipNodes(r.get('activeFilters'))[0]).dispatch('click');await settle();
   assert.equal(f.off(),false);assert.equal(r.get('filtersSwitch').hidden,true);assert.deepEqual(f.chips(),[]);
   assert.equal(r.get('toast').children[0].textContent,'마지막 조건을 해제했습니다.');
   await f.undo();
@@ -1835,9 +2022,9 @@ test('changing a condition switches the filter back on and says so, and its undo
 test('with the filter off a chip and a card say what changing them does',async t=>{
   const r=await rig();t.after(()=>r.controller.close());const f=filtersOffRig(r);
   await f.enter('tagFilter','Wifi');await f.enter('pidFilter','100');await f.press();
-  const chip=chipNodes(r.get('activeFilters'))[0],toggle=()=>r.get('showList').children[0].children[0].children[0];
-  assert.match(chip.title,/나머지 조건으로 필터가 켜집니다$/);assert.match(chip.attributes['aria-label'],/해제 \(나머지 조건으로 필터 켜짐\)$/);
-  assert.equal(toggle().title,'켜진 조건 · 끄면 이 조건을 빼고 필터가 켜집니다');
+  const chip=chipNodes(r.get('activeFilters'))[0],toggle=()=>listItems(r)[0].children[0];
+  assert.match(chipClear(chip).title,/나머지 조건으로 필터가 켜집니다$/);assert.match(chipClear(chip).attributes['aria-label'],/해제 \(나머지 조건으로 필터 켜짐\)$/);
+  assert.equal(toggle().title,'켜진 조건 · 끄면 이 조건만 끄고 필터를 켭니다');
   toggle().checked=false;await toggle().dispatch('change');await settle();
   assert.equal(f.off(),false);assert.equal(toggle().title,'꺼진 조건 · 켜면 적용합니다');
   await f.undo();assert.equal(f.off(),true);
@@ -1850,14 +2037,14 @@ test('a condition that cannot apply neither traps the filter on nor switches it 
   // With a wrong PID the filter still switches off, and the field stays wrong.
   await f.enter('pidFilter','abc');assert.equal(f.sent('logs').include[0].pid,'');
   await f.press();
-  assert.equal(f.off(),true);assert.deepEqual(f.sent('logs').include,[]);assert.equal(r.get('idFilterError').hidden,false);
+  assert.equal(f.off(),true);assert.deepEqual(f.sent('logs').include,[]);assert.equal(r.get('pidFilterError').hidden,false);
   // It cannot switch on until the field is right, and says so.
   await f.press();
   assert.equal(f.off(),true,'the box goes back');assert.equal(r.get('toast').textContent,'조건에 오류가 있어 필터를 켜지 못했습니다.');assert.deepEqual(f.sent('logs').include,[]);
   await f.enter('pidFilter','abcd');
   assert.equal(f.off(),true,'a wrong edit leaves it off');assert.equal(r.get('activeFilters').dataset.off,'true');
   await f.enter('pidFilter','');
-  assert.equal(f.off(),true,'back to the conditions it left');assert.equal(r.get('idFilterError').hidden,true);
+  assert.equal(f.off(),true,'back to the conditions it left');assert.equal(r.get('pidFilterError').hidden,true);
   // Off, then a pattern the engine rejects: the rows are all still shown, so
   // the filter stays off, and the conditions kept are the ones that were in use.
   await f.enter('messageFilter','(');
