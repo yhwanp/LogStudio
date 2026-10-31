@@ -4,15 +4,16 @@
 // reading options are not part of a filter.
 //
 // A filter is stored as its showing and hiding conditions and the unparsed
-// rows option. A condition stores the fields it sets, `messageRegex: true`
-// for a message pattern, and `enabled: false` when it is switched off.
-import {LEVELS, tagList, idList, validateFilters, readCondition, emptyCondition, isEmptyCondition, MAX_CONDITIONS} from './filter-model.js';
+// rows option. A condition stores the fields it sets, a field's switch when
+// the field is a pattern, and `enabled: false` when it is switched off.
+// Version 1 held lists in the tag, PID and TID fields.
+import {LEVELS, REGEX_FIELDS, regexKey, upgradeCondition, validateFilters, readCondition, emptyCondition, isEmptyCondition, coreForm, MAX_CONDITIONS} from './filter-model.js';
 import {describeFilter, describeLogError} from './describe.js';
 import {textSpan} from './dom.js';
 
-export const SAVED_VERSION = 1;
+export const SAVED_VERSION = 2;
 export const MAX_NAME = 60;
-const KEYS = ['levels', 'tag', 'pid', 'tid', 'timeFrom', 'timeTo', 'message', 'messageRegex', 'enabled'];
+const KEYS = ['levels', ...REGEX_FIELDS, ...REGEX_FIELDS.map(regexKey), 'timeFrom', 'timeTo', 'enabled'];
 const isObject = value => !!value && typeof value === 'object' && !Array.isArray(value);
 
 export const defaultFields = () => ({include:[emptyCondition()], exclude:[], includeRaw:true});
@@ -22,12 +23,9 @@ export function fieldsOf(filters={}) {
   const include = list(filters.include);
   return {include:include.length ? include : [emptyCondition()], exclude:list(filters.exclude), includeRaw:filters.includeRaw !== false};
 }
-// Compared as the core reads them, with each condition's switch: conditions
-// without criteria left out, list items trimmed and deduplicated, levels in
-// the core order, time bounds trimmed, a message as typed and its mode only
-// with one.
-const normal = f => JSON.stringify([...['include', 'exclude'].map(list => (f[list] ?? []).filter(c => !isEmptyCondition(c)).map(c =>
-  [c.enabled !== false, LEVELS.filter(level => (c.levels ?? LEVELS).includes(level)), tagList(c.tag), idList(c.pid), idList(c.tid), String(c.timeFrom ?? '').trim(), String(c.timeTo ?? '').trim(), String(c.message ?? ''), !!c.message && c.messageRegex === true])), f.includeRaw !== false]);
+// Compared as the core reads them, with each condition's switch; conditions
+// without criteria left out.
+const normal = f => JSON.stringify([...['include', 'exclude'].map(list => (f[list] ?? []).filter(c => !isEmptyCondition(c)).map(c => [c.enabled !== false, coreForm(c)])), f.includeRaw !== false]);
 export const sameFields = (a, b) => normal(a) === normal(b);
 export const isDefaultFields = fields => sameFields(fields, defaultFields());
 
@@ -36,8 +34,8 @@ export function toStored(filters) {
   const store = c => {
     const out = {};
     if (c.levels.length !== LEVELS.length) out.levels = c.levels;
-    for (const key of ['tag', 'pid', 'tid', 'timeFrom', 'timeTo']) if (String(c[key]).trim()) out[key] = c[key];
-    if (c.message) {out.message = c.message; if (c.messageRegex) out.messageRegex = true;}
+    for (const key of ['timeFrom', 'timeTo']) if (String(c[key]).trim()) out[key] = c[key];
+    for (const key of REGEX_FIELDS) if (key === 'message' ? c.message : String(c[key]).trim()) {out[key] = c[key]; if (c[regexKey(key)]) out[regexKey(key)] = true;}
     if (!c.enabled) out.enabled = false;
     return out;
   };
@@ -47,11 +45,12 @@ export function toStored(filters) {
 // The fields of a stored filter, or null when it is invalid or has fields
 // this version does not know (a filter saved by a later version).
 export function fromStored(value) {
-  if (!isObject(value) || value.v !== SAVED_VERSION) return null;
+  if (!isObject(value) || ![1, SAVED_VERSION].includes(value.v)) return null;
   const include = value.include ?? [], exclude = value.exclude ?? [];
   if (!Array.isArray(include) || !Array.isArray(exclude) || include.length + exclude.length > MAX_CONDITIONS) return null;
   if (![...include, ...exclude].every(c => isObject(c) && Object.keys(c).every(key => KEYS.includes(key)))) return null;
-  const fields = fieldsOf({include, exclude, includeRaw:value.includeRaw});
+  const read = list => value.v === 1 ? list.map(upgradeCondition) : list;
+  const fields = fieldsOf({include:read(include), exclude:read(exclude), includeRaw:value.includeRaw});
   try {validateFilters(fields); return fields;} catch {return null;}
 }
 // Saved filters as native code lists them, by name.

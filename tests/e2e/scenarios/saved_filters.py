@@ -14,7 +14,7 @@ import fixtures
 STATE = """const $=id=>document.getElementById(id),b=$('savedFilterButton'),p=$('panelSavedFilter'),m=$('rowMenu'),d=$('filterNameDialog'),t=$('toast');
 const label=e=>[...e.children].filter(c=>!c.hidden).map(c=>c.textContent).join('|');return {
  heading:label(b),headingState:b.dataset.state,aria:b.getAttribute('aria-label'),panel:label(p),panelState:p.dataset.state,
- save:$('saveFilter').hidden?null:$('saveFilter').textContent,tag:$('tagFilter').value,hides:[...document.querySelectorAll('#hideList .cond-summary')].map(e=>e.textContent),query:$('searchInput').value,
+ save:$('saveFilter').hidden?null:$('saveFilter').textContent,tag:$('tagFilter').value,hides:[...document.querySelectorAll('.cond-item')].filter(c=>c.querySelector('.cond-kind.hide')).map(c=>c.querySelector('.cond-summary').textContent),query:$('searchInput').value,
  count:$('logsCount').textContent,
  menu:m.hidden?null:[...m.children].map(c=>c.tagName==='HR'?'---':c.tagName==='P'?`(${c.textContent})`:(c.getAttribute('aria-checked')==='true'?'* ':'')+c.textContent),
  dialog:d.open,title:$('filterNameTitle').textContent,name:$('filterNameInput').value,error:$('filterNameError').hidden?null:$('filterNameError').textContent,
@@ -93,9 +93,10 @@ def run(ctx):
         disk = json.loads(store.read_text())
         check('saved-filters.json holds the name, format and conditions',
               len(disk) == 1 and disk[0]['name'] == first and disk[0]['format'] == 'text'
-              and disk[0]['filter'] == {'v': 1, 'include': [{'levels': ['W', 'E', 'F', 'A'], 'tag': 'ExampleApp'}], 'exclude': [], 'includeRaw': True}, disk)
+              and disk[0]['filter'] == {'v': 2, 'include': [{'levels': ['W', 'E', 'F', 'A'], 'tag': 'ExampleApp'}], 'exclude': [], 'includeRaw': True}, disk)
 
-        app.enter('tagFilter', 'ExampleApp, WifiMonitor')
+        js("document.getElementById('tagRegex').click();return true;")
+        app.enter('tagFilter', 'ExampleApp|WifiMonitor')
         app.wait_count(expected(['ExampleApp', 'WifiMonitor'], 'WEFA'))
         s = until(lambda s: s['headingState'] == 'modified', 'modified mark')
         check('changing the conditions marks the saved filter as changed',
@@ -132,11 +133,11 @@ def run(ctx):
         app.capture('04-undo-toast', hover=None)
         js("document.querySelector('#toast .toast-action').click();return true;")
         app.wait_count(expected(['ExampleApp', 'WifiMonitor'], 'WEFA'))
-        check('undo returns the changed conditions', until(lambda s: s['headingState'] == 'modified', 'undone')['tag'] == 'ExampleApp, WifiMonitor')
+        check('undo returns the changed conditions', until(lambda s: s['headingState'] == 'modified', 'undone')['tag'] == 'ExampleApp|WifiMonitor')
         app.click('saveFilter')
         s = until(lambda s: s['headingState'] == 'applied', 'saved over')
         check('the panel saves a changed filter over the saved one', s['toast'] == f"'{first}'에 저장했습니다." and s['save'] is None, s)
-        check('the file holds the new conditions', json.loads(store.read_text())[0]['filter']['include'][0]['tag'] == 'ExampleApp, WifiMonitor')
+        check('the file holds the new conditions', json.loads(store.read_text())[0]['filter']['include'][0]['tag'] == 'ExampleApp|WifiMonitor')
 
         # Another file opens without a filter; the saved one applies in one pick.
         app.enter('searchInput', 'timeout')
@@ -150,7 +151,7 @@ def run(ctx):
         app.wait_count(expected(['ExampleApp', 'WifiMonitor'], 'WEFA'))
         s = st()
         check('picking it applies its conditions and keeps the search',
-              s['tag'] == 'ExampleApp, WifiMonitor' and s['query'] == 'timeout' and s['heading'] == first
+              s['tag'] == 'ExampleApp|WifiMonitor' and s['query'] == 'timeout' and s['heading'] == first
               and s['toast'] == f"'{first}' 필터를 적용했습니다.실행 취소", s)
         time.sleep(1)
 
@@ -162,7 +163,7 @@ def run(ctx):
         app.open_fixture('ui-copy.log')
         s = until(lambda s: s['heading'] == first, 'restored saved filter')
         app.wait_count(expected(['ExampleApp', 'WifiMonitor'], 'WEFA'))
-        check('after a restart the file returns with its saved filter', s['tag'] == 'ExampleApp, WifiMonitor' and s['headingState'] == 'applied', s)
+        check('after a restart the file returns with its saved filter', s['tag'] == 'ExampleApp|WifiMonitor' and s['headingState'] == 'applied', s)
         js(OPEN_PANEL)
         js(PIN, False)
         time.sleep(.4)

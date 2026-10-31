@@ -1,5 +1,5 @@
 // User-facing text for progress, native errors and active filters.
-import {LEVELS, tagList, idList, isActiveCondition, MESSAGE_PATTERN_ERROR} from './filter-model.js';
+import {LEVELS, isActiveCondition, patternField} from './filter-model.js';
 import {BUSY} from './controller.js';
 
 import {levelNames} from './columns.js';
@@ -175,7 +175,11 @@ export function describeLogError(value, format='text') {
   // devicectl's own reason, in English as Xcode gives it.
   if (text.startsWith('Could not start the app: ')) return `앱을 실행하지 못했습니다: ${text.slice('Could not start the app: '.length)}`;
   if (text.startsWith('Invalid or unsupported search pattern: ')) return `정규식을 확인해 주세요: ${text.slice('Invalid or unsupported search pattern: '.length)}`;
-  if (text.startsWith(MESSAGE_PATTERN_ERROR)) return `${format === 'dlt' ? '페이로드' : '메시지'} 정규식을 확인해 주세요: ${text.slice(MESSAGE_PATTERN_ERROR.length)}`;
+  const field = patternField(text);
+  if (field) {
+    const name = {tag:format === 'dlt' ? '모든 ID' : '태그', message:format === 'dlt' ? '페이로드' : '메시지'}[field] ?? field.toUpperCase();
+    return `${name} 정규식을 확인해 주세요: ${text.slice(text.indexOf(': ') + 2)}`;
+  }
   // Engine text without a translation keeps its detail behind Korean context.
   return messages[text] ?? (text && !/[가-힣]/.test(text) ? `작업을 완료하지 못했습니다. (${text})` : text);
 }
@@ -198,19 +202,20 @@ export function describeFollowError(value) {
   return `${reasons[text] ?? '추가된 내용을 읽지 못해'} 따라가기를 멈췄습니다. 그 앞까지 읽은 줄은 그대로 볼 수 있습니다.`;
 }
 
-// One condition's criteria as chips, one per field; a clipped list keeps
-// every item in `full`. A DLT row's tags are its ECU, APID and CTID.
-export function describeCondition(c={}, format='text') {
+// One condition's criteria as chips, one per field; a clipped value keeps
+// all of itself in `full`. A DLT condition's tag looks in every ID.
+export function describeCondition(c={}, format='text', hiding=false) {
   const chips=[], levels=c.levels ?? LEVELS;
   if (levels.length !== LEVELS.length) {
     const set=new Set(levels), warnOrAbove=set.size===4&&['W','E','F','A'].every(level=>set.has(level));
     // A short list reads better than a long one: name the few hidden levels
-    // when fewer are hidden than shown.
+    // when fewer are hidden than shown, except in a hiding condition, where
+    // "제외" would turn it around.
     const names=LEVELS.filter(level=>set.has(level)),hidden=LEVELS.filter(level=>!set.has(level)),full=list=>list.map(level=>levelNames(format)[level]).join('·');
-    chips.push({key:'levels', label:`레벨: ${!names.length?'없음':warnOrAbove?'Warn 이상':names.length<=2?full(names):hidden.length<names.length?`${full(hidden)} 제외`:names.join('·')}`});
+    chips.push({key:'levels', label:`레벨: ${!names.length?'없음':warnOrAbove?'Warn 이상':names.length<=2?full(names):!hiding&&hidden.length<names.length?`${full(hidden)} 제외`:names.join('·')}`});
   }
-  for (const [key, label, items] of [['tag',format==='dlt'?'ID':'태그',tagList(c.tag)],['pid','PID',idList(c.pid)],['tid','TID',idList(c.tid)]]) {
-    const text=items.join(', ');
+  for (const [key, name] of [['ecu','ECU'],['apid','APID'],['ctid','CTID'],['tag',format==='dlt'?'모든 ID':'태그'],['pid','PID'],['tid','TID']]) {
+    const text=String(c[key] ?? '').trim(), label=`${name}${c[`${key}Regex`]===true?' 정규식':''}`;
     if (text) chips.push({key, label:`${label}: ${text.length>40?`${text.slice(0,40)}…`:text}`, full:`${label}: ${text}`});
   }
   const from=String(c.timeFrom ?? '').trim(), to=String(c.timeTo ?? '').trim();
@@ -228,15 +233,15 @@ export function describeCondition(c={}, format='text') {
 export function describeActiveFilters(filters={}, format='text') {
   const chips=[];
   for (const list of ['include', 'exclude'])
-    (filters[list] ?? []).forEach((c, index) => {if (isActiveCondition(c)) chips.push(...describeCondition(c, format).map(chip => ({...chip, list, index})));});
+    (filters[list] ?? []).forEach((c, index) => {if (isActiveCondition(c)) chips.push(...describeCondition(c, format, list === 'exclude').map(chip => ({...chip, list, index})));});
   if (filters.includeRaw === false) chips.push({key:'includeRaw', label:'미인식 줄 제외'});
   return chips;
 }
 // The applied filter as one line: showing conditions joined by 또는, then
 // each hiding condition after 제외.
 export function describeFilter(filters={}, format='text') {
-  const group=c=>describeCondition(c, format).map(chip=>chip.full ?? chip.label);
-  const shows=(filters.include ?? []).filter(isActiveCondition).map(group), hides=(filters.exclude ?? []).filter(isActiveCondition).map(group);
+  const group=hiding=>c=>describeCondition(c, format, hiding).map(chip=>chip.full ?? chip.label);
+  const shows=(filters.include ?? []).filter(isActiveCondition).map(group(false)), hides=(filters.exclude ?? []).filter(isActiveCondition).map(group(true));
   const parts=[];
   if (shows.length) parts.push(shows.map(g=>shows.length>1&&g.length>1?`(${g.join(' · ')})`:g.join(' · ')).join(' 또는 '));
   for (const g of hides) parts.push(`제외 ${g.length>1?`(${g.join(' · ')})`:g.join(' · ')}`);

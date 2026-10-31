@@ -27,15 +27,15 @@ def run(ctx):
         e = app.wait(lambda: (lambda v: not v['hidden'] and v)(js(error)), what='time error')
         check('a malformed bound is explained beside the field', e['invalid'] == 'true', e)
         app.capture('01-time-error')
-        js("const t=document.getElementById('toggleFilters');if(t.getAttribute('aria-expanded')==='false')t.click();document.getElementById('collapseFilters').click();return true;")
+        app.close_editor()
         time.sleep(.3)
-        b = js("return {collapsed:document.getElementById('toggleFilters').getAttribute('aria-expanded'),hidden:document.getElementById('largeError').hidden,text:document.getElementById('largeError').textContent};")
-        check('closing the panel moves the field error to the banner', b['collapsed'] == 'false' and not b['hidden'] and '시간' in b['text'], b)
+        b = js("return {hidden:document.getElementById('largeError').hidden,text:document.getElementById('largeError').textContent};")
+        check('closing the editor moves the field error to the banner', not b['hidden'] and '시간' in b['text'], b)
         app.capture('02-time-error-banner')
-        app.click('toggleFilters')
+        js("document.querySelector('.cond-item .cond-summary').click();return true;")
         time.sleep(.3)
-        check('reopening the panel shows the error inline only', js("return document.getElementById('largeError').hidden&&!document.getElementById('timeFilterError').hidden"))
-        js("document.querySelector('#activeFilters .filter-chip').click();return true;")
+        check('reopening the editor shows the error inline only', js("return document.getElementById('largeError').hidden&&!document.getElementById('timeFilterError').hidden"))
+        js("document.querySelector('#activeFilters .chip-remove').click();return true;")
         app.wait_count(3000)
         js("document.body.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));return true;")
 
@@ -44,7 +44,7 @@ def run(ctx):
         js("[...document.querySelectorAll('#rowMenu [role=menuitem]')].find(e=>e.textContent.endsWith('부터 보기 조건 추가')).click();return true;")
         app.wait_count(2996)
         check('the row menu sets a start time from the row', js("return document.getElementById('timeFrom').value") == '06-18 19:24:00.200')
-        js("document.querySelector('#activeFilters .filter-chip').click();return true;")
+        js("document.querySelector('#activeFilters .chip-remove').click();return true;")
         app.wait_count(3000)
 
         # days.log: a row every 30 minutes over two days.
@@ -64,12 +64,12 @@ def run(ctx):
             except Exception:
                 pass
             rows = js(stamps)
-            check(f'{frm} ~ {to} runs forward from the start', app.count() == f'로그 · 전체 {n}건' and rows[:1] == [first] and rows[-1:] == [last], {'count': app.count(), 'rows': rows})
+            check(f'{frm} ~ {to} runs forward from the start', app.count() == f'로그 · 결과 {n}건' and rows[:1] == [first] and rows[-1:] == [last], {'count': app.count(), 'rows': rows})
         # Invalid input without a search: no empty lower pane, a note above.
         app.enter('timeTo', '01:0')
         time.sleep(.4)
         s = js("return {pane:document.getElementById('largeSearchPane').hidden,note:document.getElementById('logsPending').hidden,text:document.getElementById('logsPending').textContent,count:document.getElementById('logsCount').textContent,cancel:document.getElementById('largeCancel').disabled}")
-        check('invalid input keeps the search pane closed and notes the upper logs', s['pane'] and not s['note'] and '미적용' in s['text'] and s['count'] == '로그 · 전체 5건' and s['cancel'], s)
+        check('invalid input keeps the search pane closed and notes the upper logs', s['pane'] and not s['note'] and '미적용' in s['text'] and s['count'] == '로그 · 결과 5건' and s['cancel'], s)
         app.capture('03-pending-note')
         app.enter('timeTo', '06-19 01:00')
         time.sleep(.4)

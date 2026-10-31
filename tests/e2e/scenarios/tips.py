@@ -79,9 +79,10 @@ def run(ctx):
         check('Escape closes the tip and leaves the raw detail open', s['detail'] and 'rows' in s['stored']['seen'], s)
 
         app.click('toggleFilters')
+        app.click('addCondition')
         s = tip('levels')
-        check('opening the filters lights the level chips with the card beside the panel',
-              lit(s['spot'], rect('levelFilters')) and s['side'] == 'right' and placed(s), s)
+        check('opening the condition editor lights the level chips with the card beside them',
+              lit(s['spot'], rect('levelFilters')) and placed(s), s)
         app.js(POINTER, '#filterPanel', 'pointerleave')
         time.sleep(.6)
         s = st()
@@ -92,11 +93,13 @@ def run(ctx):
         pressed = st()
         # The panel hides once the press, and a double-click it may begin,
         # are over, so the log area does not move under the pointer.
+        app.js("document.activeElement.blur();return true;")
         app.js(POINTER, '#logsRows .log-row', 'pointerup')
         app.wait(lambda: not st()['panelOpen'], what='panel hidden after the press')
         s = st()
         check('a press outside dismisses the tip at once and hides the panel once the press is over',
               not pressed['open'] and pressed['panelOpen'] and not s['open'] and not s['panelOpen'] and 'levels' in s['stored']['seen'], {'pressed': pressed, 'after': s})
+        app.close_editor()
 
         app.type('searchInput', 'WIFI')
         app.wait(lambda: app.text('largeCount') not in ('0', ''), what='search results')

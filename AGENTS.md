@@ -17,7 +17,8 @@ Guidance for anyone changing LogStudio, including coding agents. [DEVELOPMENT.md
 
 ## Behavior to preserve
 
-- Preserve Android/iOS parsing behavior, PID/TID as strings, tag-filter semantics, physical line boundaries, and raw-log fidelity across processing strategies.
+- Preserve Android/iOS parsing behavior, PID/TID as strings, physical line boundaries, and raw-log fidelity across processing strategies.
+- Filter fields hold one value or, with their switch, a pattern; a comma is text. Tag and message values match inside the field, PID, TID and DLT ID values match the whole field, and saved lists convert to patterns that match the same rows.
 - Large-log literal and regex search uses ripgrep's grep-regex/grep-searcher crates, pinned and linked directly into the shared Rust core. The desktop app has no Python runtime or helper sidecar. Case-insensitive matching uses standard Unicode simple case folding. Document grammar, case semantics and unsupported patterns. Do not build a bespoke SIMD matcher.
 - Keep first available rows/search independent of full field metadata. Preserve raw bytes, CR/LF/CRLF rows, field filters, bounded later pages and highlights. Use measured bounded concurrency, generation guards and cancellation independent of match callbacks.
 - End users must not silently acquire a compiler or toolchain at launch. Provide reproducible native builds and honest platform verification limits.

@@ -45,6 +45,16 @@ test('saved work is read only in this version, with bounded positive sorted book
   assert.equal(readWork({v:WORK_VERSION}).savedFilter, null, 'work saved before saved filters');
 });
 
+test('work saved with lists reads as the patterns that match the same rows', () => {
+  const old = readWork({v:1, filters:{include:[{tag:'A, b.c', pid:'1 2'}], exclude:[{tag:'x,y'}]}});
+  assert.deepEqual(old.filters.include.map(c => [c.tag, c.tagRegex, c.pid, c.pidRegex]), [['A|b\\.c', true, '^(1|2)$', true]]);
+  assert.deepEqual(old.filters.exclude.map(c => [c.tag, c.tagRegex]), [['x|y', true]]);
+  const flat = readWork({v:1, filters:{tag:'a,b', pid:'1,2', excludeTags:'c,d'}});
+  assert.deepEqual([flat.filters.include[0].tag, flat.filters.include[0].pid, flat.filters.exclude[0].tag], ['a|b', '^(1|2)$', 'c|d']);
+  assert.equal(readWork({v:WORK_VERSION, filters:{include:[{tag:'a, b'}], exclude:[]}}).filters.include[0].tag, 'a, b', 'in the new form a comma is text');
+  assert.equal(readWork({v:WORK_VERSION + 1}), null);
+});
+
 test('work with nothing to restore counts as empty', () => {
   assert.equal(isEmptyWork(work()), true);
   assert.equal(isEmptyWork(work({bookmarks:[1]})), false);
@@ -53,7 +63,7 @@ test('work with nothing to restore counts as empty', () => {
   assert.equal(isEmptyWork(work({filters:{...defaultFilters(), include:[condition({tag:'x'})]}})), false);
   assert.equal(isEmptyWork(work({filters:{...defaultFilters(), exclude:[condition({tag:'x', enabled:false})]}})), false, 'a switched-off condition is kept');
   const levels = emptyCondition().levels;
-  assert.equal(isEmptyWork(work({filters:{...defaultFilters(), include:[condition({levels:[...levels.slice(1), levels[0]]}), condition()], exclude:[condition({tag:' , '})]}})), true, 'level order and conditions without criteria do not matter');
+  assert.equal(isEmptyWork(work({filters:{...defaultFilters(), include:[condition({levels:[...levels.slice(1), levels[0]]}), condition()], exclude:[condition({tag:'  '})]}})), true, 'level order and conditions without criteria do not matter');
 });
 
 test('a reload refreshes marks, drops rows past the end and counts changed text', () => {

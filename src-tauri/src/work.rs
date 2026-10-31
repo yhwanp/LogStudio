@@ -14,8 +14,8 @@ use std::{
 
 /// File sets remembered, most recently used first.
 const LIMIT: usize = 50;
-/// One state's serialized size; 1,000 bookmarks and 32 full conditions,
-/// messages included, fit.
+/// One state's serialized size: room for 1,000 bookmarks and 32 conditions of
+/// ordinary values.
 const STATE_BYTES: usize = 256 * 1024;
 /// Nesting a state uses: state, filters, condition list, condition, levels.
 const DEPTH: usize = 5;

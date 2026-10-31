@@ -31,11 +31,15 @@ test('messages without a log level read as 기타 with their type in the tooltip
 });
 
 test('DLT filter chips and errors read in Korean', () => {
-  assert.deepEqual(describeActiveFilters({include:[{tag:'NAV, ECU1'}]}, 'dlt').map(c => c.label), ['ID: NAV, ECU1']);
+  assert.deepEqual(describeActiveFilters({include:[{tag:'NAV'}]}, 'dlt').map(c => c.label), ['모든 ID: NAV']);
+  assert.deepEqual(describeActiveFilters({include:[{ecu:'HU', apid:'NAV', ctid:'ROUT'}]}, 'dlt').map(c => c.label), ['ECU: HU', 'APID: NAV', 'CTID: ROUT']);
   assert.deepEqual(describeActiveFilters({include:[{tag:'NAV'}]}).map(c => c.label), ['태그: NAV']);
   for (const error of ['DLT files and text logs cannot be opened together', 'A selected DLT file contains no DLT messages', 'DLT version 2 files are not supported',
     'DLT files cannot be followed', 'Invalid export format', 'Could not read the DLT file', 'DLT data without storage headers is not supported'])
     assert.ok(!describeLogError(error).includes(error), error);
+  assert.equal(describeLogError('Invalid or unsupported APID pattern: unclosed group', 'dlt'), 'APID 정규식을 확인해 주세요: unclosed group');
+  assert.equal(describeLogError('Invalid or unsupported tag pattern: x', 'dlt'), '모든 ID 정규식을 확인해 주세요: x');
+  assert.equal(describeLogError('Invalid or unsupported tag pattern: x'), '태그 정규식을 확인해 주세요: x');
 });
 
 test('an open of several files names the file that failed', () => {

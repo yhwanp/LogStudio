@@ -26,14 +26,14 @@ target/release/field-filters /tmp/a-512.log current 2
 | 바이너리 | 인자 | 측정 항목 |
 | --- | --- | --- |
 | `field-filters` | `<path> <label> [reps]` | 인덱싱, 분석, 레벨·태그·PID·TID·제외·시간 필터, 빈출 검색어 + 레벨 E 복합 필터(검색에 일치한 행마다 파싱)의 쿼리 완료 시간 및 중간 페이지 조회. 필드 메타데이터 표 사용 여부별 교차 측정 및 결과 일치 검증. `PERF_FILTERS=wide`는 `wide` 입력용 필터, `conditions`는 다중 포함·제외 조건, `times`는 시간 조건 1–32개 측정(힙 통계는 macOS 전용) |
-| `dlt` | `<path> [label]` | DLT 파일 또는 동일 내용 텍스트 로그(`dlt-gen --twin`)를 엔진 API로 열어 첫 페이지·인덱싱·분석, 레벨·APID·ECU 제외·1분 시간 필터, 희귀 문자열·빈출 단어·정규식 검색(첫 결과 및 완료, 각 3회), 중간 페이지, `locate`, 검색 취소 시간 측정 |
+| `dlt` | `<path> [label]` | DLT 파일 또는 동일 내용 텍스트 로그(`dlt-gen --twin`)를 엔진 API로 열어 첫 페이지·인덱싱·분석, 레벨·APID(DLT는 칸별 값·패턴 포함)·ECU 제외·1분 시간 필터, 희귀 문자열·빈출 단어·정규식 검색(첫 결과 및 완료, 각 3회), 중간 페이지, `locate`, 검색 취소 시간 측정 |
 | `dlt-render` | `<path.dlt> [rounds]` | 첫 256 MiB를 128 KiB 이하 블록으로 나누어 단일 스레드에서 단위 분할·행 렌더링(시스템 시간대)·필드 파싱 속도 측정(입력 MB/s, 행/s, 블록당 렌더링 p50·p99, 텍스트/원본 크기 비율) |
 | `field-collect` | `<path> [rounds]` | 첫 256 MiB 대상 단일 스레드 분석 패스의 행당 처리 비용(필드 수집 유무 비교) |
 | `continuation` | `<path>` | 멀티라인 로그 열기·검색·페이지 조회 시간 및 결과 다이제스트 확인 |
 | `dlt-mask` | `<path.dlt>` | 첫 256 MiB 대상 단일 스레드에서 `Filter::dlt_mask` 단독 실행 시 메시지당 소요 시간(ns, 조건 1·8·32개) |
 | `continuation-mask` | `<path>` | 첫 256 MiB 대상 단일 스레드 블록별 필드 판정 시간 |
-| `multi-value` | `<path> [single\|all]` | 태그·PID·TID 다중 값 필터 쿼리 시간(4 워커, 3회 중 최소·최대) |
-| `multi-value-mask` | `<path> [single\|all]` | 다중 값 필터의 블록별 필드 판정 시간 |
+| `multi-value` | `<path> [single\|all]` | 태그·PID·TID의 값과 여러 값 패턴 필터 쿼리 시간(4 워커, 3회 중 최소·최대) |
+| `multi-value-mask` | `<path> [single\|all]` | 값과 여러 값 패턴 필터의 블록별 필드 판정 시간 |
 | `multi-value-predicate` | `<path> [single\|all]` | `Filter::fields_match` 단독 실행 시 행당 소요 시간(ns) |
 | `time-predicate` | `<path>` | 첫 64 MiB 대상 단일 스레드에서 시간 조건 1–32개(포함·제외) 및 비교용 태그 조건의 `Filter::fields_match` 행당 소요 시간(ns) |
 | `message-filter` | `<path> [runs]` | `field-filters-gen` 로그를 엔진 API로 열어 집계까지 마친 뒤, 상단 pane의 메시지 조건(보기·제외, 고정 문자열·정규식, 복합 조건) 쿼리 및 0건 조건 확인 완료 시간을 레벨·1분 시간 필터·필드 없는 검색과 비교 |

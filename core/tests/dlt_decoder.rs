@@ -893,11 +893,12 @@ const NEEDLES: [&str; 14] = [
 ];
 
 fn random_filters(r: &mut Rng, rows: &[String]) -> Filters {
-    let list = |r: &mut Rng| {
+    let one = |r: &mut Rng| NEEDLES[r.below(NEEDLES.len())].to_owned();
+    let pattern = |r: &mut Rng| {
         (0..1 + r.below(3))
             .map(|_| NEEDLES[r.below(NEEDLES.len())])
             .collect::<Vec<_>>()
-            .join(", ")
+            .join("|")
     };
     // A bound near a row's own time, at some precision, maybe without its
     // year or date.
@@ -925,10 +926,10 @@ fn random_filters(r: &mut Rng, rows: &[String]) -> Filters {
         f.levels.retain(|_| r.chance(60));
     }
     if r.chance(50) {
-        f.tag = list(r);
+        f.tag = one(r);
     }
     if r.chance(40) {
-        f.exclude_tags = list(r);
+        f.exclude_tags = one(r);
     }
     if r.chance(40) {
         f.time_from = bound(r);
@@ -950,7 +951,20 @@ fn random_filters(r: &mut Rng, rows: &[String]) -> Filters {
             c.levels.retain(|_| r.chance(60));
         }
         if r.chance(60) {
-            c.tag = list(r);
+            c.tag_regex = r.chance(50);
+            c.tag = if c.tag_regex { pattern(r) } else { one(r) };
+        }
+        if r.chance(30) {
+            c.ecu_regex = r.chance(50);
+            c.ecu = if c.ecu_regex { pattern(r) } else { one(r) };
+        }
+        if r.chance(30) {
+            c.apid_regex = r.chance(50);
+            c.apid = if c.apid_regex { pattern(r) } else { one(r) };
+        }
+        if r.chance(30) {
+            c.ctid_regex = r.chance(50);
+            c.ctid = if c.ctid_regex { pattern(r) } else { one(r) };
         }
         if r.chance(25) {
             c.time_from = bound(r);

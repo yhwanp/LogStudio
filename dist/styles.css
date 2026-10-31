@@ -160,54 +160,80 @@ h2{font-size:16px;margin:0;font-weight:650}
 .field input,.field select{font-size:13px;color:var(--text);background:var(--surface);border:1px solid var(--control-border);border-radius:6px;padding:6px 9px;min-height:32px;width:100%}
 .field input::placeholder{color:var(--muted);font-weight:400}
 .field input[aria-invalid=true],.search-box:has(input[aria-invalid=true]){border-color:var(--error-text)}
-.id-fields{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.id-fields .field{margin-bottom:8px}
-/* PID·TID and the time range wait behind dashed + buttons, outlined like
-   the empty fields they open, until a condition uses them. */
-/* The message, PID·TID and time openers share one row, also in a card. */
-.field-openers{display:flex;flex-wrap:wrap;gap:5px;margin:-4px 0 10px}
-.field-opener{background:none;border:1px dashed var(--border-strong);border-radius:6px;color:var(--accent-text);font-size:12px;font-weight:600;padding:2px 7px;min-height:26px}
-.field-opener:hover{background:var(--accent-soft);border-color:var(--accent-border)}
 /* Field help is collapsed behind a "?" beside the labels. */
 .has-help,.check-row{position:relative}
 .has-help>.help-toggle{position:absolute;top:0;right:0}
 .check-row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px}
-/* Conditions: a showing and a hiding list of cards. The card being edited
-   holds the editor (the level, tag, ID and time fields); a lone showing
-   condition being edited has no header, so the panel reads as one set of
-   fields. */
-.cond-section{margin:0 0 12px}
-.cond-heading{display:flex;align-items:baseline;gap:8px;margin:0 0 6px}
-.cond-heading h3{font-size:13px;font-weight:650;margin:0}
-.cond-heading span{font-size:12px;color:var(--muted)}
-.cond-list{display:flex;flex-direction:column;gap:6px}
-.cond-card{border:1px solid var(--border-strong);border-radius:8px;background:var(--surface);min-width:0}
-.cond-card[data-active=true]{border-color:var(--accent-border);box-shadow:0 0 0 1px var(--accent-border)}
-.cond-card.solo{border:0;background:none;box-shadow:none}
-.cond-card.solo>.cond-head{display:none}
-.cond-head{display:flex;align-items:center;gap:6px;padding:4px 4px 4px 8px;min-height:32px}
-.cond-summary{flex:1;min-width:0;background:none;text-align:left;font-size:12px;color:var(--text-2);padding:4px 2px;border-radius:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.cond-card[data-active=true] .cond-summary{font-weight:600;color:var(--accent-text)}
-.cond-card[data-off=true] .cond-summary,.cond-card[data-empty=true] .cond-summary{color:var(--faint);font-weight:400}
-.cond-card[data-off=true] .cond-summary{text-decoration:line-through}
-.cond-card[data-invalid=true] .cond-summary{color:var(--error-text)}
+/* Conditions: one list, each with its switch, kind and summary. */
+.cond-tools{display:flex;gap:4px;margin:0 0 8px}
+.cond-tools .mini-button:disabled{color:var(--faint);border-color:var(--border-strong);cursor:default}
+.cond-tools .primary-mini{background:var(--accent);border-color:var(--accent);color:var(--on-accent);font-weight:600}
+.cond-tools .primary-mini:hover:not(:disabled){background:var(--accent);filter:brightness(1.08)}
+.cond-list{list-style:none;margin:0 0 10px;padding:0;display:flex;flex-direction:column;gap:2px}
+.cond-list:empty{display:none}
+.cond-empty{margin:0 0 14px;padding-bottom:2px}
+.cond-item{display:grid;grid-template-columns:16px 34px minmax(0,1fr);align-items:center;gap:6px;min-height:30px;padding:2px 4px 2px 6px;border:1px solid transparent;border-radius:6px}
+.cond-item:hover{background:var(--surface-3)}
+.cond-item[data-active=true]{background:var(--accent-soft);border-color:var(--accent-border)}
+.cond-toggle{margin:0}
+.cond-kind{font-size:11px;font-weight:700;line-height:18px;text-align:center;border-radius:4px}
+.cond-kind.show{background:var(--accent-soft);color:var(--accent-text)}
+.cond-kind.hide{background:var(--error-bg);color:var(--error-text)}
+.cond-item[data-active=true] .cond-kind.show{background:var(--surface)}
+.cond-summary{display:flex;min-width:0;background:none;text-align:left;font-size:12px;color:var(--text-2);padding:4px 2px;border-radius:4px;white-space:nowrap}
+.cond-text{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.cond-state{flex-shrink:0}
+.cond-item[data-active=true] .cond-summary{font-weight:600;color:var(--accent-text)}
+.cond-item[data-off=true] .cond-summary{color:var(--faint);text-decoration:line-through}
+.cond-item[data-off=true] .cond-kind{background:var(--surface-3);color:var(--faint)}
+.cond-item[data-invalid=true] .cond-summary{color:var(--error-text)}
 /* No row of the log matches: dashed, as a level without rows. */
-.cond-card[data-rows=none]:not(.solo){border-style:dashed}
-.cond-alert{margin:0 0 8px;font-size:12px;line-height:1.5;color:var(--muted);border:1px dashed var(--border-strong);border-radius:6px;padding:4px 8px}
-/* Under a card's summary, aligned with its text. */
-.cond-card:not(.solo)>.cond-alert{margin:-4px 0 0;border:0;padding:0 8px 6px 32px;font-size:11px}
-/* Under the editor of the condition being edited, so typing never moves it. */
-.cond-editor+.cond-alert{margin:0 0 8px}
-.cond-card:not(.solo)>.cond-editor+.cond-alert{margin:0;padding:0 8px 8px}
-.cond-remove{flex-shrink:0;background:none;color:var(--faint);font-size:15px;line-height:1;width:22px;height:22px;border-radius:5px}
-.cond-remove:hover{background:var(--surface-3);color:var(--text)}
-.cond-card:not(.solo)>.cond-editor{padding:8px 10px 2px;border-top:1px solid var(--border)}
-.add-cond{font-size:12px;margin-top:6px}
-.add-cond:disabled{color:var(--faint);cursor:default}
+.cond-item[data-rows=none]{border:1px dashed var(--control-border)}
+/* The condition editor floats over the log without covering it for good:
+   it opens beside the panel and moves by its heading. */
+.filter-editor{position:fixed;z-index:25;width:492px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);overflow-y:auto;background:var(--surface);border:1px solid var(--accent-border);border-radius:10px;padding:0 14px 12px;box-shadow:0 10px 30px #0004;scroll-padding-top:48px}
+.filter-editor[hidden]{display:none}
+.editor-head{position:sticky;top:0;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 -14px 8px;padding:10px 14px 6px;background:var(--surface);cursor:move;touch-action:none;user-select:none}
+.editor-head h2{font-size:15px;font-weight:700;margin:0}
+.editor-head:focus-visible{outline-offset:-3px}
+.editor-head .text-button{cursor:pointer}
+.cond-editor{display:flex;flex-direction:column;gap:7px}
+.kind-switch{display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--control-border);border-radius:7px}
+.kind-switch button{background:var(--surface);color:var(--text-2);font-size:13px;padding:5px 0;border-radius:6px 0 0 6px}
+.kind-switch button+button{border-radius:0 6px 6px 0}
+.kind-switch button+button{border-left:1px solid var(--border-strong)}
+.kind-switch button:hover{background:var(--surface-3)}
+.kind-switch button[aria-checked=true]{background:var(--accent);color:var(--on-accent);font-weight:700}
+.kind-switch #kindHide[aria-checked=true]{background:var(--error-text);color:var(--surface)}
+.kind-switch button:focus-visible{outline-offset:-5px}
+.kind-switch button[aria-checked=true]:focus-visible{outline-color:currentColor}
+.edit-row{display:grid;grid-template-columns:58px minmax(0,1fr) 62px;align-items:center;gap:0 7px;font-size:13px}
+.edit-row[hidden]{display:none}
+.edit-row input[type=text]{font-size:13px;color:var(--text);background:var(--surface);border:1px solid var(--control-border);border-radius:6px;padding:5px 8px;min-height:31px;width:100%;min-width:0}
+.edit-row input[type=text]::placeholder{color:var(--muted)}
+.edit-row input[aria-invalid=true]{border-color:var(--error-text)}
+.regex-check{color:var(--muted);font-size:12.5px;gap:4px}
+.field-hint,.edit-row .field-error,.edit-row .field-help{grid-column:2/-1;margin:4px 0 0}
+.field-hint{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:0 10px;font-size:12px;line-height:1.45;padding:4px 8px;border-radius:6px;background:var(--lv-w-bg);color:var(--lv-w)}
+.field-hint[hidden]{display:none}
+.field-hint .hint-text:empty{display:none}
+.field-hint .text-button{font-size:12px;font-weight:600;color:inherit;text-decoration:underline;padding:0}
+.time-inputs{grid-column:2/-1;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) 17px;align-items:center;gap:6px}
+.time-inputs.has-help>.help-toggle{position:static}
+.edit-levels{padding:0;border:0;margin:0;min-width:0}
+.edit-levels legend{font-size:13px;padding:0;margin-bottom:5px}
+.edit-levels legend span{font-size:12px;color:var(--muted);margin-left:7px}
+.edit-levels .level-grid{display:flex;gap:4px}
+.edit-levels .level-chip{flex:1 1 auto;min-width:0;display:block;padding:3px 4px;text-align:center;border-color:var(--border-strong);background:var(--surface);color:var(--muted)}
+.edit-levels .level-chip[aria-pressed=true]{border-color:var(--chip);box-shadow:inset 0 0 0 1px var(--chip);color:var(--chip);background:var(--chip-bg)}
+.edit-levels .level-chip::before,.edit-levels .level-chip::after{display:none}
+.edit-levels .level-chip .letter{display:block;font-size:11px;font-weight:400;line-height:14px}
+.edit-levels .level-chip[aria-pressed=true] .letter{font-weight:600}
+.edit-levels .level-chip .count{display:block;font-size:10.5px;line-height:13px}
 .chip-joint{flex-shrink:0;font-size:11px;font-weight:600;color:var(--muted);align-self:center;padding:0 2px}
 .chip-joint.exclude{color:var(--error-text)}
 .filter-chip.exclude{border-color:var(--error-border);background:var(--error-bg);color:var(--error-text)}
-.filter-chip.exclude:hover .chip-remove{background:var(--error-text);color:var(--surface)}
+.filter-chip.exclude .chip-remove:hover{background:var(--error-text);color:var(--surface)}
 .filter-chip.no-rows{border-style:dashed}
 .filter-chip .chip-note{flex-shrink:0;font-size:11px;opacity:.85;white-space:nowrap}
 .help-toggle{width:17px;height:17px;border-radius:50%;border:1px solid var(--control-border);background:var(--surface);color:var(--muted);font-size:11px;font-weight:700;line-height:15px;padding:0;text-align:center;flex-shrink:0}
@@ -215,11 +241,6 @@ h2{font-size:16px;margin:0;font-weight:650}
 .filters .field-help{margin:0 0 10px}
 .field-error{font-size:12px;color:var(--error-text);margin:0 0 12px;line-height:1.5}
 /* A field with a switch inside its right end, such as the message's .* */
-.toggle-input{position:relative;display:flex}
-.field .toggle-input input{padding-right:38px}
-.regex-toggle{position:absolute;right:4px;top:50%;transform:translateY(-50%);min-width:28px;height:24px;padding:0 5px;border:1px solid transparent;border-radius:4px;background:none;color:var(--muted);font:600 12px/1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-.regex-toggle:hover{background:var(--surface-3);color:var(--text)}
-.regex-toggle[aria-pressed=true]{background:var(--accent-soft);border-color:var(--accent-border);color:var(--accent-text)}
 .field+.field-error{margin-top:-4px}
 .check-line{font-size:13px;display:flex;align-items:center;gap:6px;line-height:1.5;white-space:nowrap}
 .small-note{font-size:12px;color:var(--muted);line-height:1.6;margin:8px 0 0}
@@ -278,11 +299,14 @@ h2{font-size:16px;margin:0;font-weight:650}
 .logs-main-pane .selection-info{flex:3 1 0;max-width:max-content;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .filter-row .pending-note{white-space:normal}
 .logs-main-pane .pane-nav,.logs-main-pane .table-tools{flex-shrink:0}
-.filter-chip{display:inline-flex;align-items:center;gap:5px;max-width:260px;padding:1px 4px 1px 8px;border-radius:11px;border:1px solid var(--accent-border);background:var(--accent-soft);color:var(--accent-text);font-size:12px;line-height:18px}
-.filter-chip>span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.filter-chip{display:inline-flex;align-items:center;gap:2px;max-width:260px;padding:1px 3px 1px 0;border-radius:11px;border:1px solid var(--accent-border);background:var(--accent-soft);color:var(--accent-text);font-size:12px;line-height:18px}
+.chip-edit{display:inline-flex;align-items:center;gap:5px;min-width:0;background:none;color:inherit;font:inherit;padding:0 2px 0 8px;border-radius:11px 0 0 11px}
+.chip-edit>span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.chip-edit:hover>span:first-child{text-decoration:underline}
 .pending-note{color:var(--lv-w);font-size:12px;white-space:nowrap}
-.filter-chip .chip-remove{flex-shrink:0;font-size:14px;line-height:1;width:16px;height:16px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center}
-.filter-chip:hover .chip-remove{background:var(--accent);color:var(--on-accent)}
+.filter-chip .chip-remove{position:relative;flex-shrink:0;background:none;color:inherit;padding:0;font-size:14px;line-height:1;width:16px;height:16px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center}
+.filter-chip .chip-remove::before{content:'';position:absolute;inset:-4px}
+.filter-chip .chip-remove:hover{background:var(--accent);color:var(--on-accent)}
 .selection-info{color:var(--accent-text);font-weight:600;white-space:nowrap}
 .selection-info:empty{display:none}
 .pane-hint{color:var(--faint);white-space:nowrap}

@@ -1384,7 +1384,11 @@ fn workload_filters() -> Vec<Filters> {
                 ..base()
             },
             Filters {
-                exclude_tags: "gallery, sdk".into(),
+                exclude: vec![logstudio_core::search::Condition {
+                    tag: "gallery|sdk".into(),
+                    tag_regex: true,
+                    ..Default::default()
+                }],
                 ..base()
             },
             Filters {

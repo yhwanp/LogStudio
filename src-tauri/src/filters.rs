@@ -15,7 +15,7 @@ use std::{
 /// Filters kept at most.
 pub const LIMIT: usize = 100;
 const NAME_CHARS: usize = 60;
-/// One filter's serialized size; 32 full conditions fit, messages included.
+/// One filter's serialized size: room for 32 conditions of ordinary values.
 const FILTER_BYTES: usize = 256 * 1024;
 /// Nesting the page's filters use: filter, condition list, condition, levels.
 const DEPTH: usize = 4;

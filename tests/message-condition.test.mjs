@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {setImmediate as turn} from 'node:timers/promises';
-import {emptyCondition, readCondition, isEmptyCondition, coreFilters, conditionsWithoutRows, MESSAGE_PATTERN_ERROR} from '../dist/filter-model.js';
+import {emptyCondition, readCondition, isEmptyCondition, coreFilters, conditionsWithoutRows} from '../dist/filter-model.js';
+const MESSAGE_PATTERN_ERROR = 'Invalid or unsupported message pattern: ';
 import {describeCondition, describeFilter, describeLogError} from '../dist/describe.js';
 import {toStored, fromStored, sameFields, SAVED_VERSION} from '../dist/saved-filters.js';
 import {createLargeLogController} from '../dist/controller.js';

@@ -69,13 +69,15 @@ fn condition(r: &mut Rng) -> Condition {
         c.levels.retain(|_| r.chance(55));
     }
     if r.chance(60) {
-        c.tag = (0..1 + r.below(2))
+        let needles = (0..1 + r.below(2))
             .map(|_| NEEDLES[r.below(NEEDLES.len())])
-            .collect::<Vec<_>>()
-            .join(", ");
+            .collect::<Vec<_>>();
+        c.tag = needles.join("|");
+        c.tag_regex = needles.len() > 1;
     }
     if r.chance(25) {
-        c.pid = ["101", "4242", "102 101"][r.below(3)].into();
+        c.pid = ["101", "4242", "^(?:102|101)$"][r.below(3)].into();
+        c.pid_regex = c.pid.starts_with('^');
     }
     if r.chance(20) {
         c.tid = ["7", "9000"][r.below(2)].into();
@@ -88,15 +90,10 @@ fn condition(r: &mut Rng) -> Condition {
     }
     c
 }
-/// The condition as a filter's own fields.
+/// The condition as a filter of its own.
 fn alone(c: &Condition) -> Filter {
     Filter::new(Filters {
-        levels: c.levels.clone(),
-        tag: c.tag.clone(),
-        pid: c.pid.clone(),
-        tid: c.tid.clone(),
-        time_from: c.time_from.clone(),
-        time_to: c.time_to.clone(),
+        include: vec![c.clone()],
         ..Filters::default()
     })
     .unwrap()
@@ -174,7 +171,7 @@ fn conditions_are_skipped_normalized_bounded_and_compared() {
     let f = |json: serde_json::Value| -> Filters { serde_json::from_value(json).unwrap() };
     // Conditions without criteria change nothing.
     let blank = Filter::new(f(
-        json!({"include":[{}, {"tag":" , "}],"exclude":[{}, {"pid":" "}]}),
+        json!({"include":[{}, {"tag":"  "}],"exclude":[{}, {"pid":" "}]}),
     ))
     .unwrap();
     assert!(blank.identity() && blank.only_levels() && blank.admits_unparsed());
@@ -200,14 +197,17 @@ fn conditions_are_skipped_normalized_bounded_and_compared() {
     .unwrap();
     assert_eq!(either.level_slots(), 1 << 3 | 1 << 4);
     // Conditions take their normal form.
-    let normal = Filter::new(f(json!({"include":[{"tag":" b ,a,b","pid":"2 1,2","levels":["W","E","W"],"timeFrom":" 12:00 "}]})))
+    let normal = Filter::new(f(json!({"include":[{"tag":" b a ","tagRegex":true,"pid":" 21 ","pidRegex":true,"apid":" nav ","ctidRegex":true,"message":"","messageRegex":true,"levels":["W","E","W"],"timeFrom":" 12:00 "}]})))
         .unwrap();
     assert_eq!(
         normal.fields.include[0],
         Condition {
             levels: vec!["E".into(), "W".into()],
-            tag: "b,a".into(),
-            pid: "2,1".into(),
+            tag: "b a".into(),
+            tag_regex: true,
+            pid: "21".into(),
+            pid_regex: true,
+            apid: "nav".into(),
             time_from: "12:00".into(),
             ..Condition::default()
         }
@@ -226,13 +226,15 @@ fn conditions_are_skipped_normalized_bounded_and_compared() {
         json!({"exclude":[{"tid":"x"}]}),
         json!({"include":[{"levels":["Q"]}]}),
         json!({"exclude":[{"timeFrom":"25:00"}]}),
-        json!({"include":[{"tag":(0..33).map(|i| format!("t{i}")).collect::<Vec<_>>().join(",")}]}),
+        json!({"include":[{"pid":"1,2"}]}),
+        json!({"include":[{"apid":"x".repeat(1001)}]}),
+        json!({"include":[{"apid":"(","apidRegex":true}]}),
         json!({"include":[{"tag":"x".repeat(4001)}]}),
     ] {
         assert!(Filter::new(f(bad.clone())).is_err(), "{bad}");
     }
     assert!(serde_json::from_value::<Filters>(json!({"include":[{"payload":"x"}]})).is_err());
-    // A hiding condition keeps a tag item with a line break: it matches no
+    // A hiding condition keeps a tag with a line break: it matches no
     // tag, so the condition hides nothing rather than every level.
     let broken = Filter::new(Filters {
         exclude: vec![Condition {

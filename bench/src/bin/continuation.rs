@@ -77,7 +77,7 @@ fn main() {
         ("logs", json!({"tag":"alertsservice"})),
         (
             "logs",
-            json!({"excludeTags":"alertsservice,androidruntime"}),
+            json!({"exclude":[{"tag":"alertsservice|androidruntime","tagRegex":true}]}),
         ),
         ("logs", json!({"pid":"3870"})),
         ("logs", json!({"timeFrom":"21:55:10","timeTo":"21:55:20"})),

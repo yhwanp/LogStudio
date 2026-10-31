@@ -191,11 +191,11 @@ fn workload_filters() -> Vec<Filters> {
             ..base()
         },
         Filters {
-            tag: "ecu2, ctx9".into(),
+            tag: "ecu2".into(),
             ..base()
         },
         Filters {
-            exclude_tags: "ctx3,AUD".into(),
+            exclude_tags: "AUD".into(),
             ..base()
         },
         Filters {

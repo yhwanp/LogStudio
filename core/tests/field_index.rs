@@ -185,7 +185,7 @@ fn filters() -> Vec<Filters> {
             serde_json::json!({"tag":"num"}),
             serde_json::json!({"tag":"a"}),
             serde_json::json!({"tag":"zzz-nothing"}),
-            serde_json::json!({"excludeTags":"activitymanager,wifi"}),
+            serde_json::json!({"exclude":[{"tag":"activitymanager|wifi","tagRegex":true}]}),
             serde_json::json!({"excludeTags":"alertsservice","includeRaw":false}),
             serde_json::json!({"excludeTags":"qqq-nothing"}),
             serde_json::json!({"excludeTags":"comp"}),
@@ -206,12 +206,12 @@ fn filters() -> Vec<Filters> {
             serde_json::json!({"tag":"rare","timeFrom":"12:07:10","timeTo":"12:07:40"}),
             serde_json::json!({"pid":"4242","query":"huge body line 59","caseSensitive":true}),
             serde_json::json!({"tid":"7","query":"c[12]\\.run","searchMode":"regex"}),
-            // Comma-separated lists accept any listed value.
-            serde_json::json!({"tag":"wifi, RareTag, zzz-nothing"}),
-            serde_json::json!({"pid":"101, 4242 9999"}),
-            serde_json::json!({"tid":"202,8","levels":["W","E"]}),
-            serde_json::json!({"tag":"activity,sdk","excludeTags":"activitymanager"}),
-            serde_json::json!({"pid":"101,103","query":"crash"}),
+            // A pattern accepts any of its alternatives.
+            serde_json::json!({"include":[{"tag":"wifi|RareTag|zzz-nothing","tagRegex":true}]}),
+            serde_json::json!({"include":[{"pid":"^(?:101|4242|9999)$","pidRegex":true}]}),
+            serde_json::json!({"include":[{"tid":"^(?:202|8)$","tidRegex":true,"levels":["W","E"]}]}),
+            serde_json::json!({"include":[{"tag":"activity|sdk","tagRegex":true}],"excludeTags":"activitymanager"}),
+            serde_json::json!({"include":[{"pid":"^(?:101|103)$","pidRegex":true}],"query":"crash"}),
             // Several conditions: tags or levels, hidden levels of a tag,
             // two fields, rare values, a query and a time range.
             serde_json::json!({"include":[{"tag":"activitymanager"},{"levels":["E","F"]}]}),
@@ -387,7 +387,7 @@ fn metadata_keeps_every_result() {
     for needle in [
         "tag: \"activitymanager\", exclude_tags: \"\"",
         "tag: \"RareTag\"",
-        "exclude_tags: \"activitymanager,wifi\"",
+        "exclude: [Condition { levels: [\"V\", \"D\", \"I\", \"W\", \"E\", \"F\", \"A\", \"U\"], tag: \"activitymanager|wifi\"",
         "pid: \"101\", tid: \"\", include: [], exclude: [], query: \"\"",
         "tid: \"9000\"",
         "tag: \"activity\", exclude_tags: \"activitymanager\"",
@@ -400,10 +400,10 @@ fn metadata_keeps_every_result() {
     assert!(n > 0 && n < blocks, "{n}/{blocks}");
     // Several conditions over levels and one field decide every block.
     for needle in [
-        "tag: \"activitymanager\", pid: \"\", tid: \"\", time_from: \"\", time_to: \"\", message: \"\", message_regex: false }, Condition { levels: [\"E\", \"F\"]",
+        "tag: \"activitymanager\", tag_regex: false, pid: \"\", pid_regex: false, tid: \"\", tid_regex: false, ecu: \"\", ecu_regex: false, apid: \"\", apid_regex: false, ctid: \"\", ctid_regex: false, time_from: \"\", time_to: \"\", message: \"\", message_regex: false }, Condition { levels: [\"E\", \"F\"]",
         "exclude: [Condition { levels: [\"V\", \"D\", \"I\"], tag: \"activitymanager\"",
         "exclude: [Condition { levels: [\"E\"], tag: \"wifi\"",
-        "tag: \"RareTag\", pid: \"\", tid: \"\", time_from: \"\", time_to: \"\", message: \"\", message_regex: false }, Condition",
+        "tag: \"RareTag\", tag_regex: false, pid: \"\", pid_regex: false, tid: \"\", tid_regex: false, ecu: \"\", ecu_regex: false, apid: \"\", apid_regex: false, ctid: \"\", ctid_regex: false, time_from: \"\", time_to: \"\", message: \"\", message_regex: false }, Condition",
         "include: [Condition { levels: [], tag",
     ] {
         let (n, blocks) = by(&usage, needle);
@@ -411,7 +411,7 @@ fn metadata_keeps_every_result() {
     }
     // Two fields cannot be counted together, but blocks where no showing
     // condition can match are skipped.
-    let (n, blocks) = by(&usage, "tag: \"sdk\", pid");
+    let (n, blocks) = by(&usage, "tag: \"sdk\", tag_regex: false, pid");
     assert!(n < blocks, "{n}/{blocks}");
     d.close();
 }

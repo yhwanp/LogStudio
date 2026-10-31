@@ -1,7 +1,8 @@
 import {handleLogPaste, isEditableTarget, FILE_PASTE_FALLBACK} from './clipboard.js';
 import {mountPasteConfirm, createPasteFlow, replacesLog, describeClosing} from './paste-confirm.js';
 import {makeDemo} from './demo.js';
-import {LEVELS, validateFilters, isTimeBound, isEmptyTimeRange, idListError, tagListError, tagList, idList, emptyCondition, isEmptyCondition, normalizeFilters, coreFilters, withoutConditions, conditionsWithoutRows, MAX_CONDITIONS, MESSAGE_PATTERN_ERROR} from './filter-model.js';
+import {LEVELS, REGEX_FIELDS, regexKey, validateFilters, isTimeBound, isEmptyTimeRange, numberError, commaHint, patternField, patternOfList, conditionFault, emptyCondition, isEmptyCondition, normalizeFilters, coreFilters, withoutConditions, conditionsWithoutRows, MAX_CONDITIONS} from './filter-model.js';
+import {mountFilterEditor} from './filter-editor.js';
 import {mountLogLayout, widestLine} from './layout.js';
 import {createContinuousViewport, ROW_HEIGHT} from './continuous-view.js';
 import {selectOne, selectAll, extendTo, toggleRow, selectedRanges, selectedCount, inRanges} from './row-selection.js';
@@ -78,7 +79,7 @@ function fieldSpan(document, entry, value, className) {
 export function mountLargeLogView(native, {transport, tips=null, document=globalThis.document, window=globalThis.window}) {
   const $ = id => document.getElementById(id);
   $('largeLogPanel').hidden=false;
-  const ids = ['largeName','largeStatus','largeStatusNote','largeError','largeCount','largeTotal','largeRows','largeViewport','largeFirst','largeLast','largeJump','largeJumpForm','largeCancel','largeClose','largeColumns','largeRaw','largeHeaders','largeRange','largeDetail','largeDetailTitle','largeDetailText','largeDetailPrevious','largeDetailNext','largeDetailClose','levelFilters','allLevels','errorLevels','resetFilters','searchInput','tagFilter','pidFilter','tidFilter','caseSensitive','includeRaw','recognizeLineNumbers','logsCount','logsRows','logsViewport','logsHeaders','logsFirst','logsLast','logsJump','logsJumpForm','logsRange','largeSearchPane','filterBadge','activeFilters','filtersSwitch','filtersOn','filtersOffNote','filtersOffHint','filterRow','logsSelection','largeSelection','toast','largeDetailCopy','largeDetailMore','largeDetailHint','toggleFilters','emptyState','logContent','loadProgress','loadProgressBar','paneSplitter','idFilterError','tagFilterError','searchError','dropHint','filterPanel','largeRegex','rowMenu','largeSize','exportLogs','exportSearch','exportCancel','recentFiles','recentList','clearRecent','recentButton','timeFrom','timeTo','timeFilterError','lowerTabs','searchTab','bookmarkTab','bookmarkPane','bookmarkCount','bookmarkList','copyBookmarks','clearBookmarks','searchPosition','logsPending','reopenFile','errorBar','errorReopen','followFile','messageFilter','messageRegex','messageFilterError','messageLabel'];
+  const ids = ['largeName','largeStatus','largeStatusNote','largeError','largeCount','largeTotal','largeRows','largeViewport','largeFirst','largeLast','largeJump','largeJumpForm','largeCancel','largeClose','largeColumns','largeRaw','largeHeaders','largeRange','largeDetail','largeDetailTitle','largeDetailText','largeDetailPrevious','largeDetailNext','largeDetailClose','levelFilters','allLevels','errorLevels','resetFilters','searchInput','caseSensitive','includeRaw','recognizeLineNumbers','logsCount','logsRows','logsViewport','logsHeaders','logsFirst','logsLast','logsJump','logsJumpForm','logsRange','largeSearchPane','filterBadge','activeFilters','filtersSwitch','filtersOn','filtersOffNote','filtersOffHint','filterRow','logsSelection','largeSelection','toast','largeDetailCopy','largeDetailMore','largeDetailHint','toggleFilters','emptyState','logContent','loadProgress','loadProgressBar','paneSplitter','searchError','dropHint','filterPanel','largeRegex','rowMenu','largeSize','exportLogs','exportSearch','exportCancel','recentFiles','recentList','clearRecent','recentButton','timeFrom','timeTo','timeFilterError','lowerTabs','searchTab','bookmarkTab','bookmarkPane','bookmarkCount','bookmarkList','copyBookmarks','clearBookmarks','searchPosition','logsPending','reopenFile','errorBar','errorReopen','followFile',];
   for (const id of ['extrasButton','deviceButton','emptyDevice','captureBar','captureState','captureText','captureHint','captureClear','captureClearHint','captureApp','captureAppStatus','captureStop','captureStopName','captureStopOther','captureStopHint','captureSave','captureLeftovers','leftoverList','openFile']) ids.push(id);
   const ui = Object.fromEntries(ids.map(id => [id,$(id)]));
   // Device captures (devices.js) mount once the menu and toasts exist.
@@ -88,7 +89,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
   // The layout reports its first render before the controllers exist.
   let ready=false;
   // First-use tips are offered where their feature comes into reach.
-  const layout = mountLogLayout({document, window, onPanelChange:shown=>{if(!ready)return;errors();if(shown)tips?.offer('levels',{hold:value=>layout.hold(value)});}});
+  const layout = mountLogLayout({document, window, onPanelChange:()=>{if(ready)errors();}});
   const regexInput=ui.largeRegex;
   let inputError='', pageGone=false, savedInput=null;
   let pendingSourceId=null, lastSourceId=0, sourceEventSequence=0, pickerSequence=0, pickerPending=false;
@@ -110,8 +111,13 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
   let detailRender = null;
   // Saved filters, mounted once the work saver exists.
   let saved = null;
+  let editor = null;
+  // The chips' buttons by condition and field, and the chip that opened the
+  // editor, to take focus back when it closes.
+  let chipButtons=new Map(),editorChip=null;
+  const editorOpen=()=>editor?.isOpen()===true;
   // The filter's conditions; the one being edited is in the panel's level,
-  // tag, ID and time fields, and the cards show the others.
+  // tag, ID and time fields, and the list shows the others.
   let conds={include:[emptyCondition()],exclude:[]},active={list:'include',index:0},conditionView=null;
   // The open log's format: its columns, level names and filter fields.
   let shownFormat = 'text', levelKey = 'text';
@@ -202,33 +208,44 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     if(after&&end)text.extend(end,end.childNodes.length);else text.extend(row,0);
   });
   const activeCondition=()=>conds[active.list][active.index];
-  // Whether the editor's message is a pattern (its .* switch).
-  let messageRegex=false;
-  function syncEditor(){const c=activeCondition();if(!c)return;c.levels=LEVELS.filter(level=>selectedLevels.has(level));c.tag=ui.tagFilter.value;c.pid=ui.pidFilter.value;c.tid=ui.tidFilter.value;c.timeFrom=ui.timeFrom.value;c.timeTo=ui.timeTo.value;c.message=ui.messageFilter.value;c.messageRegex=messageRegex;}
-  function loadEditor(){const c=activeCondition();selectedLevels=new Set(c.levels);ui.tagFilter.value=c.tag;ui.pidFilter.value=c.pid;ui.tidFilter.value=c.tid;ui.timeFrom.value=c.timeFrom;ui.timeTo.value=c.timeTo;ui.messageFilter.value=c.message??'';messageRegex=c.messageRegex===true;ui.messageRegex.setAttribute('aria-pressed',String(messageRegex));updateLevels();showOptionalFields();}
-  // The message, PID·TID and the time range show for a condition that uses
-  // them; otherwise a + button opens them. Once shown they stay while that
-  // condition is edited, so clearing a field never moves the editor under the
-  // cursor. A DLT log has no PID or TID.
-  const optionalFields=[{group:$('messageFields'),opener:$('openMessage'),inputs:[ui.messageFilter],available:()=>true},{group:$('idFields'),opener:$('openIds'),inputs:[ui.pidFilter,ui.tidFilter],available:()=>shownFormat!=='dlt'},{group:$('timeFields'),opener:$('openTime'),inputs:[ui.timeFrom,ui.timeTo],available:()=>true}];
-  let openedFields=null;
-  const openedGroups=()=>{const c=activeCondition();if(openedFields?.condition!==c)openedFields={condition:c,groups:new Set()};return openedFields.groups;};
-  function showOptionalFields(){
-    const groups=openedGroups();
-    for(const field of optionalFields){
-      const available=field.available(),shown=available&&(groups.has(field)||field.inputs.some(input=>input.value));
-      if(shown)groups.add(field);
-      field.group.hidden=!shown;field.opener.hidden=!available||shown;
+  // The editor's value fields, each with its pattern switch.
+  const fields=REGEX_FIELDS.map(key=>({key,row:$(`${key}Row`),input:$(`${key}Filter`),regex:$(`${key}Regex`),hint:$(`${key}FilterHint`),error:$(`${key}FilterError`)}));
+  const fieldOf=key=>fields.find(f=>f.key===key);
+  for(const f of fields)f.regex.setAttribute('aria-keyshortcuts','Alt+R');
+  // A field's note, and the button that makes its list a pattern.
+  for(const f of fields){
+    f.note=textSpan(document,'','hint-text');f.convert=document.createElement('button');f.convert.type='button';f.convert.className='text-button';f.convert.textContent='정규식으로 바꾸기';
+    f.hint.replaceChildren(f.note,f.convert);
+    f.convert.addEventListener('click',()=>{const value=patternOfList(f.key,f.input.value);if(!value)return;f.input.value=value;f.regex.checked=true;syncEditor();showHints();edited(f.input);f.input.focus();});
+  }
+  function syncEditor(){const c=activeCondition();if(!c)return;c.levels=LEVELS.filter(level=>selectedLevels.has(level));for(const f of fields){c[f.key]=f.input.value;c[regexKey(f.key)]=f.regex.checked;}c.timeFrom=ui.timeFrom.value;c.timeTo=ui.timeTo.value;}
+  function loadEditor(){const c=activeCondition();selectedLevels=new Set(c.levels);for(const f of fields){f.input.value=c[f.key]??'';f.regex.checked=c[regexKey(f.key)]===true;}ui.timeFrom.value=c.timeFrom;ui.timeTo.value=c.timeTo;updateLevels();showFields();showHeading();}
+  // The fields of the log's format. A DLT condition's tag looks in every ID:
+  // only filters saved before the IDs had their own fields have one.
+  function showFields(){
+    const dlt=shownFormat==='dlt';
+    for(const f of fields)f.row.hidden=['ecu','apid','ctid'].includes(f.key)?!dlt:['pid','tid'].includes(f.key)?dlt:f.key==='tag'&&dlt&&!f.input.value;
+    const hide=active.list==='exclude';
+    for(const [id,on] of [['kindShow',!hide],['kindHide',hide]]){$(id).setAttribute('aria-checked',String(on));$(id).tabIndex=on?0:-1;}
+    // A hiding condition hides the levels pressed, so its presets say so.
+    ui.allLevels.textContent=hide?'선택 해제':'전체 선택';ui.errorLevels.textContent=hide?'Debug 이하':'Warn 이상';
+    $('levelHint').textContent=hide?'누른 레벨을 숨깁니다 · Alt+클릭: 그 레벨만':'Alt+클릭: 그 레벨만';
+    showHints();
+  }
+  // A list typed where one value goes: a comma in a tag or an ID is text,
+  // which someone used to lists is told, and a PID or TID says so as an error.
+  // Either way one click makes it the pattern it meant.
+  function showHints(){
+    for(const f of fields){
+      if(f.key==='message')continue;
+      const list=!f.regex.checked&&!!patternOfList(f.key,f.input.value),text=f.key==='pid'||f.key==='tid'?'':commaHint(f.input.value,f.regex.checked);
+      if(f.note.textContent!==text)f.note.textContent=text;f.convert.hidden=!list;f.hint.hidden=!list&&!text;
     }
-    $('fieldOpeners').hidden=optionalFields.every(field=>field.opener.hidden);
   }
-  for(const field of optionalFields){
-    field.opener.addEventListener('click',()=>{openedGroups().add(field);showOptionalFields();field.inputs[0].focus();});
-    for(const input of field.inputs)input.addEventListener('input',showOptionalFields);
-  }
+  function showHeading(){editor?.setHeading(isEmptyCondition(activeCondition())?'새 조건':'조건 편집');}
   const readFilters=()=>{syncEditor();const copy=c=>({...c,levels:[...c.levels]});return {include:conds.include.map(copy),exclude:conds.exclude.map(copy),query:ui.searchInput.value,caseSensitive:ui.caseSensitive.checked,includeRaw:ui.includeRaw.checked,recognizeLineNumbers:ui.recognizeLineNumbers.value==='off'?false:ui.recognizeLineNumbers.value==='on'?true:null,searchMode:regexInput.checked?'regex':'literal'};};
   // Only a complete summary proves a level absent; such chips are dimmed but stay usable.
-  function updateLevels(summary=logs.getState().summary,complete=logs.getState().summaryComplete) {const LEVEL_NAMES=levelNames(shownFormat);for(const button of ui.levelFilters.children){const level=button.dataset.level;button.setAttribute('aria-pressed',String(selectedLevels.has(level)));button.querySelector('.count').textContent=`${formatNumber(summary?.counts?.[level])}${summary&&!complete?'+':''}`;button.dataset.empty=String(!!summary&&!!complete&&!summary.counts?.[level]);button.title=`${LEVEL_NAMES[level]} · ${complete?'전체 파일의 레벨별 행 수':'지금까지 분석한 행 수'} · Alt+클릭: 이 레벨만`;}}
+  function updateLevels(summary=logs.getState().summary,complete=logs.getState().summaryComplete) {const LEVEL_NAMES=levelNames(shownFormat);for(const button of ui.levelFilters.children){const level=button.dataset.level,unset=active.list==='exclude'&&selectedLevels.size===LEVELS.length;button.setAttribute('aria-pressed',String(!unset&&selectedLevels.has(level)));button.querySelector('.count').textContent=`${formatNumber(summary?.counts?.[level])}${summary&&!complete?'+':''}`;button.dataset.empty=String(!!summary&&!!complete&&!summary.counts?.[level]);button.title=`${LEVEL_NAMES[level]} · ${complete?'전체 파일의 레벨별 행 수':'지금까지 분석한 행 수'} · Alt+클릭: 이 레벨만`;}}
   function updateInputCancellation(state=logs.getState()) {
     const validating=pendingSourceId!==null&&(state.datasetId!==pendingSourceId||!state.textComplete);
     $('cancelInput').hidden=!pickerPending&&!validating;
@@ -667,33 +684,34 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
   const SOURCE_CHANGES=new Set(['Source changed; reopen the file','Source truncated']);
   function errors(){
     const lower=search.getState(),upper=logs.getState();
-    const [pidMessage,tidMessage,tagMessage]=[[idListError,ui.pidFilter],[idListError,ui.tidFilter],[tagListError,ui.tagFilter]].map(([check,input])=>validationError?check(input.value):'');
+    const [pidMessage,tidMessage]=['pid','tid'].map(key=>validationError&&!fieldOf(key).regex.checked?numberError(fieldOf(key).input.value):'');
     const fromBad=validationError&&!isTimeBound(ui.timeFrom.value),toBad=validationError&&!isTimeBound(ui.timeTo.value);
-    const idMessage=pidMessage||tidMessage,listMessage=tagMessage;
     // A well-formed but inverted dated range is applied; it just matches nothing.
     const timeMessage=fromBad||toBad?'시간은 06-18 19:24:05.123처럼 로그와 같은 형식으로, 앞에서부터 입력해 주세요.':isEmptyTimeRange(ui.timeFrom.value,ui.timeTo.value)?'끝 시각이 시작 시각보다 앞서 일치하는 행이 없습니다. 연도 없는 날짜 범위는 해를 넘기지 않습니다.':'';
-    // A message pattern only the engine can check: the upper logs keep the
-    // last conditions it accepted. The editor shows why while it edits a
-    // condition with a pattern; otherwise the banner does.
-    const patternOf=value=>String(value??'').startsWith(MESSAGE_PATTERN_ERROR)?value:'';
-    const pattern=upper.rejected||patternOf(!upper.closed&&upper.error)||patternOf(!lower.closed&&lower.error);
-    const editing=activeCondition(),inField=!!pattern&&ui.filterPanel.inert!==true&&(upper.rejected?badPattern(editing):!!editing?.message&&editing.messageRegex===true);
+    // A pattern only the engine can check: the upper logs keep the last
+    // conditions it accepted. The editor shows why while it edits a condition
+    // with that pattern; otherwise the banner does.
+    const patternOf=value=>patternField(value)?value:'';
+    const pattern=upper.rejected||patternOf(!upper.closed&&upper.error)||patternOf(!lower.closed&&lower.error),patternKey=patternField(pattern);
+    const editing=activeCondition(),inField=!!pattern&&editorOpen()&&(upper.rejected?badPattern(editing):!!editing?.[patternKey]&&editing[regexKey(patternKey)]===true);
     // A pattern is explained once typing pauses, not at its first "(".
     const patternMessage=inField&&!patternHeld?describeLogError(pattern,shownFormat):'';
-    ui.messageFilterError.textContent=patternMessage;ui.messageFilterError.hidden=!patternMessage;ui.messageFilter.setAttribute('aria-invalid',String(!!patternMessage));
+    for(const f of fields){
+      const message=f.key===patternKey?patternMessage:f.key==='pid'?pidMessage:f.key==='tid'?tidMessage:'';
+      // Unchanged text stays, so an alert is not spoken again at every render.
+      if(f.error.textContent!==message)f.error.textContent=message;f.error.hidden=!message;f.input.setAttribute('aria-invalid',String(!!message));
+    }
     // Invalid field input leaves the upper logs on the last applied conditions.
     const stale=(validationError||!!upper.rejected)&&!disposed;ui.logsPending.hidden=!stale;ui.logsPending.textContent=stale?'입력한 조건 미적용 · 이전 조건 결과':'';syncFilterRow();
-    ui.idFilterError.textContent=idMessage;ui.idFilterError.hidden=!idMessage;
-    ui.tagFilterError.textContent=listMessage;ui.tagFilterError.hidden=!listMessage;
     ui.timeFilterError.textContent=timeMessage;ui.timeFilterError.hidden=!timeMessage;
-    for(const [input,bad] of [[ui.pidFilter,pidMessage],[ui.tidFilter,tidMessage],[ui.tagFilter,tagMessage],[ui.timeFrom,fromBad],[ui.timeTo,toBad]])input.setAttribute('aria-invalid',String(!!bad));
+    for(const [input,bad] of [[ui.timeFrom,fromBad],[ui.timeTo,toBad]])input.setAttribute('aria-invalid',String(!!bad));
     const lowerError=!lower.closed&&lower.error||'',regexError=lowerError.startsWith(REGEX_ERROR)?describeLogError(lowerError):'';
     ui.searchError.textContent=regexError;ui.searchError.hidden=!regexError;ui.searchInput.setAttribute('aria-invalid',String(!!regexError));
-    const fieldMessage=idMessage||listMessage||timeMessage;
+    const fieldMessage=pidMessage||tidMessage||timeMessage;
     const followMessage=!upper.closed&&upper.followError?describeFollowError(upper.followError):'';
     // The capture bar only says a capture stopped; the bar here says why.
     const captureMessage=!upper.closed&&upper.capture?.state==='failed'?upper.capture.error:'';
-    const raw=inputError||(fieldMessage&&ui.filterPanel.inert===true?fieldMessage:'')||(pattern&&!inField?describeLogError(pattern,shownFormat):'')||(regexError||patternOf(lowerError)?'':lowerError)||(!upper.closed&&!patternOf(upper.error)&&upper.error)||followMessage||captureMessage||'';
+    const raw=inputError||(fieldMessage&&!editorOpen()?fieldMessage:'')||(pattern&&!inField?describeLogError(pattern,shownFormat):'')||(regexError||patternOf(lowerError)?'':lowerError)||(!upper.closed&&!patternOf(upper.error)&&upper.error)||followMessage||captureMessage||'';
     const message=describeLogError(raw);ui.largeError.textContent=message;ui.largeError.hidden=!message;ui.errorBar.hidden=!message;
     // A changed file is one action away from being read again with its work.
     ui.errorReopen.hidden=!(SOURCE_CHANGES.has(raw)&&canReopen(upper));
@@ -720,7 +738,9 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     ui.largeName.textContent=hasFile?state.name:'열린 파일 없음';
     const files=hasFile&&state.files?.length>1?state.files:null;layout.setMultiFile(!!files);if(hasFile){applyLevelNames(state.ios===true||state.capture?.platform==='ios');applyFormat(state.format);}if(hasFile)layout.fitLines(widestLine(state));
     ui.largeName.title=!hasFile?'':files?`${files.length}개 파일을 이 순서로 합쳤습니다\n${files.map((file,i)=>`${i+1}. ${file.name} · ${formatSize(file.size)}`).join('\n')}\n합계 ${formatSize(state.size)}`:`${state.name}\n${formatSize(state.size)}`;ui.largeSize.textContent=hasFile&&state.size>0?formatSize(state.size):'';
-    const p=describeLargeProgress(state,{omitDuplicateFileCount:true});ui.logsCount.textContent=`로그 · ${p.count}`;
+    const p=describeLargeProgress(state,{omitDuplicateFileCount:true});ui.logsCount.textContent=`로그 · ${state.fieldFiltering?p.count.replace(/^전체/,'결과'):p.count}`;
+    // Someone editing hears what the condition did once it settles.
+    const told=editorOpen()&&p.exact?`결과 ${formatNumber(state.count)}건`:'';if(told&&$('filterResultNote').textContent!==told)$('filterResultNote').textContent=told;
     // Only a message is news; with rows, the viewport reports the range.
     showRange('logs',logs,p.range.replaceAll('검색 결과','필터 결과'),!!p.range);
     ui.logsLast.textContent=p.exact?'끝':'현재 끝';if(ui.largeStatus.textContent!==p.status)ui.largeStatus.textContent=p.status;if(ui.largeStatusNote.textContent!==p.note)ui.largeStatusNote.textContent=p.note;updateLevels(state.summary,state.summaryComplete);
@@ -856,14 +876,18 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
       const key=filters.query?searchOf(filters):null;
       if(key)void search.setFilters(used,{place:key===searchKey?placeOf('large',search):null});else {search.invalidateQuery();renderSearch(search.getState());}
       searchKey=key;
-    }catch{validationError=true;inputPending=true;conditionView?.refresh(conds,active,shownFormat);renderSearch(search.getState());}
+    }catch{validationError=true;inputPending=true;conditionView?.refresh(conds,active,shownFormat);renderFilterSummary();renderSearch(search.getState());}
   }
   function setFiltersOff(off){
+    // An edit still waiting for its pause goes first, or it would undo this.
+    if(debounce!==null)apply();
     if(disposed||off===filtersOff){showFiltersOff();return;}
     // A condition that cannot apply keeps the filter off and says where.
     if(!off)try{validateFilters(readFilters());}catch{
       validationError=true;showFiltersOff();errors();
-      layout.openPanel();notify('조건에 오류가 있어 필터를 켜지 못했습니다.');return;
+      const list=['include','exclude'].find(name=>conds[name].some(conditionFault));
+      if(list){const index=conds[list].findIndex(conditionFault);editCondition(list,index,conditionFault(conds[list][index]).key);}
+      notify('조건에 오류가 있어 필터를 켜지 못했습니다.');return;
     }
     if(off)offConditions=currentFilters();
     if(!toastAction)closeNote();
@@ -930,53 +954,39 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     window.addEventListener('blur',done);
   }
   const quote=text=>text.length>24?`${text.slice(0,24)}…`:text;
-  function addShowing(values){
+  // With `edit`, the editor opens on the condition, as DLT Viewer's Filter Add
+  // does, and takes it away if the toast undoes it.
+  function addShowing(values,{edit=false}={}){
     syncEditor();
+    // The same condition again changes nothing: the editor opens on it.
+    const alone=c=>({include:[c],exclude:[]}),same=conds.include.findIndex(c=>c.enabled!==false&&sameFields(alone(c),alone({...emptyCondition(),...values})));
+    if(same>=0){if(edit)editCondition('include',same);else notify('같은 보기 조건이 이미 있습니다.');return;}
     const others=conds.include.some(c=>c.enabled!==false&&!isEmptyCondition(c));
     const blank=conds.include.findIndex(c=>c.enabled!==false&&isEmptyCondition(c));
     let c;
     if(blank<0){if(!addCondition('include',values))return;c=conds.include.at(-1);}
     else{c=conds.include[blank];Object.assign(c,values);active={list:'include',index:blank};loadEditor();buildConditions();}
     apply();
+    if(edit)openEditor();
     const summary=conditionSummary(c,shownFormat);
     offerUndo(`보기 조건을 추가했습니다 · ${summary}${others?' · 기존 보기 조건과 이 조건 중 하나라도 맞으면 보입니다':''}`,()=>{
-      syncEditor();const i=conds.include.indexOf(c);if(i<0)return;
+      syncEditor();if(edit&&activeCondition()===c)editor.close({focus:false});
+      const i=conds.include.indexOf(c);if(i<0)return;
       if(blank<0){removeCondition('include',i);return;}
       Object.assign(c,emptyCondition());loadEditor();buildConditions();apply();
     });
   }
-  // An excluded tag joins the first enabled hiding condition of tags only,
-  // or starts one; the toast says which, and undoes it.
-  function addExcludedTag(tag){
+  // A hidden value is a hiding condition of its own, unless it is already
+  // hidden; the toast undoes it.
+  function addExcluded(values){
     syncEditor();
-    const target=conds.exclude.find(c=>c.enabled!==false&&LEVELS.every(level=>c.levels.includes(level))&&!idList(c.pid).length&&!idList(c.tid).length&&!c.timeFrom.trim()&&!c.timeTo.trim());
-    if(target){
-      const before=target.tag,list=tagList(before);
-      if(list.some(item=>item.toLowerCase()===tag.toLowerCase()))return;
-      list.push(tag);target.tag=list.join(', ');
-      loadEditor();buildConditions();apply();
-      offerUndo(`제외 조건을 수정했습니다 · ${conditionSummary(target,shownFormat)}`,()=>{
-        syncEditor();if(!conds.exclude.includes(target))return;
-        target.tag=before;loadEditor();buildConditions();apply();
-      });
-      return;
-    }
-    if(!addCondition('exclude',{tag},{select:false}))return;
-    const c=conds.exclude.at(-1);
+    const c={...emptyCondition(),...values},alone=item=>({include:[],exclude:[item]});
+    if(conds.exclude.some(item=>item.enabled!==false&&sameFields(alone(item),alone(c))))return;
+    if(!addCondition('exclude',values,{select:false}))return;
+    const added=conds.exclude.at(-1);
     loadEditor();buildConditions();apply();
-    offerUndo(`제외 조건을 추가했습니다 · ${conditionSummary(c,shownFormat)}`,()=>{
-      syncEditor();const i=conds.exclude.indexOf(c);if(i>=0)removeCondition('exclude',i);
-    });
-  }
-  // A hidden message is a hiding condition of its own; the toast undoes it.
-  function addExcludedMessage(message){
-    syncEditor();
-    if(conds.exclude.some(c=>c.enabled!==false&&c.message===message&&!c.messageRegex&&isEmptyCondition({...c,message:''})))return;
-    if(!addCondition('exclude',{message},{select:false}))return;
-    const c=conds.exclude.at(-1);
-    loadEditor();buildConditions();apply();
-    offerUndo(`제외 조건을 추가했습니다 · ${conditionSummary(c,shownFormat)}`,()=>{
-      syncEditor();const i=conds.exclude.indexOf(c);if(i>=0)removeCondition('exclude',i);
+    offerUndo(`제외 조건을 추가했습니다 · ${conditionSummary(added,shownFormat,true)}`,()=>{
+      syncEditor();const i=conds.exclude.indexOf(added);if(i>=0)removeCondition('exclude',i);
     });
   }
   function copyFromPane(prefix){
@@ -1027,20 +1037,22 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
   // the row's message, or else the whole message.
   function conditionItems(entry,picked=''){
     if(entry.kind!=='parsed')return [];
-    // A DLT row's tags are its ECU, APID and CTID, named as such.
-    const tags=entry.dlt?DLT_IDS.map(([key,label])=>[label,entry.dlt[key]]):(Array.isArray(entry.tags)&&entry.tags.length?entry.tags:[entry.tag]).map(tag=>['태그',tag]);
-    const named=tags.filter(([,tag])=>typeof tag==='string'&&tag.trim()).slice(0,3);
+    // A DLT row's IDs go into the condition together; a text log's tags one
+    // at a time.
+    const ids=entry.dlt?DLT_IDS.map(([key,label])=>[key,label,entry.dlt[key]]):(Array.isArray(entry.tags)&&entry.tags.length?entry.tags:[entry.tag]).map(tag=>['tag','태그',tag]);
+    const named=ids.filter(([,,value])=>typeof value==='string'&&value.trim()).slice(0,3);
     // Showing conditions combine with 또는, so with another one in use an
     // added condition shows more rows, not fewer.
     syncEditor();
-    const note=conds.include.some(c=>c.enabled!==false&&!isEmptyCondition(c))?'지금 보기 조건에 더해, 이 값에 맞는 줄도 보입니다':'이 값에 맞는 줄만 보입니다';
+    const note=conds.include.some(c=>c.enabled!==false&&!isEmptyCondition(c))?'기존 보기 조건에 더해, 이 조건에 맞는 줄도 함께 보여 줍니다':'이 조건에 맞는 줄만 보여 줍니다';
+    const values=Object.fromEntries(entry.dlt?named.map(([key,,value])=>[key,value]):named.slice(0,1).map(([key,,value])=>[key,value]));
     // One group per field, separated, so the menu reads by field.
-    const groups=[named.flatMap(([label,tag])=>[[`${label} '${quote(tag)}' 보기 조건 추가`,()=>addShowing({tag}),note],[`${label} '${quote(tag)}' 제외`,()=>addExcludedTag(tag),'이 값에 맞는 줄을 숨깁니다']])];
+    const groups=[named.length?[['이 행으로 조건 추가…',()=>addShowing(values,{edit:true}),`${entry.dlt?'이 행의 ECU·APID·CTID':'이 행의 태그'}로 조건을 만들고 편집창을 엽니다`]]:[],named.flatMap(([key,label,value])=>[...(entry.dlt?[]:[[`${label} '${quote(value)}' 보기 조건 추가`,()=>addShowing({[key]:value}),note]]),[`${label} '${quote(value)}' 제외`,()=>addExcluded({[key]:value}),'이 조건에 맞는 줄을 숨깁니다']])];
     const whole=String(entry.message??''),part=picked.trim(),chosen=part&&whole.includes(part),message=(chosen?part:whole.trim()).slice(0,1000),field=entry.dlt?'페이로드':'메시지';
     // Without text selected in the row the whole message is taken; the
     // tooltip says how to take part of it.
     const partly=chosen?'':' · 일부만 쓰려면 텍스트를 선택해 우클릭';
-    if(message)groups.push([[`${field} '${quote(message)}' 보기 조건 추가`,()=>addShowing({message}),note+partly],[`${field} '${quote(message)}' 제외`,()=>addExcludedMessage(message),`이 내용이 들어 있는 줄을 숨깁니다${partly}`]]);
+    if(message)groups.push([[`${field} '${quote(message)}' 보기 조건 추가`,()=>addShowing({message}),note+partly],[`${field} '${quote(message)}' 제외`,()=>addExcluded({message}),`이 내용이 들어 있는 줄을 숨깁니다${partly}`]]);
     groups.push([['pid','PID'],['tid','TID']].filter(([key])=>/^\d+$/.test(String(entry[key]??''))).map(([key,label])=>[`${label} ${entry[key]} 보기 조건 추가`,()=>addShowing({[key]:String(entry[key])}),note]));
     const stamp=[entry.date,entry.time].filter(Boolean).join(' ');
     if(isTimeBound(stamp)&&stamp)groups.push([[`${stamp}부터 보기 조건 추가`,()=>addShowing({timeFrom:stamp}),note],[`${stamp}까지 보기 조건 추가`,()=>addShowing({timeTo:stamp}),note]]);
@@ -1098,10 +1110,11 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
   const bookmarks=createBookmarks({ui,document,window,notify,mod:MOD,logs,lineCell,onReveal:showBookmark,offerUndo:undoBookmarks,openMenu:openBookmarkMenu,onUserMove:()=>menu.moved(),isRawMode:()=>rawMode,onChange:()=>{repaintRows();saver.schedule();},onCount:count=>{bookmarkCount=count;updateLowerPane();if(count)tips?.offer('bookmarks');}});
   const saver=createWorkSaver({invoke:(command,args)=>native.core.invoke(command,args),capture:captureWork,setTimer:(fn,ms)=>window.setTimeout(fn,ms),clearTimer:id=>window.clearTimeout(id)});
   saved=mountSavedFilters({native,menu,notify,document,read:()=>({...fieldsOf(currentFilters()),off:filtersOff}),write:writeFields,changed:()=>saver.schedule(),format:()=>shownFormat,isGone:()=>pageGone,filterOff:()=>filtersOff});
-  conditionView=mountConditions({document,lists:{include:$('showList'),exclude:$('hideList')},hints:{include:$('showHint'),exclude:$('hideHint')},adders:{include:$('addShow'),exclude:$('addHide')},editor:$('condEditor'),rowless:()=>rowless(),problem:rejectedProblem,filterOff:()=>filtersOff,
-    onSelect:(list,index)=>{selectCondition(list,index);ui.tagFilter.focus();},onToggle:toggleCondition,onRemove:dropCondition,
-    onAdd:list=>{if(addCondition(list)){ui.tagFilter.focus();apply();}}});
-  buildConditions();showOptionalFields();
+  editor=mountFilterEditor({document,window,layout,onClose:editorClosed});
+  conditionView=mountConditions({document,list:$('conditionList'),empty:$('conditionsEmpty'),tools:{add:$('addCondition'),duplicate:$('duplicateCondition'),remove:$('removeCondition')},editing:editorOpen,rowless:()=>rowless(),problem:rejectedProblem,filterOff:()=>filtersOff,
+    onSelect:editCondition,onToggle:toggleCondition,onAdd:newCondition,onDuplicate:duplicateCondition,
+    onRemove:()=>{dropCondition(active.list,active.index);(conditionView.summaryOf(active.list,active.index)??$('addCondition')).focus();}});
+  buildConditions();showFields();showFormatText(false);
   // A removal undone brings back the bookmarks tab it was made from.
   function undoBookmarks(message,undo){
     const shown=lowerTab==='bookmarks';
@@ -1161,55 +1174,78 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
   }
   // A DLT file filters by ECU, APID and CTID through the tag fields and has
   // no PID, TID, Assert level or numbered rows; text logs keep their fields.
+  function showFormatText(dlt){
+    $('tagLabel').textContent=dlt?'모든 ID':'태그';
+    // A DLT row's message is its payload, named as DLT tools name it.
+    $('messageLabel').textContent=dlt?'페이로드':'메시지';
+    fieldOf('tag').regex.setAttribute('aria-label',dlt?'모든 ID 정규식':'태그 정규식');fieldOf('message').regex.setAttribute('aria-label',dlt?'페이로드 정규식':'메시지 정규식');
+    fieldOf('message').input.title=dlt?'페이로드에 입력한 문자열이 들어 있으면 조건에 맞습니다 · 대소문자 무시':'메시지에 입력한 문자열이 들어 있으면 조건에 맞습니다 · 대소문자 무시';
+    fieldOf('tag').input.title=dlt?'ECU·APID·CTID 중 하나에 입력한 문자열이 들어 있으면 조건에 맞습니다 · 대소문자 무시':'태그에 입력한 문자열이 들어 있으면 조건에 맞습니다 · 대소문자 무시';
+    for(const key of ['ecu','apid','ctid'])fieldOf(key).input.title='값 전체가 같아야 맞습니다 · 대소문자 무시 · 일부만 찾으려면 정규식을 켭니다';
+    for(const key of ['pid','tid'])fieldOf(key).input.title='숫자 전체가 같아야 맞습니다 · 일부나 여러 값을 찾으려면 정규식을 켭니다';
+  }
   function applyFormat(format){
     format=format==='dlt'?'dlt':'text';
     if(format===shownFormat)return;
     shownFormat=format;const dlt=format==='dlt',names=levelNames(format);
     layout.setProfile(profileOf(format));
-    $('tagLabel').textContent=dlt?'ECU · APID · CTID':'태그';
-    // A DLT row's message is its payload, named as DLT tools name it.
-    ui.messageLabel.textContent=dlt?'페이로드':'메시지';
-    $('openMessage').textContent=dlt?'+ 페이로드':'+ 메시지';$('openMessage').title=dlt?'이 조건의 페이로드 입력란을 엽니다':'이 조건의 메시지 입력란을 엽니다';
-    ui.messageFilter.title=dlt?'페이로드에 입력한 문자열이 들어 있으면 조건에 맞습니다 · 대소문자 무시 · 쉼표도 그대로 검색':'메시지에 입력한 문자열이 들어 있으면 조건에 맞습니다 · 대소문자 무시 · 쉼표도 그대로 검색';
-    ui.tagFilter.placeholder=dlt?'쉼표로 구분 · 예: NAV, ECU1':'쉼표로 구분 · 예: MyApp';
-    ui.tagFilter.title=dlt?'ECU·APID·CTID 중 하나에 쉼표로 구분한 값 중 하나라도 들어 있으면 이 조건에 맞습니다 · 예: NAV, ECU1':'태그에 쉼표로 구분한 값 중 하나라도 들어 있으면 이 조건에 맞습니다 · 예: ActivityManager, MyApp';
-    $('readingOptions').hidden=dlt;showOptionalFields();
-    if(dlt){$('idFilterHelp').hidden=true;document.querySelector?.('[aria-controls=idFilterHelp]')?.setAttribute('aria-expanded','false');}
-    ui.timeFrom.placeholder=dlt?'03-14 09:26':'06-18 19:24';ui.timeTo.placeholder=dlt?'03-14 09:30':'06-18 19:30';
+    showFormatText(dlt);
+    $('readingOptions').hidden=dlt;showFields();
+    ui.timeFrom.placeholder=dlt?'시작 · 03-14 09:26':'시작 · 06-18 19:24';ui.timeTo.placeholder=dlt?'끝 · 03-14 09:30':'끝 · 06-18 19:30';
     // Assert stays selected while hidden: DLT has no such level.
     for(const button of ui.levelFilters.children){button.hidden=dlt&&button.dataset.level==='A';button.querySelector('.letter').textContent=names[button.dataset.level];}
     updateLevels();
-    // A DLT row has no PID or TID, so no condition keeps them.
+    // A row has only its format's fields, so no condition keeps the others.
     syncEditor();
-    const all=[...conds.include,...conds.exclude],ids=dlt&&all.some(c=>c.pid||c.tid);
-    if(ids){for(const c of all){c.pid='';c.tid='';}loadEditor();apply();}
+    const all=[...conds.include,...conds.exclude],others=dlt?['pid','tid']:['ecu','apid','ctid'],stale=all.some(c=>others.some(key=>c[key]));
+    if(stale){for(const c of all)for(const key of others){c[key]='';c[regexKey(key)]=false;}loadEditor();buildConditions();apply();}
     else renderFilterSummary();
   }
-  function renderFilterSummary(filters=logs.getState().rejected?keptFilters():readFilters()){
+  function renderFilterSummary(filters=logs.getState().rejected||validationError?keptFilters():readFilters()){
+    showHeading();
     const chips=describeActiveFilters(filters,shownFormat);
-    ui.filterBadge.textContent=chips.length?String(chips.length):'';ui.filterBadge.hidden=!chips.length;
-    ui.toggleFilters.setAttribute('aria-label',chips.length?`필터 · ${chips.length}개 조건 ${filtersOff?'꺼 둠':'적용 중'}`:'필터');
+    // The badge counts conditions; a condition has a chip per field.
+    const counted=new Set(chips.map(chip=>chip.list?`${chip.list}:${chip.index}`:chip.key)).size;
+    ui.filterBadge.textContent=counted?String(counted):'';ui.filterBadge.hidden=!counted;
+    ui.toggleFilters.setAttribute('aria-label',counted?`필터 · ${counted}개 조건 ${filtersOff?'꺼 둠':'적용 중'}`:'필터');
     // The switch goes with the last chip; focus on it moves to the list.
     if(!chips.length&&document.activeElement===ui.filtersOn)ui.logsViewport.focus({preventScroll:true});
     ui.activeFilters.hidden=ui.filtersSwitch.hidden=!chips.length;showFiltersOff();
     // The chips read as the filter: showing conditions joined by 또는, each
     // hiding condition after 제외. A joining word wraps together with the
     // chip it introduces.
+    // A chip keeps focus through the rebuild, or passes it on.
+    const was=[...chipButtons].find(([,parts])=>parts.includes(document.activeElement));
+    const order=[...chipButtons.keys()],place=was?order.indexOf(was[0]):-1,part=was?was[1].indexOf(document.activeElement):0;
+    chipButtons=new Map();
     const nodes=[];let group=null;
     const marks=rowless(),others=filtersOff&&chips.length>1;
     for(const chip of chips){
       const next=chip.list?`${chip.list}:${chip.index}`:'raw',hide=chip.list==='exclude',none=!!marks[chip.list]?.has(chip.index);
       const joint=chip.list&&next!==group&&(hide||group?.startsWith('include'))?textSpan(document,hide?'제외':'또는',`chip-joint${hide?' exclude':''}`):null;
       group=next;
-      const button=document.createElement('button');button.type='button';button.className=`filter-chip${hide?' exclude':''}${none?' no-rows':''}`;
+      const button=document.createElement('span');button.className=`filter-chip${hide?' exclude':''}${none?' no-rows':''}`;
       const name=`${hide?'제외 조건 ':''}${chip.label}${none?' (이 로그에 맞는 줄 없음)':''}`;
-      button.title=`${hide?'제외 조건 · ':''}${chip.full??chip.label}${none?` · ${rowlessText(chip.list,marks.following)}`:''} · 클릭하면 조건을 해제합니다${others?' · 나머지 조건으로 필터가 켜집니다':''}`;button.setAttribute('aria-label',`${name} 해제${others?' (나머지 조건으로 필터 켜짐)':''}`);
-      button.append(textSpan(document,chip.label),...(none?[textSpan(document,'줄 없음','chip-note')]:[]),textSpan(document,'×','chip-remove'));
-      button.addEventListener('click',()=>clearChip(chip));
+      // The chip's text edits its condition; its × clears the field.
+      const edit=document.createElement('button'),clear=document.createElement('button');
+      edit.type=clear.type='button';edit.className='chip-edit';clear.className='chip-remove';clear.textContent='×';
+      edit.title=`${hide?'제외 조건 · ':''}${chip.full??chip.label}${none?` · ${rowlessText(chip.list,marks.following)}`:''} · 클릭하면 편집합니다`;edit.setAttribute('aria-label',`${name} 편집`);
+      clear.title=`이 항목을 해제합니다${others?' · 나머지 조건으로 필터가 켜집니다':''}`;clear.setAttribute('aria-label',`${name} 해제${others?' (나머지 조건으로 필터 켜짐)':''}`);
+      edit.append(textSpan(document,chip.label),...(none?[textSpan(document,'줄 없음','chip-note')]:[]));
+      const key=`${chip.list}:${chip.index}:${chip.key}`,source=chip.list?filters[chip.list][chip.index]:null;
+      edit.addEventListener('click',()=>{
+        if(!chip.list){layout.openPanel();ui.includeRaw.focus();return;}
+        const index=conditionOfChip(chip.list,chip.index,source);
+        if(index<0){layout.openPanel();return;}
+        editorChip=key;editCondition(chip.list,index,chip.key);
+      });
+      clear.addEventListener('click',()=>clearChip(chip,source));
+      button.append(edit,clear);chipButtons.set(key,[edit,clear]);
       if(!joint){nodes.push(button);continue;}
       const pair=document.createElement('span');pair.className='chip-group';pair.append(joint,button);nodes.push(pair);
     }
     ui.activeFilters.replaceChildren(...nodes);
+    if(was){const next=chipButtons.get(was[0])??[...chipButtons.values()][Math.min(place,chipButtons.size-1)];(next?.[part]??ui.logsViewport).focus({preventScroll:true});}
     syncFilterRow();conditionView?.refresh(conds,active,shownFormat);saved?.render();
   }
   // The check box always shows the state. The note names it while the filter
@@ -1227,35 +1263,46 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
   // wrapping rather than shrinking, so a long filter stays readable; the row
   // shows only while it has either.
   function syncFilterRow(){ui.filterRow.hidden=ui.activeFilters.hidden&&ui.logsPending.hidden;}
-  // A chip clears its field, which folds back behind its + button in the
-  // editor; a condition left without criteria goes, unless it is the only
-  // showing one.
-  function clearChip(chip){
+  // A chip clears its field; a condition left without criteria goes, unless
+  // it is the only showing one.
+  function clearChip(chip,source){
     syncEditor();
     if(chip.key==='includeRaw')ui.includeRaw.checked=true;
     else{
-      const c=conds[chip.list]?.[chip.index];if(!c)return;
+      const index=conditionOfChip(chip.list,chip.index,source),c=conds[chip.list]?.[index];if(!c)return;
       const before={...c,levels:[...c.levels]};
-      if(chip.key==='levels')c.levels=[...LEVELS];else if(chip.key==='time'){c.timeFrom='';c.timeTo='';}else if(chip.key==='message'){c.message='';c.messageRegex=false;}else c[chip.key]='';
+      if(chip.key==='levels')c.levels=[...LEVELS];else if(chip.key==='time'){c.timeFrom='';c.timeTo='';}else{c[chip.key]='';c[regexKey(chip.key)]=false;}
       // Clearing its last field takes the condition away, with an undo.
-      if(isEmptyCondition(c)&&(chip.list==='exclude'||conds.include.length>1)){Object.assign(c,before);dropCondition(chip.list,chip.index);return;}
-      if(c===activeCondition())openedFields=null;
+      if(isEmptyCondition(c)&&(chip.list==='exclude'||conds.include.length>1)){Object.assign(c,before);dropCondition(chip.list,index);return;}
       loadEditor();
     }
     apply();
   }
   function buildConditions(){conditionView?.build(conds,active,shownFormat);}
-  // Whether a condition's message pattern may be the one the engine
-  // rejected: the engine names no condition, and every pattern among the
+  // While the engine's last filter is shown, chips number the conditions it
+  // kept: a chip finds its condition by content, else in its place, unless
+  // that condition is gone.
+  function conditionOfChip(list,index,source){
+    const alone=c=>({include:[c],exclude:[]}),same=c=>!!c&&!!source&&sameFields(alone(c),alone(source));
+    if(same(conds[list][index]))return index;
+    const at=conds[list].findIndex(same);
+    if(at>=0)return at;
+    // Being edited in its place, unless conditions have gone since.
+    return conds[list].length===logs.filters()[list]?.length?index:-1;
+  }
+  // Whether a condition's pattern may be the one the engine rejected: the
+  // engine names the field but no condition, and every pattern among the
   // conditions it kept compiled.
   function badPattern(c){
-    if(!logs.getState().rejected||!c?.message||c.messageRegex!==true)return false;
+    const rejected=logs.getState().rejected,key=patternField(rejected);
+    if(!key||!c?.[key]||c[regexKey(key)]!==true)return false;
     const kept=keptConditions();
-    return ![...kept.include,...kept.exclude].some(k=>k.messageRegex===true&&k.message===c.message);
+    return ![...kept.include,...kept.exclude].some(k=>k[regexKey(key)]===true&&k[key]===c[key]);
   }
-  // Such a condition's card says it needs checking.
+  // Such a condition's item says it needs checking.
   function rejectedProblem(list,index){return badPattern(conds[list]?.[index])?describeLogError(logs.getState().rejected,shownFormat):'';}
   function setConditions(filters){
+    if(editorOpen())editor.close({focus:false});
     const f=normalizeFilters(filters);
     conds={include:f.include.length?f.include:[emptyCondition()],exclude:f.exclude};active={list:'include',index:0};
     loadEditor();buildConditions();
@@ -1263,6 +1310,53 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
   function selectCondition(list,index){
     if(active.list===list&&active.index===index)return;
     syncEditor();active={list,index};loadEditor();buildConditions();errors();
+  }
+  // The editor edits the selected condition, and keeps working while the
+  // list, the log and the panel change around it.
+  // `key` names the field to start in; a chip's field by default the first.
+  function openEditor(key=null){
+    editor.open();showHeading();buildConditions();errors();
+    const target=key==='time'?ui.timeFrom:key==='levels'?[...ui.levelFilters.children].find(b=>!b.hidden):fieldOf(key)?.input??fields.find(f=>!f.row.hidden)?.input;
+    target?.focus();
+    tips?.offer('levels',{hold:value=>layout.hold(value)});
+  }
+  function editCondition(list,index,key=null){selectCondition(list,index);openEditor(key);}
+  // A condition left without criteria goes when the editor closes; one blank
+  // showing condition always remains to be edited next.
+  function editorClosed(){
+    syncEditor();
+    const c=activeCondition();
+    conds.exclude=conds.exclude.filter(item=>!isEmptyCondition(item));
+    const kept=conds.include.filter(item=>!isEmptyCondition(item));conds.include=kept.length?kept:[emptyCondition()];
+    const list=['include','exclude'].find(name=>conds[name].includes(c));
+    active=list?{list,index:conds[list].indexOf(c)}:{list:'include',index:0};
+    // The conditions moved up, and the chips name them by place.
+    loadEditor();buildConditions();errors();renderFilterSummary();
+    // A chip that opened it comes back first, then the condition's item.
+    const chip=chipButtons.get(editorChip)?.[0];editorChip=null;
+    return chip??conditionView?.summaryOf(active.list,active.index)??null;
+  }
+  function newCondition(){
+    syncEditor();
+    const blank=conds.include.findIndex(isEmptyCondition);
+    if(blank>=0)selectCondition('include',blank);else if(!addCondition('include'))return;
+    openEditor();
+  }
+  function duplicateCondition(){
+    if(conds.include.length+conds.exclude.length>=MAX_CONDITIONS){notify(`조건은 ${MAX_CONDITIONS}개까지 쓸 수 있습니다.`);return;}
+    syncEditor();
+    const {list,index}=active,c=conds[list][index];
+    conds[list].splice(index+1,0,{...c,levels:[...c.levels]});active={list,index:index+1};
+    loadEditor();openEditor();apply();
+  }
+  // Moves the edited condition to the other kind; hiding conditions follow
+  // the showing ones in the list.
+  function setKind(list){
+    if(active.list===list)return;
+    syncEditor();
+    const c=activeCondition();conds[active.list].splice(active.index,1);conds[list].push(c);
+    if(!conds.include.length)conds.include.push(emptyCondition());
+    active={list,index:conds[list].length-1};loadEditor();buildConditions();apply();
   }
   // Adds a condition, edited at once unless `select` is false.
   function addCondition(list,values={},{select=true}={}){
@@ -1278,27 +1372,34 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     loadEditor();buildConditions();apply();
   }
   function toggleCondition(list,index,on){syncEditor();conds[list][index].enabled=on;apply();}
-  // 초기화 and a condition that comes or goes as a whole (a card's ×, a chip
+  // 초기화 and a condition that comes or goes as a whole (삭제, a chip
   // clearing its last field, a row action) can be undone from the toast
   // while the same log is open.
   function offerUndo(message,undo){
     const dataset=logs.getState().datasetId,off=turnedOn;turnedOn=false;
-    notify(message,{label:'실행 취소',run:()=>{if(disposed||logs.getState().datasetId!==dataset)return;undo();if(off)setFiltersOff(true);}});
+    notify(message,{label:'실행 취소',run:()=>{
+      if(disposed||logs.getState().datasetId!==dataset)return;undo();if(off)setFiltersOff(true);
+      // The toast goes with the focus it held: the condition takes it, or the log.
+      if(ui.toast.contains?.(document.activeElement)||document.activeElement===document.body)(conditionView?.summaryOf(active.list,active.index)??ui.logsViewport).focus({preventScroll:true});
+    }});
   }
   // Removes a condition and offers it back where it was; a lone blank
   // showing condition left behind takes it back in place.
   function dropCondition(list,index){
     syncEditor();
     const c=conds[list][index];if(!c)return;
-    const kept={...c,levels:[...c.levels]},summary=conditionSummary(c,shownFormat);
-    removeCondition(list,index);
+    // The editor goes with its condition, and closing it may move the others.
+    if(editorOpen()&&c===activeCondition())editor.close({focus:false});
+    const at=conds[list].indexOf(c);if(at<0)return;
+    const kept={...c,levels:[...c.levels]},summary=conditionSummary(c,shownFormat,list==='exclude');
+    removeCondition(list,at);
     offerUndo(`${list==='include'?'보기':'제외'} 조건을 삭제했습니다 · ${summary}`,()=>{
       syncEditor();
       const blank=list==='include'&&conds.include.length===1&&isEmptyCondition(conds.include[0]);
       if(!blank&&conds.include.length+conds.exclude.length>=MAX_CONDITIONS){notify(`조건은 ${MAX_CONDITIONS}개까지 쓸 수 있습니다.`);return;}
-      const at=blank?0:Math.min(index,conds[list].length);
-      if(blank)conds.include[0]=kept;else conds[list].splice(at,0,kept);
-      active={list,index:at};loadEditor();buildConditions();apply();
+      const back=blank?0:Math.min(at,conds[list].length);
+      if(blank)conds.include[0]=kept;else conds[list].splice(back,0,kept);
+      active={list,index:back};loadEditor();buildConditions();apply();
     });
   }
   // Enter / Shift+Enter in the search box walk the found results and reveal
@@ -1329,21 +1430,41 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
       saved?.setApplied(applied);apply();if(off)setFiltersOff(true);
     });
   }
-  for(const level of LEVELS){const b=document.createElement('button');b.className='level-chip';b.dataset.level=level;b.append(textSpan(document,LEVEL_NAMES[level],'letter'),textSpan(document,'0','count'));b.title=`${LEVEL_NAMES[level]} · Alt+클릭: 이 레벨만`;b.addEventListener('click',event=>{if(event.altKey)selectedLevels=new Set([level]);else selectedLevels.has(level)?selectedLevels.delete(level):selectedLevels.add(level);updateLevels();apply();});ui.levelFilters.append(b);}
-  ui.allLevels.addEventListener('click',()=>{selectedLevels=new Set(LEVELS);updateLevels();apply();});ui.errorLevels.addEventListener('click',()=>{selectedLevels=new Set(['W','E','F','A']);updateLevels();apply();});ui.resetFilters.addEventListener('click',reset);
+  // A showing condition starts with every level and a press takes one away.
+  // A hiding condition starts with no level pressed, which in the condition
+  // is every level, and a press picks a level to hide.
+  function pressLevel(level,only){
+    const hide=active.list==='exclude',unset=hide&&selectedLevels.size===LEVELS.length;
+    if(only||unset)selectedLevels=new Set([level]);
+    else if(selectedLevels.has(level)){
+      selectedLevels.delete(level);
+      // Levels a DLT log hides cannot be unpressed, so they do not count.
+      if(hide&&![...selectedLevels].some(name=>shownFormat!=='dlt'||name!=='A'))selectedLevels=new Set(LEVELS);
+    }else selectedLevels.add(level);
+  }
+  for(const level of LEVELS){const b=document.createElement('button');b.type='button';b.className='level-chip';b.dataset.level=level;b.append(textSpan(document,LEVEL_NAMES[level],'letter'),textSpan(document,'0','count'));b.title=`${LEVEL_NAMES[level]} · Alt+클릭: 이 레벨만`;b.addEventListener('click',event=>{pressLevel(level,event.altKey);updateLevels();syncEditor();showHeading();apply();});ui.levelFilters.append(b);}
+  ui.allLevels.addEventListener('click',()=>{selectedLevels=new Set(LEVELS);updateLevels();apply();});ui.errorLevels.addEventListener('click',()=>{selectedLevels=new Set(active.list==='exclude'?['V','D']:['W','E','F','A']);updateLevels();apply();});ui.resetFilters.addEventListener('click',reset);
   // Typing waits for a pause before it applies; a field other than the
   // search keeps the search results' place.
   function edited(input){if(disposed)return;if(input===ui.searchInput)lowerTab='search';if(debounce!==null)window.clearTimeout(debounce);inputPending=!!ui.searchInput.value||input!==ui.searchInput;inputPaused=false;validationError=false;search.invalidateQuery({place:input===ui.searchInput?null:placeOf('large',search)});renderSearch(search.getState());debounce=window.setTimeout(apply,150);}
-  // The message's .* switch reads it as a pattern; without a message it only
-  // waits for one.
-  ui.messageRegex.addEventListener('click',()=>{messageRegex=!messageRegex;ui.messageRegex.setAttribute('aria-pressed',String(messageRegex));syncEditor();if(ui.messageFilter.value)edited(ui.messageFilter);else conditionView?.refresh(conds,active,shownFormat);});
-  // Alt+R switches the message between a string and a pattern.
-  ui.messageFilter.addEventListener('keydown',event=>{if(event.altKey&&event.code==='KeyR'&&!event.metaKey&&!event.ctrlKey&&!event.isComposing){event.preventDefault();ui.messageRegex.click();}});
-  ui.messageFilter.addEventListener('input',()=>{
-    patternHeld=true;if(patternTimer!==null)window.clearTimeout(patternTimer);
-    patternTimer=window.setTimeout(()=>{patternTimer=null;patternHeld=false;if(!disposed)errors();},PATTERN_PAUSE_MS);
+  // A field's switch reads it as a pattern; without a value it only waits for
+  // one. Alt+R switches the field being typed in.
+  for(const f of fields){
+    f.regex.addEventListener('change',()=>{syncEditor();showHints();if(f.input.value)edited(f.input);else conditionView?.refresh(conds,active,shownFormat);});
+    f.input.addEventListener('keydown',event=>{if(event.altKey&&event.code==='KeyR'&&!event.metaKey&&!event.ctrlKey&&!event.isComposing){event.preventDefault();f.regex.click();}});
+    f.input.addEventListener('input',()=>{
+      syncEditor();showHints();showHeading();
+      patternHeld=true;if(patternTimer!==null)window.clearTimeout(patternTimer);
+      patternTimer=window.setTimeout(()=>{patternTimer=null;patternHeld=false;if(!disposed)errors();},PATTERN_PAUSE_MS);
+    });
+  }
+  $('kindShow').addEventListener('click',()=>setKind('include'));$('kindHide').addEventListener('click',()=>setKind('exclude'));
+  // The kind is a radio group: arrows move and choose.
+  for(const [id,other,list] of [['kindShow','kindHide','exclude'],['kindHide','kindShow','include']])$(id).addEventListener('keydown',event=>{
+    if(!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(event.key))return;
+    event.preventDefault();setKind(list);$(other).focus();
   });
-  for(const input of [ui.searchInput,ui.tagFilter,ui.messageFilter,ui.timeFrom,ui.timeTo,ui.pidFilter,ui.tidFilter]){
+  for(const input of [ui.searchInput,...fields.map(f=>f.input),ui.timeFrom,ui.timeTo]){
     input.addEventListener('input',()=>edited(input));
     input.addEventListener('keydown',event=>{
       if(event.key!=='Enter'||event.isComposing||disposed)return;
@@ -1390,7 +1511,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     resolveMarks(logs.getState());
   }
   // The filters to keep: what is typed when valid, else what was applied.
-  function currentFilters(){const typed=readFilters();try{validateFilters(typed);return logs.getState().rejected?keptFilters(typed):typed;}catch{return appliedFilters??defaultFilters();}}
+  function currentFilters(){const typed=readFilters();try{validateFilters(typed);return logs.getState().rejected?keptFilters(typed):typed;}catch{return logs.getState().rejected?keptFilters(typed):appliedFilters??defaultFilters();}}
   // The typed search and options with the conditions the upper logs kept
   // when the engine rejected a message pattern.
   function keptFilters(typed=readFilters()){const kept=keptConditions();return {...typed,include:kept.include,exclude:kept.exclude,includeRaw:kept.includeRaw};}
@@ -1500,7 +1621,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     saver.flush();saver.stop();work={datasetId:null,reopenable:false};reloadRequest=null;pendingMarks=null;restoreTargets=null;
     sourceEventSequence++;pickerSequence++;pickerPending=false;pendingSourceId=null;savedInput=null;pendingPastePrefix=null;$('cancelInput').hidden=true;
     menu.close(false);bookmarks.restore();
-    if(disposed)return Promise.resolve();disposed=true;inputPending=inputPaused=validationError=false;inputError='';
+    if(disposed)return Promise.resolve();editor.close({focus:false});disposed=true;inputPending=inputPaused=validationError=false;inputError='';
     if(debounce!==null)window.clearTimeout(debounce);debounce=null;clearDetail();
     return Promise.all([closeSearch({remote:false}),logs.close()]);
   }
@@ -1538,7 +1659,7 @@ export function mountLargeLogView(native, {transport, tips=null, document=global
     // The filter panel and popup menus claim Escape first; one press closes one
     // thing: the raw detail, else a pinned panel (not while editing elsewhere),
     // else the focused list's selection of several rows becomes its one row.
-    if(event.key==='Escape'&&!event.defaultPrevented){if(detailOwner?.getState().detail){event.preventDefault();detailOwner.closeDetail();}else if(!isEditableTarget(event.target)&&(layout.closePanel()||collapseSelection()))event.preventDefault();}});
+    if(event.key==='Escape'&&!event.defaultPrevented){if(editor.close()){event.preventDefault();}else if(detailOwner?.getState().detail){event.preventDefault();detailOwner.closeDetail();}else if(!isEditableTarget(event.target)&&(layout.closePanel()||collapseSelection()))event.preventDefault();}});
   // A selection of several rows becomes its focus row alone.
   function collapseSelection(){
     const prefix=activePrefix();

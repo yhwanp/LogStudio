@@ -648,7 +648,7 @@ fn a_replaced_last_block_leaves_no_stale_field_metadata() {
         json!({"tag":"net"}),
         json!({"pid":"4242","levels":["E","W"]}),
         json!({"excludeTags":"ui"}),
-        json!({"pid":"101, 4242"}),
+        json!({"include":[{"pid":"^(?:101|4242)$","pidRegex":true}]}),
     ]
     .into_iter()
     .enumerate()

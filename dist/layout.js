@@ -27,7 +27,9 @@ export function widestLine({total = 0, files = []} = {}) {
 
 export function mountLogLayout({document = globalThis.document, window = globalThis.window, onPanelChange = () => {}} = {}) {
   const $ = id => document.getElementById(id);
-  const workspace = $('workspace'), panel = $('filterPanel'), toggle = $('toggleFilters');
+  const workspace = $('workspace'), panel = $('filterPanel'), toggle = $('toggleFilters'), editor = $('filterEditor');
+  // The condition editor floats beside the panel: using it is using the panel.
+  const inPanel = node => panel.contains(node) || !!editor?.contains?.(node);
   // Controller-only environments need no browser layout.
   if (!workspace?.style || !panel || !toggle) return {setRawMode() {}, setMultiFile() {}, setProfile() {}, fitColumns() {}, resetColumns() {}, fitTimestamp() {}, fitLines() {}, setAvailable() { return false; }, openPanel() {}, closePanel() { return false; }, hold() {}, fitDetail() {}};
   const autoHideInput = $('autoHideFilters');
@@ -50,6 +52,8 @@ export function mountLogLayout({document = globalThis.document, window = globalT
   const P = () => PROFILES[profile];
   let autoHide = typeof saved?.autoHide === 'boolean' ? saved.autoHide : true;
   let lowerRatio = savedTo(saved?.lowerRatio, LOWER), detailLines = savedTo(saved?.detailLines, DETAIL);
+  // Where the condition editor was moved to, in window pixels.
+  let editorAt = Number.isFinite(saved?.editorAt?.x) && Number.isFinite(saved?.editorAt?.y) ? {x:saved.editorAt.x, y:saved.editorAt.y} : null;
   let open = !autoHide && saved?.open !== false, available = true, rawMode = false, multiFile = false, hideTimer = null, drag = null, timestampFor = null;
   // Whether a press outside the floating panel is down, and whether its
   // close is waiting (closeAfterPress).
@@ -62,7 +66,7 @@ export function mountLogLayout({document = globalThis.document, window = globalT
   const lineWidth = () => widths[0] + (multiFile ? FILE_BADGE : 0);
   function persist() {
     columns[profile] = {widths, custom};
-    try { window.localStorage.setItem(STORAGE_KEY, JSON.stringify({autoHide, open: !autoHide && open, widths: columns.text.widths, custom: columns.text.custom, dlt: columns.dlt, lowerRatio, detailLines})); } catch {}
+    try { window.localStorage.setItem(STORAGE_KEY, JSON.stringify({autoHide, open: !autoHide && open, widths: columns.text.widths, custom: columns.text.custom, dlt: columns.dlt, lowerRatio, detailLines, editorAt})); } catch {}
   }
   function cancelHide() {
     if (hideTimer !== null) window.clearTimeout(hideTimer);
@@ -97,7 +101,7 @@ export function mountLogLayout({document = globalThis.document, window = globalT
     hideTimer = window.setTimeout(() => {
       hideTimer = null;
       // Typing, keyboard navigation and an open select must not be interrupted.
-      if (!panel.contains(document.activeElement) && !panel.matches(':hover') && !toggle.matches(':hover')) setOpen(false);
+      if (!inPanel(document.activeElement) && !panel.matches(':hover') && !toggle.matches(':hover')) setOpen(false);
     }, 350);
   }
   toggle.addEventListener('click', () => { if (available) setOpen(!shown()); });
@@ -126,36 +130,37 @@ export function mountLogLayout({document = globalThis.document, window = globalT
       window.removeEventListener('blur', done);
       pressing = false;
       cancelHide();
-      if (event?.type === 'pointerup' && panel.contains(event.target)) return;
+      if (event?.type === 'pointerup' && inPanel(event.target)) return;
       settling = true;
       hideTimer = window.setTimeout(() => {
         hideTimer = null; settling = false;
-        if (autoHide && shown() && !held && !panel.contains(document.activeElement)) setOpen(false);
+        if (autoHide && shown() && !held && !inPanel(document.activeElement)) setOpen(false);
       }, PRESS_SETTLE_MS);
     };
     for (const name of ends) window.addEventListener(name, done, true);
     window.addEventListener('blur', done);
   }
   document.addEventListener('pointerdown', event => {
-    if (!autoHide || !shown() || held || panel.contains(event.target) || toggle.contains(event.target)) return;
+    if (!autoHide || !shown() || held || inPanel(event.target) || toggle.contains(event.target)) return;
     // Other buttons close it at once, as before: no double-click follows.
     if ((event.button ?? 0) !== 0) setOpen(false);
     else closeAfterPress();
   });
   document.addEventListener('focusin', event => {
-    if (autoHide && shown() && !held && !pressing && !settling && !panel.contains(event.target) && !toggle.contains(event.target)) setOpen(false);
+    if (autoHide && shown() && !held && !pressing && !settling && !inPanel(event.target) && !toggle.contains(event.target)) setOpen(false);
   });
-  // One Escape closes one thing. Popup menus and drags claim it first; the
-  // panel takes it while focus is inside it or while it floats (auto-hide).
+  // One Escape closes one thing. Popup menus, drags and the condition editor
+  // claim it first; the panel takes it while focus is inside it or while it
+  // floats (auto-hide).
   // A pinned panel leaves it to the raw detail and closes via closePanel().
   document.addEventListener('keydown', event => {
-    if (event.key !== 'Escape' || event.defaultPrevented || !shown()) return;
+    if (event.key !== 'Escape' || event.defaultPrevented || !shown() || editor?.hidden === false) return;
     const inside = panel.contains(document.activeElement);
     if (inside || autoHide) { event.preventDefault(); setOpen(false, inside); }
   });
   // Short field help stays collapsed so every input fits; aria-describedby
   // keeps pointing at the hidden note.
-  for (const help of panel.querySelectorAll?.('.help-toggle') ?? []) help.addEventListener('click', () => {
+  for (const help of [panel, editor].flatMap(box => [...box?.querySelectorAll?.('.help-toggle') ?? []])) help.addEventListener('click', () => {
     const note = $(help.getAttribute('aria-controls')), expanded = help.getAttribute('aria-expanded') !== 'true';
     help.setAttribute('aria-expanded', String(expanded)); if (note) note.hidden = !expanded;
   });
@@ -395,6 +400,8 @@ export function mountLogLayout({document = globalThis.document, window = globalT
     cancelHide(); available = value; renderPanel();
     if (displaced) active?.blur?.();
     return displaced;
+  }, isOpen: shown, editorPlace: () => editorAt, setEditorPlace(value) {
+    editorAt = value; persist();
   }, openPanel() {
     if (available && !shown()) setOpen(true);
   }, closePanel() {
