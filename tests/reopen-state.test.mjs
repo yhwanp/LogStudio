@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {setImmediate as nextTurn} from 'node:timers/promises';
 import {mountLargeLogView} from '../dist/large-view.js';
 import {desktopTransport} from '../dist/desktop.js';
-import {RELOADED} from '../dist/work-state.js';
+import {RELOADED, SAVE_DELAY_MS} from '../dist/work-state.js';
 
 // The mounted view against a scripted engine; same DOM stand-in as
 // view-lifecycle.test.mjs, plus native work-state commands and `lines`.
@@ -95,6 +95,21 @@ test('the top bar reopens the same file keeping filters, search, view, lower tab
   assert.equal(upper.datasetId,2);assert.equal(upper.viewportStart,7);assert.equal(upper.selectedLine,13);
   assert.deepEqual(r.lines(),[[3]],'bookmarked rows are read again from the reopened file');
   assert.equal(r.get('toast').textContent,RELOADED);assert.equal(r.get('reopenFile').disabled,false);
+});
+
+test('a reload keeps the filter switched off, and the saved work keeps only its conditions',async t=>{
+  const r=await rig();t.after(()=>r.controller.close());
+  const upper=id=>r.calls.filter(c=>c.args.request?.action==='query'&&c.args.request.datasetId===id&&c.args.request.pane==='logs').at(-1).args.request.filters;
+  const box=r.get('filtersOn'),press=async()=>{box.checked=!box.checked;await box.dispatch('change');await settle();};
+  await r.enter('tagFilter','Net');await press();
+  await r.get('reopenFile').dispatch('click');await settle();
+  await reopenAs(r,2);
+  assert.equal(box.checked,false);assert.deepEqual(upper(2).include,[]);assert.equal(r.get('tagFilter').value,'Net');
+  await r.runTimers(SAVE_DELAY_MS);
+  const saved=r.invoked('save_work_state').at(-1)?.state;
+  assert.equal(saved.filters.include[0].tag,'Net');assert.equal('filtersOff' in saved,false);assert.equal('filtersOff' in saved.filters,false);
+  await press();
+  assert.equal(upper(2).include[0].tag,'Net');
 });
 
 test('a reload drops bookmarks past the new end and reports rows whose text changed',async t=>{

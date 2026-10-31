@@ -71,6 +71,9 @@ export function normalizeFilters(f = {}) {
   const d = defaultFilters(), list = (value, fallback) => Array.isArray(value) ? value.map(readCondition).filter(Boolean) : fallback;
   return {...d, ...f, include:list(f.include, d.include), exclude:list(f.exclude, d.exclude)};
 }
+// The filter switched off as a whole: no condition applies and every row
+// shows. The search and the reading options stay.
+export const withoutConditions = f => ({...f, include:[], exclude:[], includeRaw:true});
 // One condition as the core reads it; a message is used as typed, and
 // without one its mode means nothing.
 const coreCondition = c => ({levels:levelsOf(c), tag:c.tag ?? '', pid:c.pid ?? '', tid:c.tid ?? '', timeFrom:c.timeFrom ?? '', timeTo:c.timeTo ?? '', message:c.message ?? '', messageRegex:!!c.message && c.messageRegex === true});

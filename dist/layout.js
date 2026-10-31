@@ -29,7 +29,7 @@ export function mountLogLayout({document = globalThis.document, window = globalT
   const $ = id => document.getElementById(id);
   const workspace = $('workspace'), panel = $('filterPanel'), toggle = $('toggleFilters');
   // Controller-only environments need no browser layout.
-  if (!workspace?.style || !panel || !toggle) return {setRawMode() {}, setMultiFile() {}, setProfile() {}, fitColumns() {}, resetColumns() {}, fitTimestamp() {}, fitLines() {}, setAvailable() { return false; }, closePanel() { return false; }, hold() {}, fitDetail() {}};
+  if (!workspace?.style || !panel || !toggle) return {setRawMode() {}, setMultiFile() {}, setProfile() {}, fitColumns() {}, resetColumns() {}, fitTimestamp() {}, fitLines() {}, setAvailable() { return false; }, openPanel() {}, closePanel() { return false; }, hold() {}, fitDetail() {}};
   const autoHideInput = $('autoHideFilters');
   const headers = [$('logsHeaders'), $('largeHeaders'), $('bookmarkHeaders')];
   const tables = [$('logsTable'), $('largeTable'), $('bookmarkTable')];
@@ -395,6 +395,8 @@ export function mountLogLayout({document = globalThis.document, window = globalT
     cancelHide(); available = value; renderPanel();
     if (displaced) active?.blur?.();
     return displaced;
+  }, openPanel() {
+    if (available && !shown()) setOpen(true);
   }, closePanel() {
     if (!shown()) return false;
     setOpen(false, panel.contains(document.activeElement)); return true;

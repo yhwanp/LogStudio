@@ -107,7 +107,7 @@ export function savedState({list, applied, fields, format}) {
 // button and the name dialog. `read` gives the current filter's fields,
 // `write` applies fields, and `changed` reports a change to save with the
 // file's work.
-export function mountSavedFilters({native, menu, notify, read, write, changed, format, isGone=() => false, document=globalThis.document}) {
+export function mountSavedFilters({native, menu, notify, read, write, changed, format, isGone=() => false, filterOff=() => false, document=globalThis.document}) {
   const $ = id => document.getElementById(id);
   // Each menu button names the applied filter and marks it once changed.
   const buttons = ['savedFilterButton', 'panelSavedFilter'].map(id => {
@@ -126,12 +126,12 @@ export function mountSavedFilters({native, menu, notify, read, write, changed, f
   function setList(value) {list = readList(value); render();}
   async function refresh() {try {setList(await invoke('saved_filters'));} catch {}}
   function render() {
-    const s = state(), name = s.current?.name;
+    const s = state(), name = s.current?.name, off = !!name && filterOff(), notes = [s.modified && '수정됨', off && '꺼 둠'].filter(Boolean);
     for (const {button, label, mark} of buttons) {
-      label.textContent = name ?? '저장된 필터'; mark.hidden = !s.modified;
-      button.dataset.state = !name ? 'none' : s.modified ? 'modified' : 'applied';
-      button.setAttribute('aria-label', name ? `저장된 필터: ${name}${s.modified ? ', 수정됨' : ''}` : '저장된 필터');
-      button.title = name ? `저장된 필터 '${name}' ${s.modified ? '· 적용한 뒤 조건을 바꿨습니다' : '적용 중'}` : '필터를 이름 붙여 저장하고, 저장한 필터를 선택해 적용합니다';
+      label.textContent = name ?? '저장된 필터'; mark.textContent = notes.join(' · '); mark.hidden = !notes.length;
+      button.dataset.state = !name ? 'none' : off ? 'off' : s.modified ? 'modified' : 'applied';
+      button.setAttribute('aria-label', name ? `저장된 필터: ${[name, ...notes].join(', ')}` : '저장된 필터');
+      button.title = name ? `저장된 필터 '${name}' ${off ? '· 필터를 꺼 두어 적용하지 않습니다' : s.modified ? '· 적용한 뒤 조건을 바꿨습니다' : '적용 중'}` : '필터를 이름 붙여 저장하고, 저장한 필터를 선택해 적용합니다';
     }
     saveButton.hidden = s.empty || (!!s.current && !s.modified);
     saveButton.title = s.current ? `'${name}'에 저장` : '현재 필터를 이름 붙여 저장';

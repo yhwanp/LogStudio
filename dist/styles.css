@@ -259,6 +259,18 @@ h2{font-size:16px;margin:0;font-weight:650}
    them from wrapping the tools, and chips that still do not fit truncate,
    then scroll sideways. The pending warning keeps its first words. Only a
    heading too narrow for the tools wraps. */
+/* The filter switched off: its chips stay to read and to edit, out of use.
+   The warning tone is that of a list showing something else than was asked,
+   as the saved filter's 수정됨; a line under the row keeps it in the corner
+   of the eye while reading rows. */
+.filters-on{flex-shrink:0;font-size:12px}
+.filters-off-note{padding:0 8px;border:1px solid var(--lv-w-border);border-radius:11px;background:var(--lv-w-bg);color:var(--lv-w);font-weight:600;line-height:20px}
+.filter-row[data-off=true]{box-shadow:inset 0 -2px 0 var(--lv-w-border)}
+.filters-off-hint{margin:0 0 12px;color:var(--lv-w)}
+.filters[data-off=true] .cond-summary{color:var(--muted)}
+.active-filters[data-off=true] .filter-chip{border-color:var(--control-border);background:var(--surface);color:var(--muted)}
+.active-filters[data-off=true] .chip-joint{color:var(--muted)}
+.filter-badge[data-off=true]{background:transparent;color:var(--muted);box-shadow:inset 0 0 0 1px var(--control-border)}
 .filter-row{display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px;padding:4px 12px;background:var(--surface-3);border-bottom:1px solid var(--border);font-size:12px;flex-shrink:0}
 .active-filters{display:flex;flex-wrap:wrap;align-items:center;gap:4px;min-width:0}
 .active-filters .filter-chip{max-width:min(32em,100%)}

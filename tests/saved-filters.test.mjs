@@ -110,7 +110,7 @@ const document = {elements:new Map(), activeElement:null, getElementById(id) {if
 
 function rig({stored=[], format='text'}={}) {
   document.elements.clear();
-  let disk = structuredClone(stored), nextId = 100, current = fields(), view = format;
+  let disk = structuredClone(stored), nextId = 100, current = fields(), view = format, off = false;
   const calls = [], toasts = [], menus = [], changes = [];
   const reply = () => structuredClone(disk);
   const native = {core:{invoke:async (command, args={}) => {
@@ -127,11 +127,11 @@ function rig({stored=[], format='text'}={}) {
     throw command;
   }}};
   const saved = mountSavedFilters({native, document, menu:{show:(items, x, y, label) => menus.push({items, label})}, notify:(message, action=null) => toasts.push({message, action}),
-    read:() => current, write:f => {current = f; saved.render();}, changed:() => changes.push(saved.applied()), format:() => view});
+    read:() => current, write:f => {current = f; saved.render();}, changed:() => changes.push(saved.applied()), format:() => view, filterOff:() => off});
   const $ = id => document.getElementById(id);
   const button = $('savedFilterButton');
   return {saved, calls, toasts, menus, changes, $, button, elsewhere:item => disk.push(item),
-    set:f => {current = fields(f); saved.render();}, get fields() {return current;}, setFormat:f => {view = f;},
+    set:f => {current = fields(f); saved.render();}, setOff:value => {off = value; saved.render();}, get fields() {return current;}, setFormat:f => {view = f;},
     label:() => [button.children[0].textContent, !button.children[1].hidden, button.dataset.state],
     async menu() {await button.dispatch('click'); await settle(); return menus.at(-1).items;},
     async pick(label) {const item = (await this.menu()).find(i => i?.[0] === label); assert.ok(item, `menu item ${label}`); await item[1](); await settle();},
@@ -208,6 +208,25 @@ test('a changed filter is marked and can be saved, reverted, renamed and deleted
   await r.toasts.at(-1).action.run(); await settle();
   assert.deepEqual(r.calls.at(-1)[1], {id:7, name:'내비게이션', format:'text', filter:toStored(fields({tag:'NAV, Route'}))}, 'undo saves it again under its ID');
   assert.deepEqual(r.label(), ['내비게이션', false, 'applied']);
+});
+
+test('a saved filter switched off says so instead of saying it applies', async () => {
+  const r = rig();
+  await settle();
+  r.set({tag:'MyApp'});
+  await r.pick('현재 필터 저장…');
+  await r.submit('내 앱');
+  r.setOff(true);
+  assert.deepEqual(r.label(), ['내 앱', true, 'off']);
+  assert.equal(r.button.children[1].textContent, '꺼 둠');
+  assert.equal(r.button.attributes['aria-label'], '저장된 필터: 내 앱, 꺼 둠');
+  assert.match(r.button.title, /꺼 두어 적용하지 않습니다/);
+  r.set({tag:'Other'});
+  assert.equal(r.button.children[1].textContent, '수정됨 · 꺼 둠');
+  r.set({tag:'MyApp'});
+  r.setOff(false);
+  assert.deepEqual(r.label(), ['내 앱', false, 'applied']);
+  assert.equal(r.button.title, "저장된 필터 '내 앱' 적용 중");
 });
 
 test('native refusals show in the dialog and filters of another format cannot be applied', async () => {
