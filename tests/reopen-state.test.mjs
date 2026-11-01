@@ -8,11 +8,17 @@ import {RELOADED, SAVE_DELAY_MS} from '../dist/work-state.js';
 // The mounted view against a scripted engine; same DOM stand-in as
 // view-lifecycle.test.mjs, plus native work-state commands and `lines`.
 async function settle(){for(let i=0;i<12;i++)await nextTurn();}
+// The ⋯ menu's item called `label`, opened for the look of it or the click.
+const moreItem=async(r,label)=>{await r.get('moreButton').dispatch('click');return r.get('rowMenu').children.find(n=>n.textContent===label||n.textContent.startsWith(`${label} `));};
+const closeMenu=r=>r.get('rowMenu').dispatch('keydown',{key:'Escape',preventDefault(){},stopPropagation(){}});
+const choose=async(r,label)=>{const item=await moreItem(r,label);assert.ok(item,label);await item.dispatch('click');await settle();};
+// What the item offers now, with the menu closed again.
+const moreState=async(r,label)=>{const item=await moreItem(r,label);await closeMenu(r);return item&&{disabled:item.attributes['aria-disabled']==='true',title:item.title,text:item.textContent};};
 class Element {
   constructor(tag='div'){this.tagName=tag.toUpperCase();this.children=[];this.listeners={};this.dataset={};this.attributes={};this.value='';this.checked=false;this.hidden=false;this.disabled=false;this.title='';this._text='';this.style={setProperty(key,value){this[key]=value;},removeProperty(key){delete this[key];}};this.clientHeight=280;this.scrollTop=0;this.classList={toggle(){}};}
   get textContent(){return this._text+this.children.map(child=>child.textContent).join('');}
   set textContent(value){this._text=String(value);this.children=[];}
-  append(...nodes){for(const node of nodes){if(node.fragment){this.append(...node.children);continue;}if(node.parentElement)node.parentElement.children=node.parentElement.children.filter(child=>child!==node);node.parentElement=this;this.children.push(node);}}
+  append(...nodes){for(const part of nodes){const node=typeof part==='string'?Object.assign(new Element('span'),{_text:part}):part;if(node.fragment){this.append(...node.children);continue;}if(node.parentElement)node.parentElement.children=node.parentElement.children.filter(child=>child!==node);node.parentElement=this;this.children.push(node);}}
   replaceChildren(...nodes){this.children=[];this._text='';this.append(...nodes);}
   insertBefore(node,before){if(node.parentElement)node.parentElement.removeChild(node);const i=before?this.children.indexOf(before):this.children.length;this.children.splice(i,0,node);node.parentElement=this;}
   removeChild(node){this.children=this.children.filter(child=>child!==node);node.parentElement=null;}
@@ -72,19 +78,19 @@ async function reopenAs(r,id,{rows=r.env.rows,total=rows.length,size=r.env.size,
 }
 async function bookmark(r,line){await r.row(line).dispatch('click',{detail:1});await settle();r.key({key:'b',metaKey:true});await settle();}
 
-test('the top bar reopens the same file keeping filters, search, view, lower tab, bookmarks and places by physical row',async t=>{
+test('the ⋯ menu reopens the same file keeping filters, search, view, lower tab, bookmarks and places by physical row',async t=>{
   const r=await rig();t.after(()=>r.controller.close());
-  assert.equal(r.get('reopenFile').hidden,false);assert.equal(r.get('reopenFile').disabled,false);
-  assert.match(r.get('reopenFile').title,/다시 읽습니다.*\(Ctrl\+R\)$/);
+  const offered=await moreState(r,'다시 열기');
+  assert.equal(offered.disabled,false);assert.equal(offered.text,'다시 열기 Ctrl+R');assert.match(offered.title,/다시 읽습니다/);
   await r.enter('tagFilter','Net');await r.enter('searchInput','raw');
   await r.get('largeRaw').dispatch('click');
   await bookmark(r,3);await r.get('bookmarkTab').dispatch('click');
   r.controller.logs.seek(10);await settle();
   await r.row(13).dispatch('click',{detail:1});await settle();
   assert.equal(r.controller.logs.getState().viewportStart,10);assert.equal(r.controller.logs.getState().selectedLine,13);
-  await r.get('reopenFile').dispatch('click');await settle();
+  await choose(r,'다시 열기');
   assert.deepEqual(r.invoked('reopen_source'),[{datasetId:1}],'only the dataset ID crosses to native code');
-  assert.equal(r.get('reopenFile').disabled,true,'one reload at a time');
+  assert.equal((await moreState(r,'다시 열기')).disabled,true,'one reload at a time');
   // Rows 2–4 left the results: row 11, first on screen before, is now the 8th result.
   await reopenAs(r,2,{rows:r.env.rows.filter(row=>row.lineNumber<2||row.lineNumber>4),total:30,work:{match:'changed',state:{v:1,filters:{tag:'Old'}}}});
   assert.equal(r.get('tagFilter').value,'Net','the live work wins over saved work');assert.equal(r.get('searchInput').value,'raw');
@@ -94,7 +100,7 @@ test('the top bar reopens the same file keeping filters, search, view, lower tab
   const upper=r.controller.logs.getState();
   assert.equal(upper.datasetId,2);assert.equal(upper.viewportStart,7);assert.equal(upper.selectedLine,13);
   assert.deepEqual(r.lines(),[[3]],'bookmarked rows are read again from the reopened file');
-  assert.equal(r.get('toast').textContent,RELOADED);assert.equal(r.get('reopenFile').disabled,false);
+  assert.equal(r.get('toast').textContent,RELOADED);assert.equal((await moreState(r,'다시 열기')).disabled,false);
 });
 
 test('a reload keeps the filter switched off, and the saved work keeps only its conditions',async t=>{
@@ -102,7 +108,7 @@ test('a reload keeps the filter switched off, and the saved work keeps only its 
   const upper=id=>r.calls.filter(c=>c.args.request?.action==='query'&&c.args.request.datasetId===id&&c.args.request.pane==='logs').at(-1).args.request.filters;
   const box=r.get('filtersOn'),press=async()=>{box.checked=!box.checked;await box.dispatch('change');await settle();};
   await r.enter('tagFilter','Net');await press();
-  await r.get('reopenFile').dispatch('click');await settle();
+  await choose(r,'다시 열기');
   await reopenAs(r,2);
   assert.equal(box.checked,false);assert.deepEqual(upper(2).include,[]);assert.equal(r.get('tagFilter').value,'Net');
   await r.runTimers(SAVE_DELAY_MS);
@@ -117,7 +123,7 @@ test('a reload drops bookmarks past the new end and reports rows whose text chan
   for(const line of [3,8,25])await bookmark(r,line);
   const rows=Array.from({length:20},(_,i)=>raw(i+1));rows[7]={lineNumber:8,kind:'raw',raw:'rewritten'};
   r.env.all=new Map(rows.map(row=>[row.lineNumber,row]));
-  await r.get('reopenFile').dispatch('click');await settle();
+  await choose(r,'다시 열기');
   await reopenAs(r,2,{rows,size:60});
   assert.equal(r.get('bookmarkTab').textContent,'북마크 2');
   assert.match(r.get('toast').textContent,/북마크 1개 해제·1개 내용 바뀜/);
@@ -127,7 +133,7 @@ test('a reload drops bookmarks past the new end and reports rows whose text chan
 
 test('a shorter file without bookmarks is reported once its rows are read',async t=>{
   const r=await rig();t.after(()=>r.controller.close());
-  await r.get('reopenFile').dispatch('click');await settle();
+  await choose(r,'다시 열기');
   await reopenAs(r,2,{rows:r.env.rows.slice(0,10),size:40});
   assert.match(r.get('toast').textContent,/이전보다 짧아졌습니다/);
 });
@@ -135,7 +141,7 @@ test('a shorter file without bookmarks is reported once its rows are read',async
 test('a place past the end of a shorter file shows the list end; a row not read yet waits',async t=>{
   const r=await rig();t.after(()=>r.controller.close());
   r.controller.logs.seek(20);await settle();await r.row(28).dispatch('click',{detail:1});await settle();
-  await r.get('reopenFile').dispatch('click');await settle();
+  await choose(r,'다시 열기');
   await reopenAs(r,2,{rows:r.env.rows.slice(0,12)});
   const upper=r.controller.logs.getState();
   assert.equal(upper.error,'');assert.equal(r.get('errorBar').hidden,true);
@@ -154,12 +160,12 @@ test('a place past the end of a shorter file shows the list end; a row not read 
 
 test('pasted text cannot be reopened and Cmd/Ctrl+R never reloads the page',async t=>{
   const r=await rig({work:()=>({reopenable:false})});t.after(()=>r.controller.close());
-  assert.equal(r.get('reopenFile').hidden,false);assert.equal(r.get('reopenFile').disabled,true);
-  assert.match(r.get('reopenFile').title,/붙여넣은 텍스트와 샘플 로그는 다시 열 수 없습니다/);
+  const offered=await moreState(r,'다시 열기');
+  assert.equal(offered.disabled,true);assert.match(offered.text,/붙여넣은 텍스트와 샘플 로그는 다시 열 수 없습니다/);
   assert.equal(r.key({key:'r',metaKey:true}),true,'the WebView reload is prevented');
   assert.equal(r.key({key:'R',ctrlKey:true}),true);
   assert.deepEqual(r.invoked('reopen_source'),[]);
-  await r.controller.close();assert.equal(r.get('reopenFile').hidden,true,'no file, no action');
+  await r.controller.close();assert.equal(await moreState(r,'다시 열기'),undefined,'no file, no action');
   assert.equal(r.key({key:'r',metaKey:true}),true);
 });
 
@@ -190,19 +196,19 @@ test('a changed file offers 다시 열기 in the error banner',async t=>{
 test('a failed reload keeps the open view and reports why',async t=>{
   const r=await rig({reopen:async()=>{throw 'Selected file was not found; select it again';}});t.after(()=>r.controller.close());
   await r.enter('tagFilter','Net');
-  await r.get('reopenFile').dispatch('click');await settle();
+  await choose(r,'다시 열기');
   assert.match(r.get('largeError').textContent,/찾을 수 없습니다/);assert.equal(r.get('errorReopen').hidden,true);
-  assert.equal(r.get('reopenFile').disabled,false,'the action is available again');assert.equal(r.get('tagFilter').value,'Net');
+  assert.equal((await moreState(r,'다시 열기')).disabled,false,'the action is available again');assert.equal(r.get('tagFilter').value,'Net');
 });
 
 test('an invalid reopened file rolls back to the previous view with its work',async t=>{
   const r=await rig();t.after(()=>r.controller.close());
   await r.enter('tagFilter','Net');await bookmark(r,4);
-  await r.get('reopenFile').dispatch('click');await settle();
+  await choose(r,'다시 열기');
   r.env.dataset=2;await r.emit({status:'opened',datasetId:2,work:{reopenable:true,reloadOf:1}});
   r.env.dataset=1;await r.emit({status:'rollback',datasetId:2,error:'NUL is not supported; select a UTF-8 text log'});
   assert.equal(r.controller.logs.getState().datasetId,1);assert.equal(r.get('tagFilter').value,'Net');
-  assert.equal(r.get('bookmarkTab').textContent,'북마크 1');assert.equal(r.get('reopenFile').disabled,false);
+  assert.equal(r.get('bookmarkTab').textContent,'북마크 1');assert.equal((await moreState(r,'다시 열기')).disabled,false);
   assert.ok(r.invoked('work_state').some(a=>a.datasetId===1),'the restored dataset is asked again');
 });
 
@@ -287,7 +293,7 @@ test('a saved filter applies to another file, stays through a reload and returns
   await r.enter('tagFilter','Net, Wifi');
   assert.equal(label(),'NAV|수정됨');assert.equal(r.get('saveFilter').hidden,false);
   // A reload keeps the filter it came from.
-  await r.get('reopenFile').dispatch('click');await settle();await reopenAs(r,2);
+  await choose(r,'다시 열기');await reopenAs(r,2);
   assert.equal(label(),'NAV|수정됨');assert.equal(r.get('tagFilter').value,'Net, Wifi');
   // Another file starts without a filter; its saved work brings the filter back.
   r.env.dataset=3;await r.emit({status:'opened',datasetId:3,work:{reopenable:true}});
@@ -304,7 +310,7 @@ test('an undo offered before a reload re-reads the bookmarks cannot bring back a
   for(const line of [3,8])await bookmark(r,line);
   const rows=Array.from({length:30},(_,i)=>raw(i+1));rows[7]={lineNumber:8,kind:'raw',raw:'rewritten'};
   r.env.all=new Map(rows.map(row=>[row.lineNumber,row]));
-  await r.get('reopenFile').dispatch('click');await settle();
+  await choose(r,'다시 열기');
   r.env.complete=false;await reopenAs(r,2,{rows});
   assert.equal(r.get('bookmarkTab').textContent,'북마크 2','the old marks show while the file is read');
   await bookmark(r,8);assert.equal(r.get('bookmarkTab').textContent,'북마크 1');

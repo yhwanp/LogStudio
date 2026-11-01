@@ -19,21 +19,20 @@ class Dialog extends Element {
 }
 function rig(){
   const document={activeElement:null,listeners:new Map(),addEventListener(name,fn){this.listeners.set(name,fn);}};
-  const elements={shortcutHelp:new Element(document,'button'),shortcutDialog:new Dialog(document),shortcutClose:new Element(document,'button')};
+  const elements={moreButton:new Element(document,'button'),shortcutDialog:new Dialog(document),shortcutClose:new Element(document,'button')};
   document.getElementById=id=>elements[id]??null;
   const help=mountShortcutHelp({document});
   const key=(event,target=document.activeElement??new Element(document))=>{let prevented=false;document.listeners.get('keydown')({target,preventDefault(){prevented=true;},...event});return prevented;};
   return {document,help,key,...elements};
 }
 
-test('the help button and `?` open the dialog and every close returns focus to the opener',()=>{
+test('the menu item and `?` open the dialog and every close returns focus to the opener',()=>{
   const r=rig(),row=new Element(r.document);
-  assert.equal(r.shortcutHelp.attributes['aria-expanded'],'false');
-  r.shortcutHelp.focus();r.shortcutHelp.fire('click');
-  assert.equal(r.shortcutDialog.open,true);assert.equal(r.shortcutHelp.attributes['aria-expanded'],'true');
+  r.moreButton.focus();r.help.open();
+  assert.equal(r.shortcutDialog.open,true);
   assert.equal(r.document.activeElement,r.shortcutClose,'focus moves into the dialog');
   r.shortcutClose.fire('click');
-  assert.equal(r.shortcutDialog.open,false);assert.equal(r.document.activeElement,r.shortcutHelp);assert.equal(r.shortcutHelp.attributes['aria-expanded'],'false');
+  assert.equal(r.shortcutDialog.open,false);assert.equal(r.document.activeElement,r.moreButton);
   row.focus();assert.equal(r.key({key:'?'}),true);assert.equal(r.shortcutDialog.open,true);
   // Escape stops at the dialog so the raw detail and the filter panel stay open.
   const escape=r.shortcutDialog.fire('keydown',{key:'Escape'});
@@ -42,7 +41,7 @@ test('the help button and `?` open the dialog and every close returns focus to t
   r.shortcutDialog.fire('click',{target:r.shortcutClose});assert.equal(r.shortcutDialog.open,true,'a press inside the content keeps it');
   r.shortcutDialog.fire('click');assert.equal(r.shortcutDialog.open,false,'a press on the backdrop closes it');assert.equal(r.document.activeElement,row);
   row.focus();r.key({key:'?'});row.isConnected=false;r.shortcutDialog.fire('cancel');
-  assert.equal(r.shortcutDialog.open,false);assert.equal(r.document.activeElement,r.shortcutHelp,'a removed opener falls back to the help button');
+  assert.equal(r.shortcutDialog.open,false);assert.equal(r.document.activeElement,r.moreButton,'a removed opener falls back to the menu button');
 });
 
 test('`?` types normally in text fields and leaves modified keys alone',()=>{

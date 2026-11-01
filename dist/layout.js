@@ -412,7 +412,6 @@ export function mountLogLayout({document = globalThis.document, window = globalT
     held = !!value; if (held) cancelHide();
   }, setRawMode(value) {
     rawMode = value;
-    $('columnMenu').hidden = value;
     renderHeaders();
   }, setMultiFile(value) {
     if (multiFile === !!value) return;

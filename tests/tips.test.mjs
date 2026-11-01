@@ -73,14 +73,13 @@ function rig({saved = null, file = true} = {}) {
     tipSpot: el('tipSpot', null, {parent: layer}), tipTitle: el('tipTitle', null, {parent: card}), tipBody: el('tipBody', null, {parent: card}), tipStep: el('tipStep', null, {parent: card}),
     tipBack: el('tipBack', null, {parent: card, tag: 'button'}), tipNext: el('tipNext', null, {parent: card, tag: 'button'}), tipOff: el('tipOff', null, {parent: card, tag: 'button'}), tipClose: el('tipClose', null, {parent: card, tag: 'button'}),
     tipsEnabled: el('tipsEnabled', null, {tag: 'input'}), startTour: el('startTour', null, {tag: 'button'}), shortcutDialog: el('shortcutDialog', null, {dialog: true}),
-    rowMenu: el('rowMenu', null), dropHint: el('dropHint', null),
-    shortcutHelp: el('shortcutHelp', rect(1150, 9, 1184, 43), {tag: 'button'}), openFile: el('openFile', rect(1000, 9, 1140, 43), {tag: 'button'}), reopenFile: el('reopenFile', rect(900, 9, 990, 43), {tag: 'button'}),
+    rowMenu: el('rowMenu', null), dropHint: el('dropHint', null), logsJumpForm: el('logsJumpForm', null),
+    moreButton: el('moreButton', rect(1150, 9, 1184, 43), {tag: 'button'}), openFile: el('openFile', rect(1000, 9, 1140, 43), {tag: 'button'}),
     toggleFilters: el('toggleFilters', rect(22, 62, 70, 140), {tag: 'button'}), levelFilters: el('levelFilters', rect(86, 120, 320, 260), {parent: panel}),
     savedFilterButton: el('savedFilterButton', rect(180, 68, 280, 92), {tag: 'button'}),
     logsHeaders: el('logsHeaders', rect(80, 94, 1188, 120)), largeSearchTools: el('largeSearchTools', rect(80, 510, 1188, 556)),
     largeSearchPane: el('largeSearchPane', rect(80, 556, 1188, 790)), bookmarkTab: el('bookmarkTab', rect(90, 515, 150, 545), {tag: 'button'})};
-  elements.rowMenu.hidden = elements.dropHint.hidden = true; elements.tipsEnabled.checked = true;
-  elements.reopenFile.hidden = true;
+  elements.rowMenu.hidden = elements.dropHint.hidden = elements.logsJumpForm.hidden = true; elements.tipsEnabled.checked = true;
   if (!file) for (const id of ['logsViewport', 'logsHeaders', 'largeSearchTools', 'toggleFilters', 'savedFilterButton']) elements[id].hidden = true;
   document.getElementById = id => elements[id] ?? null;
   document.querySelector = selector => ({
@@ -187,12 +186,45 @@ test('a tip closes unseen when its control leaves the screen or another dialog o
   assert.equal(r.layer.open, false, 'nor for a control in a closed panel');
 });
 
+test('the note on what moved reaches only those who saw the first tip, once', () => {
+  const fresh = rig();
+  fresh.tips.offer('moved'); fresh.advance(IDLE_MS);
+  assert.equal(fresh.layer.open, false, 'nothing moved for someone new');
+  const known = rig({saved: {seen: ['help'], off: false}});
+  known.tips.offer('moved'); known.advance(IDLE_MS);
+  assert.equal(known.layer.dataset.tip, 'moved');
+  known.tipNext.click();
+  assert.deepEqual(known.stored().seen, ['help', 'moved']);
+  known.tips.offer('moved'); known.advance(IDLE_MS);
+  assert.equal(known.layer.open, false);
+  const off = rig({saved: {seen: ['help'], off: true}});
+  off.tips.offer('moved'); off.advance(IDLE_MS);
+  assert.equal(off.layer.open, false);
+  const tour = rig();
+  tour.tips.startTour();
+  assert.ok(tour.stored().seen.includes('moved'), 'the tour ends on the menu, so a tour from the shortcut list covers it');
+});
+
+test('the tour leaves out a step whose control is not on screen', () => {
+  const r = rig();
+  r.savedFilterButton.hidden = true;
+  r.tips.startTour();
+  assert.equal(r.tipStep.textContent, `1 / ${TOUR.length - 1}`);
+});
+
+test('a tip does not open over the row box', () => {
+  const r = rig({saved: {seen: ['help'], off: false}});
+  r.logsJumpForm.hidden = false;
+  r.tips.offer('moved'); r.advance(IDLE_MS);
+  assert.equal(r.layer.open, false);
+});
+
 test('a row click that closes the first tip, or comes while it waits, gets the row tip at once', () => {
   const r = rig();
   r.rows[1].classList.add('selected-log-row');
   r.tips.offer('help'); r.advance(IDLE_MS); assert.equal(r.layer.dataset.tip, 'help');
   r.window.fire('pointerdown', {target: r.rows[1]}); r.tips.offer('rows');
-  assert.equal(r.layer.open, false); assert.deepEqual(r.stored().seen, ['help']);
+  assert.equal(r.layer.open, false); assert.deepEqual(r.stored().seen, ['help', 'moved']);
   r.advance(IDLE_MS); assert.equal(r.layer.dataset.tip, 'rows', 'the click that closed the first tip shows its own');
   const late = rig();
   late.rows[1].classList.add('selected-log-row');
@@ -236,9 +268,9 @@ test('the first tip starts the tour: modal, without missing controls, by buttons
   assert.equal(r.tipNext.textContent, '둘러보기'); assert.equal(r.tipBack.textContent, '닫기');
   r.tipNext.click();
   assert.equal(r.tips.mode, 'tour'); assert.equal(r.layer.modal, true); assert.equal(r.layer.dataset.tip, 'tour');
-  assert.deepEqual(r.stored().seen, ['help']);
-  const steps = TOUR.length - 1;
-  assert.equal(r.tipStep.textContent, `1 / ${steps}`, 'the hidden reopen button is left out'); assert.equal(r.tipStep.hidden, false);
+  assert.deepEqual(r.stored().seen, ['help', 'moved']);
+  const steps = TOUR.length;
+  assert.equal(r.tipStep.textContent, `1 / ${steps}`); assert.equal(r.tipStep.hidden, false);
   assert.equal(r.tipTitle.textContent, '로그 열기'); assert.equal(r.tipBack.hidden, true); assert.equal(r.tipOff.hidden, true);
   assert.equal(r.document.activeElement, r.tipNext);
   assert.equal(r.layer.fire('keydown', {key: 'ArrowRight'}).stopped, true);
@@ -253,10 +285,10 @@ test('the first tip starts the tour: modal, without missing controls, by buttons
   r.layer.fire('keydown', {key: 'ArrowLeft'}); r.tipBack.click(); r.tipBack.click();
   assert.equal(r.tipTitle.textContent, '필터');
   for (let i = 2; i < steps; i++) r.tipNext.click();
-  assert.equal(r.tipNext.textContent, '마치기'); assert.equal(r.tipTitle.textContent, '단축키와 둘러보기');
+  assert.equal(r.tipNext.textContent, '마치기'); assert.equal(r.tipTitle.textContent, '메뉴');
   r.tipNext.click();
   assert.equal(r.layer.open, false); assert.equal(r.tips.mode, null); assert.equal(r.document.activeElement, r.logsViewport, 'focus returns');
-  assert.deepEqual(r.stored().seen, ['help', 'levels', 'rows', 'bookmarks', 'search'], 'steps shown count as seeing their tips');
+  assert.deepEqual(r.stored().seen, ['help', 'moved', 'levels', 'rows', 'bookmarks', 'search'], 'steps shown count as seeing their tips');
   r.tips.offer('rows'); r.advance(IDLE_MS); assert.equal(r.layer.open, false, 'so the tour is not repeated by tips');
 });
 

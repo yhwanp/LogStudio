@@ -1,21 +1,20 @@
 // App extensions, which only `extras` builds have (extras/src/lib.rs): the
-// 확장 menu that opens their windows, the row selected here that their
-// pages show, and a row they pick, which is selected here. Other builds
-// list none, so the button stays hidden and nothing is sent.
+// 확장 items of the ⋯ menu that open their windows, the row selected here
+// that their pages show, and a row they pick, which is selected here. Other
+// builds list none, so the menu has no 확장 and nothing is sent.
 const SETTLE_MS = 120;
 
-export function mountExtras({button, native, menu, notify, locate, current, isGone, window = globalThis.window, setTimer = setTimeout, clearTimer = clearTimeout}) {
+export function mountExtras({native, notify, locate, current, isGone, window = globalThis.window, setTimer = setTimeout, clearTimer = clearTimeout}) {
   const invoke = request => native.core.invoke('extras', {request});
   let listed = [], sent = null, timer = null;
   // The row each pane selected last, so that one pane's repaint does not
   // send its row again after the other pane's.
   const last = new Map();
   // Listed again when the window comes back, so a settings file written
-  // meanwhile shows the button without a restart.
+  // meanwhile shows in the menu without a restart.
   async function refresh() {
     try {listed = await invoke({action:'list'});} catch {listed = [];}
     if (!Array.isArray(listed)) listed = [];
-    button.hidden = !listed.length;
   }
   function send(datasetId, line) {
     const key = `${datasetId}:${line}`;
@@ -45,18 +44,14 @@ export function mountExtras({button, native, menu, notify, locate, current, isGo
       ['설정 폴더 열기', () => void reveal(), '확장 기능의 설정 파일(extras/<id>.json)이 있는 폴더를 엽니다'],
     ];
   }
-  button.addEventListener('click', async () => {
-    await refresh();
-    if (isGone() || !listed.length) return;
-    const box = button.getBoundingClientRect?.();
-    menu.show(items(), box ? box.left : 0, box ? box.bottom + 4 : 0, '확장 기능');
-  });
   window?.addEventListener?.('focus', () => {if (!isGone()) void refresh();});
   void native.event.listen('extras-locate', ({payload}) => {
     if (!isGone() && Number.isSafeInteger(payload?.datasetId) && Number.isSafeInteger(payload?.line)) locate(payload.datasetId, payload.line);
   }).catch(() => {});
   void refresh();
   return {
+    available: () => !isGone() && !!listed.length,
+    items,
     // Pane `pane` shows dataset `datasetId` with row `line` selected (null
     // when none); the row is sent once the selection settles.
     selected(pane, datasetId, line) {

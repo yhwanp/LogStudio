@@ -12,12 +12,12 @@ import fixtures
 from fixtures import grow_row as row
 
 VIEW = """const v=document.getElementById('logsViewport'),top=v.getBoundingClientRect().top,rows=[...document.querySelectorAll('#logsRows .log-row')];
-const first=rows.find(r=>r.getBoundingClientRect().top>=top-1);const b=document.getElementById('reopenFile');return {
+const first=rows.find(r=>r.getBoundingClientRect().top>=top-1);return {
  count:document.getElementById('logsCount').textContent,range:document.getElementById('logsRange').textContent,status:document.getElementById('largeStatus').textContent,
  tag:document.getElementById('tagFilter').value,query:document.getElementById('searchInput').value,
  raw:document.getElementById('largeRaw').getAttribute('aria-pressed'),tab:document.getElementById('bookmarkTab').getAttribute('aria-selected'),
  marks:document.getElementById('bookmarkTab').textContent,top:first?.dataset.lineNumber??null,selected:document.querySelector('#logsRows .selected-log-row')?.dataset.lineNumber??null,
- button:{hidden:b.hidden,disabled:b.disabled,title:b.title},error:document.getElementById('errorBar').hidden?null:document.getElementById('largeError').textContent,
+ error:document.getElementById('errorBar').hidden?null:document.getElementById('largeError').textContent,
  errorReopen:!document.getElementById('errorReopen').hidden,toast:document.getElementById('toast').hidden?null:document.getElementById('toast').textContent,marker:window.__marker??null};"""
 SCROLL = "const v=document.getElementById('logsViewport');v.scrollTop=arguments[0];v.dispatchEvent(new Event('scroll'));return true;"
 # A paste event as WebKit delivers it outside text fields, with text only.
@@ -47,8 +47,8 @@ def run(ctx):
         app.wait_count(3000)
         time.sleep(.3)
         s = st()
-        check('the top bar shows an enabled 다시 열기 for a file', not s['button']['hidden'] and not s['button']['disabled'] and '⌘R' in s['button']['title'], s['button'])
-        app.capture('01-topbar-reopen', hover='reopenFile')
+        item = app.menu_items()['다시 열기']
+        check('the menu offers 다시 열기 for a file, with its key', not item['disabled'] and '⌘R' in item['text'], item)
 
         # Work to keep: tag filter, search, raw view, two bookmarks, the bookmark tab, scroll and selection.
         app.enter('tagFilter', 'Wifi')
@@ -99,7 +99,7 @@ def run(ctx):
         app.capture('04-reload-bookmarks-toast')
 
         # Closing saves the work; the store holds paths and state, no log text.
-        app.click('largeClose')
+        app.menu('파일 닫기')
         app.wait(lambda: not app.hidden('emptyState'), what='empty state')
         saved = app.wait(lambda: store.exists() and json.loads(store.read_text()), what='work-states.json')
         text = store.read_text()
@@ -120,7 +120,7 @@ def run(ctx):
         app.open_fixture('grow.log')
         n = until(lambda v: v['marks'] == '북마크 2' and v['toast'], 'restored after restart')
         check('saved work survives an app restart', n['tag'] == 'Wifi' and n['query'] == 'timeout=3', n)
-        app.click('largeClose')
+        app.menu('파일 닫기')
         app.wait(lambda: not app.hidden('emptyState'), what='empty state')
         with log.open('a', encoding='utf-8') as f:
             f.write(row(2400) + '\n')
@@ -146,7 +146,7 @@ def run(ctx):
         time.sleep(.3)
         k, d = st(), dialog()
         check('취소 keeps the open file and returns focus', not d['open'] and d['focus'] == 'largeRaw' and k['count'] == c['count']
-              and k['status'].startswith('파일 2,401행') and not k['button']['disabled'], {'dialog': d, 'count': k['count']})
+              and k['status'].startswith('파일 2,401행'), {'dialog': d, 'count': k['count']})
         js(PASTE, 'plain\nsecond\n')
         asking('paste dialog again')
         app.key('Escape', target='pasteDialog')
@@ -161,10 +161,13 @@ def run(ctx):
         js(PASTE, 'plain\nsecond\n')
         asking('paste dialog to open')
         app.click('pasteOpen')
-        p = until(lambda v: v['count'] == '로그 · 전체 2건' and v['button']['disabled'], 'pasted text')
+        p = until(lambda v: v['count'] == '로그 · 전체 2건', 'pasted text')
         check('열기 replaces the file with the pasted text', not dialog()['open'] and p['tag'] == '' and p['marks'] != '북마크 2', p)
-        check('pasted text disables 다시 열기 with a reason', not p['button']['hidden'] and '다시 열 수 없습니다' in p['button']['title'], p['button'])
-        app.capture('07-reopen-disabled', hover='reopenFile')
+        item = app.wait(lambda: (lambda i: i['disabled'] and i)(app.menu_items()['다시 열기']), what='다시 열기 unavailable')
+        check('pasted text disables 다시 열기 with a reason', '다시 열 수 없습니다' in item['text'], item)
+        app.click('moreButton')
+        app.capture('07-reopen-disabled')
+        app.key('Escape', target='rowMenu')
 
         # Over pasted text the dialog says it cannot be opened again; a
         # second paste while asking replaces the offer, and one opens.
@@ -180,7 +183,7 @@ def run(ctx):
         check('only the newer paste opens', not dialog()['open'], st()['count'])
 
         # With nothing open a paste opens at once.
-        app.click('largeClose')
+        app.menu('파일 닫기')
         app.wait(lambda: not app.hidden('emptyState'), what='empty state')
         js(PASTE, '06-18 19:24:24.983  2983 4241 D SyntheticExample: pasted\n')
         e = until(lambda v: v['count'] == '로그 · 전체 1건', 'pasted into the empty view')
@@ -195,7 +198,7 @@ Promise.all([i('hold_file_paste',{grant:'native-paste-999'}),i('finish_file_past
         unavailable = ('Paste grant is unavailable', 'Paste requires the main window')
         check('an unknown grant cannot be held or opened; discard is harmless; other actions are refused',
               r[0].get('error') in unavailable and r[1].get('error') in unavailable and r[2] == {'ok': {'ignored': True}} and r[3] == {'error': 'Invalid paste action'}, r)
-        app.click('largeClose')
+        app.menu('파일 닫기')
         app.wait(lambda: not app.hidden('emptyState'), what='empty state')
         app.click('clearRecent')
         check('목록 지우기 also clears saved work', app.wait(lambda: json.loads(store.read_text()) == [], what='cleared store'), store.read_text())

@@ -21,77 +21,67 @@ function fakeNative(answers) {
     event:{listen: async (name, fn) => {listeners[name] = fn;}},
   };
 }
-function button() {
-  const listeners = {};
-  return {hidden:true, addEventListener: (k, fn) => {listeners[k] = fn;}, click: () => listeners.click(), getBoundingClientRect: () => ({left:10, bottom:20})};
-}
 const settle = () => new Promise(resolve => setTimeout(resolve, 0));
 function mount(answers, more = {}) {
-  const native = fakeNative(answers), b = button(), shown = [], notes = [], located = [], timers = [], focus = [];
+  const native = fakeNative(answers), notes = [], located = [], timers = [], focus = [];
   const extras = mountExtras({
-    button:b, native, notify:message => notes.push(message), isGone:() => false,
+    native, notify:message => notes.push(message), isGone:() => false,
     window:{addEventListener:(name, fn) => {if (name === 'focus') focus.push(fn);}},
-    menu:{show: (items, x, y, label) => shown.push({items, x, y, label})},
     locate:(datasetId, line) => located.push([datasetId, line]),
     current:() => more.current ?? null,
     setTimer:fn => {timers.push(fn);return timers.length;}, clearTimer:id => {timers[id - 1] = null;},
   });
   const flush = () => {for (const fn of timers.splice(0)) fn?.();};
-  return {native, button:b, shown, notes, located, extras, flush, focus:() => focus.forEach(fn => fn())};
+  return {native, notes, located, extras, flush, focus:() => focus.forEach(fn => fn())};
 }
 
-test('a build without extensions keeps the button hidden and sends no rows', async () => {
+test('a build without extensions offers none and sends no rows', async () => {
   const m = mount({list:[]});
   await settle();
-  assert.equal(m.button.hidden, true);
+  assert.equal(m.extras.available(), false);
   m.extras.selected('logs', 1, 40);
   m.flush();
   assert.deepEqual(m.native.calls, [{action:'list'}]);
   // An older build without the command lists none either.
   const old = mount({list:new Error('Unknown command')});
   await settle();
-  assert.equal(old.button.hidden, true);
+  assert.equal(old.extras.available(), false);
 });
 
 test('the menu lists extensions, opens one, and names a broken one', async () => {
   const m = mount({list:[{id:'track', title:'차량 궤적'}, {id:'other', title:'다른 확장', error:'설정 파일이 올바른 JSON이 아닙니다 (2행)'}], open:{}, select:{}}, {current:{datasetId:3, line:9}});
   await settle();
-  assert.equal(m.button.hidden, false);
-  m.button.click();
-  await settle();
-  const [menu] = m.shown;
-  assert.equal(menu.label, '확장 기능');
-  assert.deepEqual(menu.items.map(item => item?.[0] ?? null), ['차량 궤적', '다른 확장 · 설정 오류', null, '설정 폴더 열기']);
+  assert.equal(m.extras.available(), true);
+  const items = m.extras.items();
+  assert.deepEqual(items.map(item => item?.[0] ?? null), ['차량 궤적', '다른 확장 · 설정 오류', null, '설정 폴더 열기']);
   // A broken one cannot be chosen; what is wrong stays under it.
-  const [, action, , options] = menu.items[1];
+  const [, action, , options] = items[1];
   assert.equal(action, null);
   assert.deepEqual(options, {disabled:true, note:'extras/other.json · 설정 파일이 올바른 JSON이 아닙니다 (2행)'});
-  menu.items[0][1]();
+  items[0][1]();
   await settle();
   // A window that opens shows the row selected now.
   assert.deepEqual(m.native.calls.slice(-2), [{action:'open', id:'track'}, {action:'select', datasetId:3, line:9}]);
-  menu.items[3][1]();
+  items[3][1]();
   await settle();
   assert.deepEqual(m.native.calls.at(-1), {action:'reveal'});
 });
 
-test('a settings file written while the app runs shows the button when the window comes back', async () => {
+test('a settings file written while the app runs shows in the menu when the window comes back', async () => {
   let listing = [];
   const m = mount({list:() => listing});
   await settle();
-  assert.equal(m.button.hidden, true);
+  assert.equal(m.extras.available(), false);
   listing = [{id:'track', title:'궤적'}];
   m.focus();
   await settle();
-  assert.equal(m.button.hidden, false);
+  assert.equal(m.extras.available(), true);
 });
 
 test('a window that cannot open says why', async () => {
   const m = mount({list:[{id:'track', title:'궤적'}], open:new Error('확장 기능 창을 열 수 없습니다')});
   await settle();
-  m.button.click();
-  await settle();
-  m.shown[0].items[0][1]();
+  m.extras.items()[0][1]();
   await settle();
   assert.deepEqual(m.notes, ['확장 기능 창을 열 수 없습니다']);
 });

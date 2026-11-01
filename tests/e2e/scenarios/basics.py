@@ -85,20 +85,20 @@ def run(ctx):
     lines = fixtures.ui(ctx.fixtures)
     with ctx.launch() as app:
         js, check = app.js, ctx.check
-        a = js(VISIBLE + "return {empty:v('emptyState'),content:v('logContent'),close:v('largeClose'),"
+        a = js(VISIBLE + "return {empty:v('emptyState'),content:v('logContent'),"
                "topbar:document.querySelector('.topbar').getBoundingClientRect().height};")
-        check('empty state shown before any file', a['empty'] and not a['content'] and not a['close'], a)
+        check('empty state shown before any file', a['empty'] and not a['content'] and '파일 닫기' not in app.menu_items(), a)
         app.capture('01-empty')
 
         app.open_fixture('ui.log')
         app.wait_count(3000)
-        b = js(VISIBLE + "const r=document.querySelector('#logsRows .log-row');return {empty:v('emptyState'),content:v('logContent'),close:v('largeClose'),"
+        b = js(VISIBLE + "const r=document.querySelector('#logsRows .log-row');return {empty:v('emptyState'),content:v('logContent'),"
                "progress:v('loadProgress'),name:document.getElementById('largeName').textContent,size:document.getElementById('largeSize').textContent,"
-               "rowTab:r.tabIndex,describedby:r.getAttribute('aria-describedby'),label:r.getAttribute('aria-label'),"
-               "exportLogs:document.getElementById('exportLogs').disabled,exportSearch:document.getElementById('exportSearch').disabled};")
-        check('file view replaces the empty state', not b['empty'] and b['content'] and b['close'] and not b['progress'] and b['name'] == 'ui.log', b)
+               "rowTab:r.tabIndex,describedby:r.getAttribute('aria-describedby'),label:r.getAttribute('aria-label')};")
+        menu = app.menu_items()
+        check('file view replaces the empty state', not b['empty'] and b['content'] and '파일 닫기' in menu and not b['progress'] and b['name'] == 'ui.log', b)
         check('rows are not tab stops and keep readable content', b['rowTab'] == -1 and b['describedby'] == 'logsRowHint' and b['label'] is None, b)
-        check('top bar shows the file size; export only for completed results', b['size'] == '449.5 KiB' and b['exportLogs'] is False and b['exportSearch'] is True, b)
+        check('top bar shows the file size; export only for completed results', b['size'] == '449.5 KiB' and not menu['전체 로그 내보내기…']['disabled'] and menu['검색 결과 내보내기…']['disabled'], b)
         tint = js("const r=document.querySelector('#logsRows .level-row-E');return r&&{bg:getComputedStyle(r).backgroundColor,plain:getComputedStyle(document.querySelector('#logsRows .level-row-I')).backgroundColor};")
         check('error rows are tinted', tint and tint['bg'] != tint['plain'], tint)
         app.capture('02-loaded')
@@ -498,6 +498,6 @@ return {error,ratio:getComputedStyle(document.getElementById('workspace')).getPr
         app.click('largeRaw')
         check('raw view renders rows', app.wait(lambda: js("return document.getElementById('logsTable').classList.contains('raw-mode')&&document.querySelectorAll('#logsRows .raw-content').length>0"), 5, what='raw view'))
         app.click('largeColumns')
-        app.click('largeClose')
+        app.menu('파일 닫기')
         app.wait(lambda: js(VISIBLE + "return v('emptyState')&&!v('logContent')"), what='empty state')
         check('closing returns to the empty state without an error', js("return document.getElementById('largeError').hidden"))

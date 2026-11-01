@@ -210,11 +210,8 @@ test('the date/time fit never replaces a width the user chose and returns with t
   }
 });
 
-test('column tools sit in one menu button that raw view hides',()=>{
+test('fitting columns with nothing rendered gives each its minimum',()=>{
   const r=rig();
-  assert.equal(r.get('columnMenu').hidden,false);
-  r.layout.setRawMode(true);assert.equal(r.get('columnMenu').hidden,true);
-  r.layout.setRawMode(false);assert.equal(r.get('columnMenu').hidden,false);
   r.get('logsHeaders').children[2].children[1].fire('keydown',{key:'ArrowRight',preventDefault(){}});
   r.layout.fitColumns();
   assert.deepEqual(r.writes.at(-1).widths,[52,100,40,40,56,64],'nothing rendered: each column fits its minimum, the row column its automatic width');

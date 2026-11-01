@@ -86,7 +86,7 @@ def run(ctx):
         with ctx.launch() as app:
             app.open_fixture('track.log')
             app.wait_count(1200)
-            check('without a settings file the 확장 button stays hidden', app.hidden('extrasButton'))
+            check('without a settings file the menu has no 확장', '확장' not in app.menu_items())
         settings.parent.mkdir(parents=True, exist_ok=True)
         settings.write_text(good, encoding='utf-8')
         with ctx.launch() as app:
@@ -97,21 +97,21 @@ def run(ctx):
             until = lambda pred, what, timeout=20: app.wait(lambda: (lambda v: pred(v) and v)(state()), timeout, what=what)
 
             def open_track():
-                app.click('extrasButton')
+                app.menu('확장')
                 app.wait(lambda: js(MENU), what='extensions menu')
                 js(CHOOSE, '테스트 궤적')
                 return app.wait(lambda: (lambda h: 'extra-track' in h and h)(handles()), what='track window')
             try:
-                app.wait(lambda: not app.hidden('extrasButton'), 10, what='확장 button')
+                app.wait(lambda: '확장' in app.menu_items(), 10, what='확장 in the menu')
             except Timeout:
                 check('the build has extensions (--features qa,extras)', False)
                 return
             app.open_fixture('track.log')
             app.wait_count(1200)
-            app.click('extrasButton')
+            app.menu('확장')
             items = app.wait(lambda: js(MENU), what='extensions menu')
             check('the 확장 menu lists the extension by its title, then the settings folder',
-                  [i['label'] for i in items] == ['테스트 궤적', '설정 폴더 열기'] and not any(i['disabled'] for i in items), items)
+                  [i['label'] for i in items] == ['‹ 메뉴', '테스트 궤적', '설정 폴더 열기'] and not any(i['disabled'] for i in items), items)
             app.capture('01-extras-menu')
             js(CHOOSE, '테스트 궤적')
             opened = app.wait(lambda: (lambda h: 'extra-track' in h and h)(handles()), what='track window')
@@ -223,6 +223,8 @@ return {chip:document.getElementById('selection').textContent,apart:t.top>=c.bot
             app.capture('08-second-source')
             switch('main')
             app.open_fixture('track-both.log')
+            # The log before it has 600 rows too.
+            app.wait(lambda: app.text('largeName') == 'track-both.log', what='track-both.log')
             app.wait_count(600)
             app.jump(100)
             app.wait(lambda: js(SELECTED) == '100', what='row 100 selected')
@@ -244,28 +246,46 @@ return {chip:document.getElementById('selection').textContent,apart:t.top>=c.bot
             app.wait(lambda: 'extra-track' not in handles(), what='track window closed again')
             switch('main')
 
+            # The list is read again when the window comes back, as it does
+            # from the editor; a test window in the background gets no event.
+            def read_back(ok, what):
+                js("window.dispatchEvent(new Event('focus'));return true;")
+
+                def listed():
+                    app.menu('확장')
+                    items = app.wait(lambda: js(MENU), what=what)
+                    if ok(items):
+                        return items
+                    app.key('Escape', target='rowMenu')
+                    app.key('Escape', target='rowMenu')
+                    return False
+                return app.wait(listed, what=what)
+
             # A broken settings file stays listed with what is wrong.
             settings.write_text('{"marker": "onPositionChanged",', encoding='utf-8')
-            app.click('extrasButton')
-            items = app.wait(lambda: js(MENU), what='menu with a broken extension')
-            broken = items[0] if items else {}
+            items = read_back(lambda i: len(i) > 1 and '설정 오류' in i[1]['label'], 'menu with a broken extension')
+            broken = items[1] if len(items) > 1 else {}
             check('a broken settings file shows as an item that cannot be chosen, with what is wrong under it',
                   broken.get('label') == '좌표 궤적 · 설정 오류' and broken.get('disabled')
                   and broken.get('note') == 'extras/track.json · 설정 파일이 올바른 JSON이 아닙니다 (1행).', items)
             app.capture('06-broken-settings')
             app.key('Escape', target='rowMenu')
+            app.key('Escape', target='rowMenu')
             # A source written beside the list says where it belongs.
             settings.write_text('{"marker": "onPositionChanged", "latitude": "fix.lat", "longitude": "fix.lon"}', encoding='utf-8')
-            app.click('extrasButton')
-            items = app.wait(lambda: js(MENU), what='menu with a source outside sources')
+            items = read_back(lambda i: len(i) > 1 and 'sources' in (i[1]['note'] or ''), 'menu with a source outside sources')
             check('a source outside the sources list is a settings error that says where it goes',
-                  (items[0] if items else {}).get('note')
+                  (items[1] if len(items) > 1 else {}).get('note')
                   == 'extras/track.json · marker·latitude·longitude 같은 좌표 항목은 sources 배열 안에 적어 주세요.', items)
             app.capture('10-source-outside-list')
+            app.key('Escape', target='rowMenu')
             app.key('Escape', target='rowMenu')
 
             # The app ends with the main window, the track window open or not.
             settings.write_text(good, encoding='utf-8')
+            read_back(lambda i: any(item['label'] == '테스트 궤적' for item in i), 'menu with the extension back')
+            app.key('Escape', target='rowMenu')
+            app.key('Escape', target='rowMenu')
             open_track()
             try:
                 app.close_window()

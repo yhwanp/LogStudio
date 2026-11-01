@@ -11,5 +11,5 @@ const tips=mountTips({closeHelp:()=>help?.close(),needsFile:()=>!$('emptyState')
 if(!tauri){$('largeLogPanel').hidden=false;$('largeError').textContent='LogStudio 데스크톱 앱을 실행해 주세요.';$('largeError').hidden=false;$('errorBar').hidden=false;}
 else{
  mountZoom({setZoom:level=>tauri.webview.getCurrentWebview().setZoom(level),indicator:$('zoomIndicator')});
- mountLargeLogView(tauri,{transport:desktopTransport(tauri),tips});
+ mountLargeLogView(tauri,{transport:desktopTransport(tauri),tips,help});
 }

@@ -91,7 +91,7 @@ def run(ctx):
         time.sleep(.3)
 
         # A reload keeps it off; a changed condition switches it on.
-        app.click('reopenFile')
+        app.menu('다시 열기')
         app.wait(lambda: '다시 열었습니다' in (st()['toast'] or ''), what='reload notice')
         app.wait_count(3000)
         s = st()
@@ -161,5 +161,6 @@ def run(ctx):
         check('the last chip says it is gone, not that the filter is on', (s['toast'] or '').startswith('마지막 조건을 해제했습니다.'), s)
         app.capture('07-last-condition')
 
-        help_open = "document.getElementById('shortcutHelp').click();return document.getElementById('shortcutDialog').textContent;"
-        check('the shortcut list names the switch', '필터 끄기·켜기' in js(help_open), None)
+        app.menu('단축키·기능 둘러보기')
+        d = app.wait(lambda: js("const d=document.getElementById('shortcutDialog');return d.open&&d.textContent;"), what='shortcut list')
+        check('the shortcut list names the switch', '필터 끄기·켜기' in d)

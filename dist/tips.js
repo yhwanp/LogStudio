@@ -34,7 +34,10 @@ function rowInView(document) {
 export const TIPS = {
   // Offered while a file is shown; a tip for something the user just did
   // takes its place while it waits for a pause.
-  help: {ambient: true, target: byId('shortcutHelp'), title: '처음 사용하시나요?', body: '주요 기능을 화면에서 차례로 짚어 드립니다. 단축키 목록과 이 둘러보기는 이 버튼이나 {?} 키로 언제든 열 수 있습니다.', next: '둘러보기', back: '닫기', tour: true},
+  help: {ambient: true, also: 'moved', target: byId('moreButton'), title: '처음 사용하시나요?', body: '주요 기능을 화면에서 차례로 짚어 드립니다. 단축키 목록과 이 둘러보기는 이 메뉴나 {?} 키로 언제든 열 수 있습니다.', next: '둘러보기', back: '닫기', tour: true},
+  // For those who knew these controls on the main screen, so only after
+  // `help`; seeing `help` first means nothing moved for them.
+  moved: {ambient: true, after: 'help', target: byId('moreButton'), title: '메뉴로 옮겼습니다', body: '최근 파일, 다시 열기({⌘R}), 파일 닫기, 내보내기, 행 번호로 이동({⌘L}), 열 폭, 단축키·기능 둘러보기는 이제 이 메뉴에 있습니다.'},
   // Offered when the condition editor opens; the panel stays open meanwhile.
   levels: {target: byId('levelFilters'), sides: ['right', 'bottom', 'top', 'left'], title: '조건 편집', body: '입력한 값과 고른 레벨은 바로 적용됩니다. 레벨을 {Alt}+클릭하면 그 레벨만 고르고, 입력란에는 값 하나를 적습니다. 여러 값은 정규식으로 찾습니다.'},
   // Offered when a row of the upper logs is selected.
@@ -49,14 +52,13 @@ export const TIPS = {
 // step shown counts as seeing the tip it `covers`.
 export const TOUR = [
   {target: byId('openFile'), title: '로그 열기', body: '{⌘O}로 파일을 엽니다. 여러 파일을 함께 선택하거나 창에 끌어다 놓으면 시간순으로 합쳐 하나의 로그로 엽니다. 로그 텍스트는 {⌘V}로 붙여넣습니다.'},
-  {target: byId('reopenFile'), title: '다시 열기', body: '파일이 바뀌면 {⌘R}로 다시 읽습니다. 필터·검색·북마크와 보던 위치는 그대로 남습니다.'},
   {covers: 'levels', target: byId('toggleFilters'), sides: ['right', 'bottom', 'top', 'left'], title: '필터', body: '레벨·태그·메시지·PID/TID·시간으로 위 로그를 거릅니다. 보기 조건 중 하나라도 맞는 줄을 보여 주고, 제외 조건에 맞는 줄은 숨깁니다. + 추가로 조건을 만들거나 로그 행을 우클릭해 그 행의 값으로 만들 수 있습니다. 입력란에는 값 하나를 적고, 여러 값은 정규식으로 찾습니다.'},
   {target: byId('savedFilterButton'), sides: ['bottom', 'right', 'top', 'left'], title: '저장된 필터', body: '자주 쓰는 필터를 이름 붙여 저장해 두고, 다른 파일을 열었을 때 여기서 선택해 바로 적용합니다. 적용한 뒤 조건을 바꾸면 \'수정됨\'이 붙고, 다시 저장하거나 저장한 조건으로 되돌릴 수 있습니다.'},
   {covers: 'rows', target: rowInView, clip: logsViewport, title: '행 선택과 복사', body: '행을 클릭하면 아래에 그 로그의 원문이 한 줄로 열립니다. 원문 위 경계선을 드래그해 높이를 바꾸고, 더블클릭하면 내용에 맞춥니다. 드래그·{Shift}+클릭으로 이어진 행을, {⌘}+클릭으로 떨어진 행을 선택해 {⌘C}로 복사하고, 우클릭하면 그 행의 태그·메시지·PID·시각으로 바로 거릅니다.'},
   {covers: 'bookmarks', target: document => rowInView(document)?.children?.[0] ?? null, clip: logsViewport, title: '북마크', body: '다시 볼 행은 {⌘B}로 북마크해 두세요. 북마크하면 행 번호에 표시가 붙고 아래 북마크 탭에 모이며, 필터나 검색을 바꿔도 남습니다. {F2}·{Shift}+{F2}로 북마크 사이를 오갑니다.'},
   {target: byId('logsHeaders'), title: '열 폭', body: '머리글 경계를 드래그해 폭을 바꾸고, 경계를 더블클릭하면 내용에 맞춥니다. 머리글을 우클릭하면 모든 열을 내용에 맞추거나 기본 폭으로 되돌립니다.'},
   {covers: 'search', target: byId('largeSearchTools'), sides: ['top', 'bottom', 'right', 'left'], title: '검색', body: '{⌘F}나 {/}로 검색창으로 갑니다. 결과는 아래쪽에 열리고 {Enter}·{Shift}+{Enter}로 결과를 위 로그에서 차례로 보여 줍니다. 결과가 열리면 경계선을 끌어 위아래 높이를 바꿀 수 있습니다.'},
-  {target: byId('shortcutHelp'), title: '단축키와 둘러보기', body: '전체 단축키 목록은 이 버튼이나 {?} 키로 언제든 엽니다. 이 둘러보기도 그 창에서 다시 시작할 수 있습니다.'},
+  {target: byId('moreButton'), title: '메뉴', body: '최근 파일, 다시 열기({⌘R}), 내보내기, 행 번호로 이동({⌘L})은 이 메뉴에 있습니다. 전체 단축키 목록도 여기나 {?} 키로 열고, 이 둘러보기도 그 창에서 다시 시작할 수 있습니다.'},
 ];
 
 export function readTipState(storage) {
@@ -127,7 +129,7 @@ export function mountTips({document = globalThis.document, window = globalThis.w
   let mode = null, current = null, pending = null, tour = null, opener = null, frame = null, placed = '';
   let lastInput = -Infinity;
   const view = () => ({width: window.innerWidth || 0, height: window.innerHeight || 0});
-  const busy = () => !!document.querySelector('dialog[open]:not(#tipLayer)') || $('rowMenu')?.hidden === false || $('dropHint')?.hidden === false || !!document.querySelector('.resizing-columns,.resizing-panes');
+  const busy = () => !!document.querySelector('dialog[open]:not(#tipLayer)') || $('rowMenu')?.hidden === false || $('logsJumpForm')?.hidden === false || $('dropHint')?.hidden === false || !!document.querySelector('.resizing-columns,.resizing-panes');
   function syncSetting() { if (enabled) enabled.checked = !state.off; }
   // Settings are read again before each change: another launch or a test
   // harness may have changed them.
@@ -136,7 +138,7 @@ export function mountTips({document = globalThis.document, window = globalThis.w
 
   function offer(id, {hold} = {}) {
     const def = TIPS[id];
-    if (!def || mode || state.off || state.seen.has(id)) return;
+    if (!def || mode || state.off || state.seen.has(id) || (def.after && !state.seen.has(def.after))) return;
     if (pending) {
       if (pending.id === id || !pending.def.ambient || def.ambient) return;
       window.clearTimeout(pending.timer);
@@ -169,7 +171,7 @@ export function mountTips({document = globalThis.document, window = globalThis.w
     if (mode !== 'tip') return;
     const shown = current; mode = null; current = null; stopLoop(); closeLayer();
     shown.hold?.(false);
-    if (seen) save(s => s.seen.add(shown.id));
+    if (seen) save(s => { s.seen.add(shown.id); if (shown.def.also) s.seen.add(shown.def.also); });
   }
 
   function startTour() {
@@ -177,7 +179,7 @@ export function mountTips({document = globalThis.document, window = globalThis.w
     if (pending) { window.clearTimeout(pending.timer); pending = null; }
     hideTip(true);
     // The tour is what the first tip offers; it is not offered afterwards.
-    save(s => s.seen.add('help'));
+    save(s => { s.seen.add('help'); s.seen.add('moved'); });
     opener = document.activeElement; mode = 'tour';
     const run = tour = {steps: [], index: -1, timer: null};
     layer.classList.add('tour-mode'); layer.dataset.tip = 'tour';

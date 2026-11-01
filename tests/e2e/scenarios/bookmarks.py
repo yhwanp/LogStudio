@@ -195,7 +195,7 @@ def run(ctx):
         app.click_row(5)
         app.key('b', meta=True)
         time.sleep(.2)
-        app.click('largeClose')
+        app.menu('파일 닫기')
         app.wait(lambda: not app.hidden('emptyState'), what='empty state')
         app.open_fixture('ui.log')
         app.wait_count(3000)
