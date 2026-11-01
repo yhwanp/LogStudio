@@ -4,7 +4,7 @@
 
 [Windows·macOS 다운로드](https://github.com/yhwanp/LogStudio/releases/latest) · [사용 설명서](docs/USER_GUIDE.md)
 
-https://github.com/user-attachments/assets/bfe612d8-acb8-45b8-8507-1085cf5f9e58
+https://github.com/user-attachments/assets/8667f925-cfe9-41f2-af76-31c8e7babd5a
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/main-dark.png">
