@@ -218,7 +218,7 @@ done | sort -u
 
 - `main` 브랜치 push 및 PR 시 Windows·macOS 빌드·테스트·패키징 워크플로([desktop.yml](../.github/workflows/desktop.yml))가 실행됩니다.
 - 같은 워크플로는 `main` push 때 확장 기능을 넣은 빌드(`--features extras`)도 OS별로 `extras-LogStudio-macos-arm64`·`extras-LogStudio-windows-x64` 아티팩트로 올립니다. 이 아티팩트는 릴리스에 포함되지 않습니다. 두 OS 모두 PR에서도 이 빌드를 clippy로 검사합니다.
-- 앱 버전(`src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, `package.json` 세 곳의 버전이 일치해야 함)과 동일한 `v1.0.0` 형식의 태그를 push하면 빌드 및 체크섬 검증 후 GitHub Releases에 Windows·macOS ZIP과 각각의 `.zip.sha256` 파일이 자동 게시됩니다.
+- 앱 버전과 동일한 `v1.0.0` 형식의 태그를 push하면 빌드 및 체크섬 검증 후 GitHub Releases에 Windows·macOS ZIP과 각각의 `.zip.sha256` 파일이 자동 게시됩니다. 버전은 `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, `package.json` 세 곳이 일치해야 하며, `Cargo.lock`의 `logstudio-desktop` 버전도 함께 올려야 `--locked` 빌드가 통과합니다.
 
 ### macOS에서 한 번에 빌드하고 실행
 
