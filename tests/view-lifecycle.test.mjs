@@ -14,17 +14,24 @@ const chipNodes=row=>row.children.flatMap(node=>node.className==='chip-group'?no
 // is the condition's switch, its kind and its summary.
 const chipEdit=chip=>chip.children[0],chipClear=chip=>chip.children[1];
 const listItems=r=>r.get('conditionList').children,itemKinds=r=>listItems(r).map(item=>item.children[1].textContent),itemSummaries=r=>listItems(r).map(item=>item.children[2].textContent);
+// The ⋯ menu's item called `label`, opened for the look of it or the click.
+const moreItem=async(r,label)=>{await r.get('moreButton').dispatch('click');return r.get('rowMenu').children.find(n=>n.textContent===label||n.textContent.startsWith(`${label} `));};
+const closeMenu=r=>r.get('rowMenu').dispatch('keydown',{key:'Escape',preventDefault(){},stopPropagation(){}});
+const choose=async(r,label)=>{const item=await moreItem(r,label);assert.ok(item,label);await item.dispatch('click');await settle();};
+// What the item offers now, with the menu closed again.
+const moreState=async(r,label)=>{const item=await moreItem(r,label);await closeMenu(r);return item&&{disabled:item.attributes['aria-disabled']==='true',title:item.title,text:item.textContent};};
 class Element {
   constructor(tag='div'){this.tagName=tag.toUpperCase();this.children=[];this.listeners={};this.dataset={};this.attributes={};this.value='';this.checked=false;this.hidden=false;this._text='';this.style={setProperty(key,value){this[key]=value;},removeProperty(key){delete this[key];}};this.clientHeight=280;this.scrollTop=0;this.classList={toggle(){},add:(...names)=>{this.className=[...new Set([...String(this.className??'').split(' ').filter(Boolean),...names])].join(' ');}};}
   get textContent(){return this._text+this.children.map(child=>child.textContent).join('');}
   set textContent(value){this._text=String(value);this.children=[];}
-  append(...nodes){for(const node of nodes){if(node.fragment){this.append(...node.children);continue;}if(node.parentElement)node.parentElement.children=node.parentElement.children.filter(child=>child!==node);node.parentElement=this;this.children.push(node);}}
+  append(...nodes){for(const part of nodes){const node=typeof part==='string'?Object.assign(new Element('span'),{_text:part}):part;if(node.fragment){this.append(...node.children);continue;}if(node.parentElement)node.parentElement.children=node.parentElement.children.filter(child=>child!==node);node.parentElement=this;this.children.push(node);}}
   replaceChildren(...nodes){this.children=[];this._text='';this.append(...nodes);}
   insertBefore(node,before){if(node.parentElement)node.parentElement.removeChild(node);const i=before?this.children.indexOf(before):this.children.length;this.children.splice(i,0,node);node.parentElement=this;}
   removeChild(node){this.children=this.children.filter(child=>child!==node);node.parentElement=null;}
   removeAttribute(key){delete this.attributes[key];}
   contains(node){return this===node||this.children.some(child=>child.contains(node));}
   focus(){if(this.ownerDocument)this.ownerDocument.activeElement=this;}
+  click(){return this.dispatch('click');}
   getBoundingClientRect(){return {left:0,top:0,right:0,bottom:0,width:0,height:0};}
   querySelectorAll(selector){return selector==='[role^=menuitem]'?this.children.filter(child=>child.attributes.role?.startsWith('menuitem')):[];}
   setAttribute(key,value){this.attributes[key]=String(value);}
@@ -32,7 +39,7 @@ class Element {
   dispatch(key,event={}){return Promise.all((this.listeners[key]??[]).map(fn=>fn(event)));}
   querySelector(selector){const line=selector.match(/^\[data-line-number="(\d+)"\]$/)?.[1];return this.children.find(child=>line?child.dataset.lineNumber===line:child.className===selector.slice(1));}
 }
-async function rig({rows=[],detail=null,query=null,page=null,startupError=null,files=null,total=6,format=null}={}){
+async function rig({rows=[],detail=null,query=null,page=null,startupError=null,files=null,total=6,format=null,exported=null,extrasList=[],capture=null}={}){
   let ownerDocument;const elements=new Map(),get=id=>{if(!elements.has(id))elements.set(id,Object.assign(new Element(),{ownerDocument}));return elements.get(id);};
   // Column layout has its own mounted tests; this rig exercises view lifecycle.
   delete get('workspace').style;
@@ -50,11 +57,12 @@ async function rig({rows=[],detail=null,query=null,page=null,startupError=null,f
     if(action==='pick_file')return picker.promise;
     if(action==='cancel_open')return cancel(args);
     if(action==='take_startup_error')return startupError;
-    if(action==='export_results')return {rows:3000};
+    if(action==='export_results')return exported??{rows:3000};
+    if(action==='extras')return args.request.action==='list'?extrasList:{};
     if(action!=='log_request')return {};
     const b=args.request,id={datasetId:dataset};
     if(b.action==='close')return {closed:true};
-    if(b.action==='status')return {...id,name:files?`${files[0].name} 외 ${files.length-1}개`:'synthetic',...(files?{files}:{}),...(format?{format}:{}),size:100,total,textComplete:complete,summaryComplete:true,complete,status:complete?'ready':'indexing',summary:{counts:{I:3,W:1}},query:null};
+    if(b.action==='status')return {...id,name:files?`${files[0].name} 외 ${files.length-1}개`:'synthetic',...(files?{files}:{}),...(format?{format}:{}),...(capture?{capture}:{}),size:100,total,textComplete:complete,summaryComplete:true,complete,status:complete?'ready':'indexing',summary:{counts:{I:3,W:1}},query:null};
     if(b.action==='query'&&query)return {...id,queryId:b.queryId,query:{id:b.queryId,...await query(b)}};
     if(b.action==='query'||b.action==='cancel')return {...id,queryId:b.queryId,query:{id:b.queryId,status:'complete',count:rows.length||6,complete:true}};
     if(b.action==='page')return {...id,queryId:b.queryId,start:b.start,count:rows.length||6,rows:page?await page(b):rows.slice(b.start,b.start+b.count)};
@@ -254,7 +262,7 @@ test('rapid typing discards old results/detail once while one stable searching l
     assert.equal(r.get('largeDetailText').contains(r.document.selection.anchorNode),false);
   }
   assert.equal(writes,1,'repeated input does not rewrite identical status text');assert.equal(queries(),before);
-  assert.equal([...r.timers.values()].filter(t=>t.ms===150).length,1);assert.equal(r.get('largeJump').disabled,true);
+  assert.equal([...r.timers.values()].filter(t=>t.ms===150).length,1);
   const pendingId=r.controller.getState().queryId;
   await r.emitProgress({pane:'search',state:{datasetId:old.datasetId,status:'ready',textComplete:true,summaryComplete:true,complete:true,total:6,query:{id:old.queryId,status:'complete',count:1,complete:true}}});await new Promise(resolve=>setTimeout(resolve,5));
   assert.equal(label.textContent,' · 검색 중');assert.equal(writes,1);assert.equal(r.get('largeRows').children.length,0);assert.equal(r.controller.getState().queryId,pendingId);
@@ -796,7 +804,7 @@ test('invalid IDs are explained beside the fields and the empty state follows th
   assert.equal(r.get('largeError').hidden,true,'an open editor shows the error inline only');
   r.get('pidFilter').value='12';await r.get('pidFilter').dispatch('input');await r.get('pidFilter').dispatch('keydown',{key:'Enter',preventDefault(){}});await settle();
   assert.equal(r.get('pidFilterError').hidden,true);
-  await r.get('largeClose').dispatch('click');await settle();
+  await choose(r,'파일 닫기');
   assert.equal(r.get('emptyState').hidden,false);assert.equal(r.get('logContent').hidden,true);
 });
 
@@ -1204,19 +1212,22 @@ test('untranslated engine errors keep their detail behind Korean context',async(
 
 test('export starts only for completed results and reports the written rows',async t=>{
   const r=await rig();t.after(()=>r.controller.close());
-  assert.equal(r.get('exportLogs').disabled,false);
-  await r.get('exportLogs').dispatch('click');await settle();
+  assert.equal((await moreState(r,'전체 로그 내보내기…')).disabled,false);
+  await choose(r,'전체 로그 내보내기…');
   const call=r.calls.find(c=>c.action==='export_results');
-  assert.deepEqual({pane:call.args.pane,suggestedName:call.args.suggestedName},{pane:'logs',suggestedName:'synthetic-filtered.log'});
+  assert.deepEqual({pane:call.args.pane,suggestedName:call.args.suggestedName},{pane:'logs',suggestedName:'synthetic-all.log'});
   assert.equal(call.args.queryId,r.controller.logs.getState().queryId);
-  assert.equal(r.get('exportSearch').disabled,true,'no search results to export');
+  assert.equal((await moreState(r,'검색 결과 내보내기…')).disabled,true,'no search results to export');
 });
 
 test('recent files are listed by opaque id and reopened through the native record',async t=>{
   const r=await rig();t.after(()=>r.controller.close());
-  assert.equal(r.get('recentFiles').hidden,true);assert.equal(r.get('recentButton').hidden,true);
+  assert.equal(r.get('recentFiles').hidden,true);assert.equal(await moreState(r,'최근 파일'),undefined);
   r.listener('recent-changed')({payload:[{id:7,name:'a.log',folder:'~/logs'},{id:'x',name:'bad'},{id:8,name:'b.log',folder:'/tmp'}]});
-  assert.equal(r.get('recentFiles').hidden,false);assert.equal(r.get('recentButton').hidden,false);
+  assert.equal(r.get('recentFiles').hidden,false);
+  await choose(r,'최근 파일');
+  assert.deepEqual(r.get('rowMenu').children.filter(n=>n.tagName==='BUTTON').map(n=>n.textContent),['‹ 메뉴','a.log','b.log','목록 지우기'],'the menu shows them in its place, with a way back');
+  await closeMenu(r);await settle();await closeMenu(r);
   const items=r.get('recentList').children;assert.equal(items.length,2,'malformed entries are ignored');
   assert.equal(items[0].children[0].textContent,'a.log~/logs');
   await items[1].children[0].dispatch('click');await settle();
@@ -1559,12 +1570,126 @@ test('search cancel shows inside the search box only while a started search runs
   assert.equal(cancel.hidden,true);assert.equal(delayed().length,0,'a finished search clears the pending show');
 });
 
-test('column width tools open from the heading menu and a header right-click, not in raw view',async t=>{
+test('the ⋯ menu lists what the open file offers, in groups',async t=>{
+  const r=await rig();t.after(()=>r.controller.close());
+  const labels=()=>r.get('rowMenu').children.map(n=>n.tagName==='HR'?null:n.textContent);
+  await r.get('moreButton').dispatch('click');
+  assert.deepEqual(labels().map(label=>label?.replace(/^(다시 열기 Ctrl\+R).*/,'$1')??null),['다시 열기 Ctrl+R','파일 닫기',null,'전체 로그 내보내기… · 6행','검색 결과 내보내기… 검색어를 입력하면 내보낼 수 있습니다',null,'행 번호로 이동… Ctrl+L','열 폭 ›',null,'단축키·기능 둘러보기 ?']);
+  assert.equal(r.get('rowMenu').attributes['aria-label'],'메뉴');
+  await closeMenu(r);await r.get('largeRaw').dispatch('click');
+  await r.get('moreButton').dispatch('click');
+  assert.ok(!labels().includes('열 폭 ›'),'raw view has no columns');
+  await closeMenu(r);await r.controller.close();
+  await r.get('moreButton').dispatch('click');
+  assert.deepEqual(labels(),['단축키·기능 둘러보기 ?'],'without a file only the app\'s own item stays');
+});
+
+test('Cmd/Ctrl+L opens the row box; a row outside the file keeps it open, a good one closes it',async t=>{
+  const rows=Array.from({length:30},(_,i)=>({lineNumber:i+1,kind:'raw',raw:`line ${i+1}`}));
+  const r=await rig({rows,total:30});t.after(()=>r.controller.close());
+  const lKey=()=>r.handlers.get('keydown')({key:'l',ctrlKey:true,target:r.get('logsViewport'),preventDefault(){}});
+  const form=r.get('logsJumpForm'),input=r.get('logsJump'),submit=async value=>{input.value=value;await form.dispatch('submit',{preventDefault(){}});await settle();};
+  lKey();
+  assert.equal(form.hidden,false);assert.equal(r.document.activeElement,input);
+  await submit('99');
+  assert.equal(form.hidden,false);assert.equal(input.attributes['aria-invalid'],'true');assert.match(r.get('jumpError').textContent,/마지막 행은 30행/);
+  assert.doesNotMatch(r.get('toast').textContent,/마지막 행/,'the reason stays in the box, not in a toast that leaves');
+  await input.dispatch('input');assert.equal(r.get('jumpError').textContent,'');assert.equal(input.attributes['aria-invalid'],undefined);
+  await submit('5');
+  assert.equal(form.hidden,true);assert.equal(r.controller.logs.getState().selectedLine,5);
+  const landed=r.document.activeElement;
+  assert.ok(landed===r.get('logsViewport')||landed.dataset?.lineNumber==='5','keys go on in the list, not on a hidden box');
+  lKey();await r.controller.close();
+  assert.equal(form.hidden,true,'no file, no box');
+  form.hidden=true;lKey();assert.equal(form.hidden,true);
+  assert.match(r.get('toast').textContent,/이동할 행이 없습니다/,'a closed file says so too');
+});
+
+test('Cmd/Ctrl+L waits behind a modal dialog',async t=>{
+  const r=await rig();t.after(()=>r.controller.close());
+  const form=r.get('logsJumpForm');form.hidden=true;
+  const lKey=()=>r.handlers.get('keydown')({key:'l',ctrlKey:true,target:r.get('logsViewport'),preventDefault(){}});
+  r.get('appleDialog').open=true;lKey();assert.equal(form.hidden,true);
+  r.get('appleDialog').open=false;lKey();assert.equal(form.hidden,false);
+});
+
+test('a new query leaves the row box open until it finds no rows, then returns focus',async t=>{
+  let count=6;
+  const r=await rig({query:()=>({status:'complete',count,complete:true})});t.after(()=>r.controller.close());const f=filtersOffRig(r);
+  const form=r.get('logsJumpForm'),input=r.get('logsJump');form.append(input);
+  r.get('logsViewport').focus();
+  r.handlers.get('keydown')({key:'l',ctrlKey:true,target:r.get('logsViewport'),preventDefault(){}});
+  await f.enter('tagFilter','Wifi');
+  assert.equal(form.hidden,false);assert.equal(r.document.activeElement,input);
+  count=0;await f.enter('tagFilter','none');
+  assert.equal(form.hidden,true);assert.equal(r.document.activeElement,r.get('logsViewport'),'focus does not fall out with the box');
+});
+
+test('a menu item that cannot run says what it waits for',async t=>{
+  const text=async(r,label)=>(await moreState(r,label))?.text;
+  const running=await rig({query:()=>({status:'running',count:3,complete:false})});t.after(()=>running.controller.close());
+  assert.match(await text(running,'전체 로그 내보내기…'),/처리가 끝나면 내보낼 수 있습니다/,'a log with no filter is whole even at a partial count');
+  await filtersOffRig(running).enter('tagFilter','Wifi');
+  assert.match(await text(running,'필터 결과 내보내기…'),/처리가 끝나면/,'a filter counts as narrowing until it has finished');
+  const none=await rig({query:()=>({status:'complete',count:0,complete:true})});t.after(()=>none.controller.close());
+  assert.match(await text(none,'전체 로그 내보내기…'),/내보낼 행이 없습니다/);
+  const search=await rig({query:b=>({status:'complete',count:b.filters.query==='none'?0:6,complete:true})});t.after(()=>search.controller.close());
+  await filtersOffRig(search).enter('searchInput','none');
+  assert.match(await text(search,'검색 결과 내보내기…'),/검색 결과가 없습니다/);
+  const late=deferred(),busy=await rig({exported:late.promise});t.after(()=>busy.controller.close());
+  await choose(busy,'전체 로그 내보내기…');
+  assert.match(await text(busy,'전체 로그 내보내기…'),/내보내는 중입니다/);
+  late.resolve({rows:6});await settle();
+  assert.equal((await moreState(busy,'전체 로그 내보내기…')).disabled,false);
+  const reading=await rig();t.after(()=>reading.controller.close());
+  await reading.get('openFile').dispatch('click');reading.source(2);await reading.emit({status:'opened',datasetId:2,work:{reopenable:true}});
+  assert.match(await text(reading,'다시 열기'),/읽기가 끝나면 다시 열 수 있습니다/);
+});
+
+test('the menu names its keys for assistive technology',async t=>{
+  const r=await rig();t.after(()=>r.controller.close());
+  const keys=async label=>{const item=await moreItem(r,label);await closeMenu(r);return item.attributes['aria-keyshortcuts'];};
+  assert.equal(await keys('다시 열기'),'Control+R');assert.equal(await keys('행 번호로 이동…'),'Control+L');assert.equal(await keys('단축키·기능 둘러보기'),'Shift+/');
+});
+
+test('a DLT export offers its formats in the menu and comes back to its item',async t=>{
+  const r=await rig({format:'dlt'});t.after(()=>r.controller.close());
+  const item=await moreItem(r,'전체 로그 내보내기');
+  assert.equal(item.attributes['aria-haspopup'],'menu');assert.match(item.textContent,/· 6행/);assert.match(item.textContent,/›/);assert.doesNotMatch(item.textContent,/…/);
+  await item.dispatch('click');await settle();
+  assert.equal(r.get('rowMenu').attributes['aria-label'],'내보내기');
+  await closeMenu(r);await settle();
+  assert.equal(r.get('rowMenu').attributes['aria-label'],'메뉴');assert.equal(r.document.activeElement.dataset.key,'log-export');
+});
+
+test('extensions open in the menu\'s place from the list read when the window came back',async t=>{
+  const r=await rig({extrasList:[{id:'track',title:'궤적'}]});t.after(()=>r.controller.close());
+  await settle();await choose(r,'확장');
+  assert.equal(r.get('rowMenu').attributes['aria-label'],'확장 기능');
+  assert.ok(r.get('rowMenu').children.some(n=>n.textContent==='궤적'));
+  await closeMenu(r);await settle();
+  assert.equal(r.document.activeElement.dataset.key,'extras');
+});
+
+test('a device capture has no file to read again',async t=>{
+  const r=await rig({capture:{state:'recording'}});t.after(()=>r.controller.close());
+  assert.equal(await moreState(r,'다시 열기'),undefined);assert.ok(await moreState(r,'파일 닫기'));
+});
+
+test('Cmd/Ctrl+L with no rows says so instead of doing nothing',async t=>{
+  const r=await rig({query:()=>({status:'complete',count:0,complete:true})});t.after(()=>r.controller.close());
+  r.get('logsJumpForm').hidden=true;
+  r.handlers.get('keydown')({key:'l',ctrlKey:true,target:r.get('logsViewport'),preventDefault(){}});
+  assert.equal(r.get('logsJumpForm').hidden,true);assert.match(r.get('toast').textContent,/이동할 행이 없습니다/);
+  assert.match((await moreState(r,'행 번호로 이동…')).text,/이동할 행이 없습니다/);
+});
+
+test('column width tools open from the ⋯ menu and a header right-click, not in raw view',async t=>{
   const r=await rig();t.after(()=>r.controller.close());
   const items=()=>r.get('rowMenu').children.filter(n=>n.tagName==='BUTTON').map(n=>n.textContent);
-  await r.get('columnMenu').dispatch('click');
-  assert.equal(r.get('rowMenu').hidden,false);assert.deepEqual(items(),['내용에 맞춤','폭 초기화']);
-  await r.get('rowMenu').children[1].dispatch('click');assert.equal(r.get('rowMenu').hidden,true);
+  await choose(r,'열 폭');
+  assert.equal(r.get('rowMenu').hidden,false);assert.deepEqual(items(),['‹ 메뉴','내용에 맞춤','폭 초기화']);
+  await r.get('rowMenu').children.at(-1).dispatch('click');assert.equal(r.get('rowMenu').hidden,true);
   let prevented=false;
   await r.get('largeHeaders').dispatch('contextmenu',{clientX:5,clientY:6,preventDefault(){prevented=true;}});
   assert.equal(prevented,true);assert.deepEqual(items(),['내용에 맞춤','폭 초기화']);
@@ -1572,6 +1697,7 @@ test('column width tools open from the heading menu and a header right-click, no
   await r.get('largeRaw').dispatch('click');prevented=false;
   await r.get('logsHeaders').dispatch('contextmenu',{clientX:5,clientY:6,preventDefault(){prevented=true;}});
   assert.equal(prevented,false);assert.equal(r.get('rowMenu').hidden,true);
+  assert.equal(await moreState(r,'열 폭'),undefined,'raw view has no columns to fit');
 });
 
 const pages=(r,pane)=>r.calls.filter(c=>c.args.request?.action==='page'&&c.args.request.pane===pane).map(c=>c.args.request);
@@ -1641,14 +1767,14 @@ test('the jump box moves to a physical row number, or the next result after a hi
   const rows=Array.from({length:60},(_,i)=>({lineNumber:i*3+7,kind:'raw',raw:`COMMON ${i}`}));
   const r=await rig({rows,total:200});t.after(()=>r.controller.close());
   const input=r.get('logsJump'),jump=async value=>{input.value=value;await r.get('logsJumpForm').dispatch('submit',{preventDefault(){}});await settle();};
-  assert.match(input.title,/행 번호/);
+  assert.match(r.get('jumpHelp').textContent,/1–200행으로 이동합니다\. 현재 필터 결과에 없으면 그 뒤의 첫 결과로 갑니다/);
   await jump('19');assert.equal(r.controller.logs.getState().selectedLine,19);assert.equal(input.value,'');
   const locate=r.calls.filter(c=>c.args.request?.action==='locate').at(-1).args.request;assert.equal(locate.lineNumber,19);assert.equal(locate.pane,'logs');
   await jump(' 20 ');assert.equal(r.controller.logs.getState().selectedLine,22);assert.match(r.get('toast').textContent,/20행은 현재 필터 결과에 없어 다음 결과인 22행으로/);
   assert.equal(r.calls.filter(c=>c.args.request?.action==='page'&&c.args.request.count===1).at(-1).args.request.start,5);
   await jump('190');assert.equal(r.controller.logs.getState().selectedLine,null);assert.match(r.get('toast').textContent,/190행은 현재 필터 결과에 없고 그 뒤에도 결과가 없습니다/);assert.equal(input.value,'190');
-  await jump('201');assert.match(r.get('toast').textContent,/마지막 행은 200행/);assert.equal(input.attributes['aria-invalid'],'true');
-  await jump('2:5');assert.match(r.get('toast').textContent,/숫자로/);
+  await jump('201');assert.match(r.get('jumpError').textContent,/마지막 행은 200행/);assert.equal(input.attributes['aria-invalid'],'true');
+  await jump('2:5');assert.match(r.get('jumpError').textContent,/숫자로/);
   assert.equal(r.get('largeError').hidden,true,'jump outcomes are not engine errors');
 });
 
@@ -1657,10 +1783,11 @@ test('a combined log jump box accepts file:row',async t=>{
   const rows=Array.from({length:200},(_,i)=>({lineNumber:i+1,kind:'raw',raw:`row ${i+1}`,file:i<100?0:1,fileLine:i<100?i+1:i-99}));
   const r=await rig({rows,files,total:200});t.after(()=>r.controller.close());
   const input=r.get('logsJump'),jump=async value=>{input.value=value;await r.get('logsJumpForm').dispatch('submit',{preventDefault(){}});await settle();};
-  assert.match(input.title,/2:150/);
+  assert.match(r.get('jumpHelp').textContent,/2:150\) 또는 합친 로그의 1–\d[\d,]*행으로 이동합니다/);
   await jump('2:5');assert.equal(r.controller.logs.getState().selectedLine,105);
-  await jump('1:101');assert.match(r.get('toast').textContent,/1번 파일에는 101행이 없습니다/);
-  await jump('3:1');assert.match(r.get('toast').textContent,/파일 번호는 1–2/);
+  await jump('1:101');assert.match(r.get('jumpError').textContent,/1번 파일에는 101행이 없습니다/);
+  await jump('1:0');assert.match(r.get('jumpError').textContent,/행 번호는 1부터입니다/);
+  await jump('3:1');assert.match(r.get('jumpError').textContent,/파일 번호는 1–2/);
   await jump('150');assert.equal(r.controller.logs.getState().selectedLine,150);
 });
 
@@ -1970,8 +2097,8 @@ test('switching the filter off shows every row with its conditions kept, and on 
   assert.equal(r.get('filtersOffNote').textContent,'필터 꺼짐 · 모든 줄 표시');assert.equal(r.get('filtersOffNote').className,'filters-off-note');
   assert.equal(r.get('filtersOffHint').hidden,false,'the panel says so too');
   assert.equal(r.get('activeFilters').attributes['aria-label'],'꺼 둔 필터');assert.match(r.get('toggleFilters').attributes['aria-label'],/1개 조건 꺼 둠/);
-  assert.equal(r.get('searchInput').placeholder,'모든 줄의 원문에서 검색');assert.equal(r.get('exportLogs').title,'모든 줄의 원문을 파일로 저장');
-  assert.match(r.get('largeTotal').textContent,/^ · 모든 줄/,'the search count says what it counts');assert.equal(r.get('logsJump').title,'행 번호(행 칸의 번호)로 이동합니다.','every row is there to jump to');
+  assert.equal(r.get('searchInput').placeholder,'모든 줄의 원문에서 검색');assert.equal((await moreState(r,'전체 로그 내보내기…')).title,'모든 줄의 원문을 파일로 저장');
+  assert.match(r.get('largeTotal').textContent,/^ · 모든 줄/,'the search count says what it counts');assert.match(r.get('jumpHelp').textContent,/행으로 이동합니다\.$/,'every row is there to jump to');
   assert.doesNotMatch(chipClear(chipNodes(r.get('activeFilters'))[0]).attributes['aria-label'],/필터/,'the last chip leaves no filter to switch on');
   await f.press();
   assert.deepEqual([f.sent('logs').include.map(c=>c.tag),f.sent('search').include.map(c=>c.tag)],[['Wifi'],['Wifi']]);
@@ -2056,13 +2183,14 @@ test('a condition that cannot apply neither traps the filter on nor switches it 
 });
 
 test('the logs exported with the filter off are named as every row',async t=>{
-  const r=await rig();t.after(()=>r.controller.close());const f=filtersOffRig(r);
+  let count=2;
+  const r=await rig({query:()=>({status:'complete',count,complete:true})});t.after(()=>r.controller.close());const f=filtersOffRig(r);
   const named=()=>r.calls.filter(c=>c.action==='export_results').at(-1)?.args.suggestedName;
   await f.enter('tagFilter','Wifi');
-  await r.get('exportLogs').dispatch('click');await settle();
+  await choose(r,'필터 결과 내보내기…');
   assert.match(named(),/-filtered\./);assert.equal(r.get('toast').children[0].textContent,'3,000행을 내보냈습니다.');
-  await f.press();
-  await r.get('exportLogs').dispatch('click');await settle();
+  count=6;await f.press();
+  await choose(r,'전체 로그 내보내기…');
   assert.match(named(),/-all\./);assert.equal(r.get('toast').children[0].textContent,'전체 3,000행을 내보냈습니다.');
 });
 

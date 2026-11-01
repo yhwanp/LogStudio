@@ -64,6 +64,10 @@ const k='logstudio.tips.v1',s=JSON.parse(localStorage.getItem(k)||'{}');localSto
 
 ROW = "document.querySelector(`#${arguments[0]} [data-line-number=\"${arguments[1]}\"]`)"
 
+# The open menu's items, each named by its label without the key or the note.
+MENU_ITEMS = """return [...document.querySelectorAll('#rowMenu [role^=menuitem]')].map(e=>({label:(e.querySelector('.menu-label')??e).textContent,
+text:e.textContent,disabled:e.getAttribute('aria-disabled')==='true',title:e.title}));"""
+
 # A click as the mouse sends it on element `r`: pointer and mouse press and
 # release at its centre, then `kind` (click, or a right-button contextmenu).
 CLICK = """const b=r.getBoundingClientRect(),right=kind==='contextmenu',button=right?2:0;
@@ -289,6 +293,20 @@ $('addCondition').click();if(arguments[0])$('kindHide').click();return true;""",
         self.pointer('pointerup', y1)
         time.sleep(.15)
         return taken
+
+    def menu(self, *labels):
+        """Opens the ⋯ menu and chooses each labelled item in turn."""
+        self.click('moreButton')
+        for label in labels:
+            self.wait(lambda: self.js("const i=[...document.querySelectorAll('#rowMenu [role^=menuitem]')].find(e=>(e.querySelector('.menu-label')??e).textContent===arguments[0]);"
+                                      "if(i)i.click();return !!i;", label), what=f'menu item {label}')
+
+    def menu_items(self):
+        """The ⋯ menu's items by label, the menu closed again."""
+        self.click('moreButton')
+        items = self.js(MENU_ITEMS)
+        self.key('Escape', target='rowMenu')
+        return {item['label']: item for item in items}
 
     def jump(self, n):
         self.js("const i=document.getElementById('logsJump');i.value=String(arguments[0]);"

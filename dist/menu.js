@@ -5,21 +5,30 @@
 // `disabled` an item that can be reached but not chosen, `detail` words kept
 // after a label that may be cut, `note` a second line, `key` what names the
 // item when the menu is shown again while open (its focus stays there), and
-// `group` a note that heads the items after it. Escape restores focus to the
-// opener, which a menu shown again while open keeps; Tab, focus moving
+// `group` a note that heads the items after it, `shortcut` a key shown at the
+// item's end with `keys` its aria-keyshortcuts value, `dim` a `disabled` item
+// whose label is muted too, `opens` an item that shows more choices (Right
+// Arrow chooses it) and `back` the item that returns from them (Left Arrow and
+// Escape choose it, and it takes focus only when nothing else can). Escape
+// otherwise restores focus to the opener, which a menu shown again while open
+// keeps; Tab, focus moving
 // elsewhere, outside presses and window blur/resize close it. A menu opened
 // on a list (`onList`: its rows or headers) also closes when the user
 // scrolls a list (`moved`), and focus returns to its opener; rows added to a
 // followed log close no menu. `onClose(press)` runs once when the menu
 // closes or another menu replaces it, after a chosen item's action, and gets
 // the outside press that closed it, if one did. `moveBy` moves an open menu
-// along with the row it was opened on. `show` returns the menu's version,
+// along with the row it was opened on. In show's options, `alignEnd` puts the
+// menu's right edge at x, `focus` focuses the item with that `key`, and
+// `opener` takes focus back when nothing was focused (macOS buttons take no
+// focus on a click) or the focused element has since been removed, as a
+// scrolled row is. `show` returns the menu's version,
 // which every show and close changes: an owner whose answer comes late
 // shows it only while `version()` is still the one it saw. The element
 // holds `popupOpener` while open, so a dialog opened from the menu returns
 // focus there (dom.js `focusOwner`).
 export function createPopupMenu({menu, document, window}) {
-  let opener = null, notes = 0, onList = false, onClose = null, at = null, version = 0;
+  let opener = null, standIn = null, notes = 0, onList = false, onClose = null, at = null, version = 0, alignEnd = false;
   function close(restore = false, press = null) {
     if (menu.hidden) return;
     const told = take();
@@ -28,8 +37,8 @@ export function createPopupMenu({menu, document, window}) {
     menu.replaceChildren();
     menu.removeAttribute('aria-describedby');
     menu.popupOpener = null;
-    if (restore) opener?.focus({preventScroll:true});
-    opener = null;
+    if (restore) (opener?.isConnected === false ? standIn ?? opener : opener)?.focus({preventScroll:true});
+    opener = standIn = null;
     told?.(press);
   }
   function take() {
@@ -58,12 +67,19 @@ export function createPopupMenu({menu, document, window}) {
     const button = document.createElement('button');
     button.type = 'button';
     button.tabIndex = -1;
-    if (options.detail || options.note) {
+    const end = options.shortcut ?? (options.opens ? '›' : null);
+    if (options.detail || options.note || end) {
       // Spaces between the parts keep them apart in the item's name.
       const line = document.createElement('span');
       line.className = 'menu-line';
       line.append(text('span', 'menu-label', label));
       if (options.detail) line.append(' ', text('span', 'menu-detail', `· ${options.detail}`));
+      // Read out through aria-keyshortcuts and aria-haspopup, not as its name.
+      if (end) {
+        const mark = text('span', 'menu-end', end);
+        mark.setAttribute('aria-hidden', 'true');
+        line.append(' ', mark);
+      }
       button.className = 'menu-rich';
       button.append(line);
       if (options.note) button.append(' ', text('span', 'menu-sub', options.note));
@@ -72,6 +88,13 @@ export function createPopupMenu({menu, document, window}) {
     }
     if (title) button.title = title;
     if (options.key) button.dataset.key = options.key;
+    if (options.opens) button.setAttribute('aria-haspopup', 'menu');
+    if (options.keys) button.setAttribute('aria-keyshortcuts', options.keys);
+    if (options.dim) button.dataset.dim = 'true';
+    if (options.back) {
+      button.dataset.back = 'true';
+      if (title) button.setAttribute('aria-label', title);
+    }
     if ('checked' in options) {
       button.setAttribute('role', 'menuitemradio');
       button.setAttribute('aria-checked', String(!!options.checked));
@@ -97,14 +120,20 @@ export function createPopupMenu({menu, document, window}) {
   function place(x, y) {
     at = {x, y};
     const box = menu.getBoundingClientRect(), width = window.innerWidth || 0, height = window.innerHeight || 0;
-    menu.style.left = `${Math.max(4, width ? Math.min(x, width - box.width - 4) : x)}px`;
+    const left = alignEnd ? x - box.width : x;
+    menu.style.left = `${Math.max(4, width ? Math.min(left, width - box.width - 4) : left)}px`;
     menu.style.top = `${Math.max(4, height ? Math.min(y, height - box.height - 4) : y)}px`;
   }
   function moveBy(dy) {if (!menu.hidden && at) place(at.x, at.y + dy);}
   function show(items, x, y, label, options = {}) {
     const again = !menu.hidden, focused = menu.contains(document.activeElement) ? document.activeElement.dataset?.key : undefined;
     onList = options.onList === true;
-    if (!again) opener = document.activeElement;
+    alignEnd = options.alignEnd === true;
+    if (!again) {
+      const owner = document.activeElement;
+      standIn = options.opener ?? null;
+      opener = standIn && (!owner || owner === document.body) ? standIn : owner;
+    }
     menu.popupOpener = opener;
     // A menu shown again in place of another is a new one to its owner.
     take()?.(null);
@@ -119,10 +148,11 @@ export function createPopupMenu({menu, document, window}) {
     menu.hidden = false;
     place(x, y);
     // A menu of notes only takes focus itself, so Escape still closes it.
-    const kept = again && focused ? [...menu.querySelectorAll('[role^=menuitem]')].find(item => item.dataset.key === focused) : null;
+    const wanted = options.focus ?? (again ? focused : undefined);
+    const kept = wanted ? [...menu.querySelectorAll('[role^=menuitem]')].find(item => item.dataset.key === wanted) : null;
     const first = kept
       ?? menu.querySelector('[aria-checked=true]')
-      ?? menu.querySelector('[role^=menuitem]:not([aria-disabled=true])')
+      ?? menu.querySelector('[role^=menuitem]:not([aria-disabled=true]):not([data-back])')
       ?? menu.querySelector('[role^=menuitem]');
     if (first) {
       first.focus();
@@ -132,14 +162,25 @@ export function createPopupMenu({menu, document, window}) {
     }
     return version;
   }
+  // A press on a note or an item that cannot be chosen keeps focus in the
+  // menu, where Escape and the arrow keys work.
+  menu.addEventListener('mousedown', event => event.preventDefault());
   menu.addEventListener('keydown', event => {
     const items = [...menu.querySelectorAll('[role^=menuitem]')], at = items.indexOf(document.activeElement);
     if (event.key === 'Escape') {
       event.preventDefault();
       event.stopPropagation();
-      close(true);
+      const back = items.find(item => item.dataset.back);
+      if (back) back.click();
+      else close(true);
     } else if (event.key === 'Tab') {
       close(false);
+    } else if (event.key === 'ArrowRight' && items[at]?.getAttribute('aria-haspopup')) {
+      event.preventDefault();
+      items[at].click();
+    } else if (event.key === 'ArrowLeft' && items.some(item => item.dataset.back)) {
+      event.preventDefault();
+      items.find(item => item.dataset.back).click();
     } else if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key) && items.length) {
       event.preventDefault();
       let next;
@@ -155,8 +196,8 @@ export function createPopupMenu({menu, document, window}) {
   document.addEventListener('focusin', event => {
     if (!menu.hidden && !menu.contains(event.target)) close(false);
   });
-  window.addEventListener('blur', () => close(false));
-  window.addEventListener('resize', () => close(false));
+  window.addEventListener('blur', () => close(true));
+  window.addEventListener('resize', () => close(true));
   function moved() {if (onList) close(true);}
   // The element focused when the open menu was shown.
   return {show, close, moved, moveBy, opener: () => opener, version: () => version};

@@ -3,13 +3,13 @@ import {textSpan} from './dom.js';
 
 // `guard` asks about a capture's unsaved rows before a recent file replaces
 // its log, and `keep` keeps the capture's file when that open fails.
-export function mountRecentFiles({ui, document, native, menu, isGone, onError, guard = async () => 'none', keep = () => {}, shown = () => null}) {
+export function mountRecentFiles({ui, document, native, isGone, onError, guard = async () => 'none', keep = () => {}, shown = () => null}) {
   let recent=[];
   // Files opened together reopen together; the tooltip lists them in order.
   const title=item=>Array.isArray(item.files)&&item.files.length>1?`${item.folder}\n${item.files.map((name,i)=>`${i+1}. ${name}`).join('\n')}`:`${item.folder}/${item.name}`;
   function render(list){
     recent=Array.isArray(list)?list.filter(item=>Number.isSafeInteger(item?.id)&&typeof item.name==='string').slice(0,10):[];
-    ui.recentFiles.hidden=!recent.length;ui.recentButton.hidden=!recent.length;
+    ui.recentFiles.hidden=!recent.length;
     ui.recentList.replaceChildren(...recent.map(item=>{
       const row=document.createElement('li'),open=document.createElement('button'),remove=document.createElement('button');
       open.type='button';open.className='recent-open';open.title=title(item);
@@ -27,10 +27,8 @@ export function mountRecentFiles({ui, document, native, menu, isGone, onError, g
   }
   const forgetAll=()=>{void native.core.invoke('forget_recent',{id:null}).then(render,()=>{});};
   ui.clearRecent.addEventListener('click',forgetAll);
-  ui.recentButton.addEventListener('click',()=>{
-    const box=ui.recentButton.getBoundingClientRect?.();
-    menu.show(recent.map(item=>[item.name,()=>void openRecent(item.id),title(item)]).concat([null,['목록 지우기',forgetAll]]),box?box.left:0,box?box.bottom+4:0,'최근 파일');
-  });
   void native.core.invoke('recent_files').then(render,()=>{});
   void native.event.listen('recent-changed',({payload})=>render(payload)).catch(()=>{});
+  // The ⋯ menu's list; empty when nothing was opened yet.
+  return {items:()=>recent.length?recent.map(item=>[item.name,()=>void openRecent(item.id),title(item)]).concat([null,['목록 지우기',forgetAll]]):[]};
 }

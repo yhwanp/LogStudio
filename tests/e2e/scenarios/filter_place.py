@@ -41,7 +41,8 @@ def run(ctx):
         # The search results keep their selected row too.
         app.type('searchInput', 'Network connected')
         app.wait(lambda: st()['searchCount'] == '429건', what='429 search results')
-        app.js("const i=document.getElementById('largeJump');i.value='1004';document.getElementById('largeJumpForm').requestSubmit();return true;")
+        # Row 1004 is the 144th of the 429 results.
+        app.js("const v=document.getElementById('largeViewport');v.scrollTop=143/429*v.scrollHeight;v.dispatchEvent(new Event('scroll'));return true;")
         time.sleep(.5)
         app.click_row(1004, pane='largeRows')
         app.wait(lambda: st()['detail'] == '1,004행 원문', what='detail of row 1004')
@@ -57,7 +58,7 @@ def run(ctx):
         # in place of a hidden one: row 24 (Warn) gives way to row 31 (Info).
         app.click('allLevels')
         app.wait_count(3000)
-        app.js("const i=document.getElementById('largeJump');i.value='24';document.getElementById('largeJumpForm').requestSubmit();return true;")
+        app.click('largeFirst')
         time.sleep(.5)
         app.click_row(24, pane='largeRows')
         app.wait(lambda: st()['logs'] == '24', what='upper logs follow row 24')

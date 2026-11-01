@@ -21,8 +21,8 @@ POINTER = "document.querySelector(arguments[0]).dispatchEvent(new PointerEvent(a
 CLICK = """const r=document.querySelector(`#logsRows [data-line-number="${arguments[0]}"]`);r.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true}));
 for(const t of ['mousedown','click'])r.dispatchEvent(new MouseEvent(t,{bubbles:true,cancelable:true,detail:1,clientX:200,clientY:200}));return true;"""
 # Tour steps by title and the control each one lights (rows are checked apart).
-STEPS = {'로그 열기': 'openFile', '다시 열기': 'reopenFile', '필터': 'toggleFilters', '저장된 필터': 'savedFilterButton', '열 폭': 'logsHeaders',
-         '검색': 'largeSearchTools', '단축키와 둘러보기': 'shortcutHelp'}
+STEPS = {'로그 열기': 'openFile', '필터': 'toggleFilters', '저장된 필터': 'savedFilterButton', '열 폭': 'logsHeaders',
+         '검색': 'largeSearchTools', '메뉴': 'moreButton'}
 
 
 def lit(spot, box):
@@ -56,8 +56,8 @@ def run(ctx):
         app.open_fixture('ui.log')
         app.wait_count(3000)
         s = tip('help')
-        check('once a file shows, the first tip points at the help button without taking focus or input',
-              not s['modal'] and s['focus'] not in ('tipNext', 'tipBack', 'tipClose') and lit(s['spot'], rect('shortcutHelp'))
+        check('once a file shows, the first tip points at the menu button without taking focus or input',
+              not s['modal'] and s['focus'] not in ('tipNext', 'tipBack', 'tipClose') and lit(s['spot'], rect('moreButton'))
               and s['side'] == 'bottom' and placed(s) and s['next'] == '둘러보기' and s['back'] == '닫기', s)
         check('its layer lets presses through to the page',
               app.js("const c=document.getElementById('tipCard').getBoundingClientRect();return document.elementFromPoint(40,c.bottom+40)?.closest('#tipLayer')===null"))
@@ -123,7 +123,7 @@ def run(ctx):
         app.click('tipOff')
         s = closed('tips off')
         check('“팁 그만 보기” turns tips off', s['stored']['off'] is True and 'bookmarks' in s['stored']['seen'], s['stored'])
-        app.click('shortcutHelp')
+        app.menu('단축키·기능 둘러보기')
         app.wait(lambda: st()['dialog'], what='shortcut list')
         check('the shortcut list shows the setting off', app.js("return document.getElementById('tipsEnabled').checked") is False)
         app.capture('10-shortcut-list', hover='startTour')
@@ -136,7 +136,7 @@ def run(ctx):
         app.click_row(4)
         time.sleep(2)
         check('tips stay off and seen across launches', not st()['open'] and st()['stored']['off'] is True, st()['stored'])
-        app.click('shortcutHelp')
+        app.menu('단축키·기능 둘러보기')
         app.wait(lambda: st()['dialog'], what='shortcut list')
         app.js("const c=document.getElementById('tipsEnabled');c.click();return true;")
         check('the shortcut list turns tips back on', st()['stored']['off'] is False, st()['stored'])
@@ -147,16 +147,31 @@ def run(ctx):
     (ctx.data / 'work-states.json').unlink(missing_ok=True)
     with ctx.launch(tips=True) as app:
         st, rect, tip, closed = helpers(app)
+        app.js("localStorage.setItem('logstudio.tips.v1',JSON.stringify({seen:['help'],off:false}));return true;")
+        app.open_fixture('ui.log')
+        app.wait_count(3000)
+        s = tip('moved')
+        check('someone who has seen the first tip learns once where the controls went',
+              s['title'] == '메뉴로 옮겼습니다' and lit(s['spot'], rect('moreButton')) and placed(s), s)
+        app.capture('11-moved-tip')
+        app.key('l', meta=True, target='logsViewport')
+        app.wait(lambda: not app.hidden('logsJumpForm'), what='row box over the tip')
+        closed('moved tip closed')
+        check('the key the tip names works while it shows, and that counts as seeing it', 'moved' in st()['stored']['seen'], st()['stored'])
+
+    (ctx.data / 'work-states.json').unlink(missing_ok=True)
+    with ctx.launch(tips=True) as app:
+        st, rect, tip, closed = helpers(app)
         app.open_fixture('ui.log')
         app.wait_count(3000)
         before = tip('help')['focus']
         app.click('tipNext')
         s = app.wait(lambda: (lambda v: v['modal'] and v['step'] and v)(st()), what='tour')
-        check('the first tip starts the modal tour on the open file', s['tip'] == 'tour' and s['title'] == '로그 열기' and s['step'] == '1 / 9'
-              and s['focus'] == 'tipNext' and s['stored']['seen'] == ['help'], s)
+        check('the first tip starts the modal tour on the open file', s['tip'] == 'tour' and s['title'] == '로그 열기' and s['step'] == '1 / 8'
+              and s['focus'] == 'tipNext' and s['stored']['seen'] == ['help', 'moved'], s)
         app.capture('02-tour-open-file')
         seen = []
-        for i in range(9):
+        for i in range(8):
             s = st()
             seen.append(s['title'])
             target = STEPS.get(s['title'])
@@ -175,10 +190,10 @@ def run(ctx):
                 app.capture('04-tour-filters')
             if s['title'] == '검색':
                 app.capture('05-tour-search')
-            if i < 8:
+            if i < 7:
                 app.key('ArrowRight')
                 app.wait(lambda: st()['title'] != s['title'], what='next step')
-        check('the tour walks every main control once', seen == ['로그 열기', '다시 열기', '필터', '저장된 필터', '행 선택과 복사', '북마크', '열 폭', '검색', '단축키와 둘러보기'], seen)
+        check('the tour walks every main control once', seen == ['로그 열기', '필터', '저장된 필터', '행 선택과 복사', '북마크', '열 폭', '검색', '메뉴'], seen)
         app.key('ArrowLeft')
         check('ArrowLeft steps back', app.wait(lambda: st()['title'] == '검색', what='previous step'))
         app.key('ArrowRight')
@@ -190,21 +205,20 @@ def run(ctx):
         time.sleep(2)
         s = st()
         check('steps of the tour count as seen tips, so a row click after it shows none',
-              not s['open'] and set(s['stored']['seen']) == {'help', 'levels', 'rows', 'bookmarks', 'search'}, s['stored'])
+              not s['open'] and set(s['stored']['seen']) == {'help', 'moved', 'levels', 'rows', 'bookmarks', 'search'}, s['stored'])
 
     with ctx.launch(tips=True) as app:
         st, rect, tip, closed = helpers(app)
-        app.click('shortcutHelp')
+        app.menu('단축키·기능 둘러보기')
         app.wait(lambda: st()['dialog'], what='shortcut list')
         app.click('startTour')
         s = app.wait(lambda: (lambda v: v['modal'] and v['step'] and v)(st()), what='tour on the sample')
         check('without a file the tour opens the sample log and starts on it', s['title'] == '로그 열기' and not s['dialog']
-              and app.text('largeName') == '샘플 로그' and s['step'] == '1 / 9', {**s, 'name': app.text('largeName')})
-        app.key('ArrowRight')
+              and app.text('largeName') == '샘플 로그' and s['step'] == '1 / 8', {**s, 'name': app.text('largeName')})
         app.key('ArrowRight')
         app.wait(lambda: st()['title'] == '필터', what='filter step')
         app.key('Escape')
         s = closed('tour closed')
-        check('Escape ends the tour with focus back in the page', s['focus'] in ('logsViewport', 'shortcutHelp'), s)
+        check('Escape ends the tour with focus back in the page', s['focus'] in ('logsViewport', 'moreButton'), s)
         time.sleep(2)
         check('the first tip is not offered after the tour', not st()['open'], st()['tip'])

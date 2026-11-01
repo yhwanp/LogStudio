@@ -14,7 +14,7 @@ STATE = """const v=document.getElementById('logsViewport'),rows=[...document.que
   bottom:Math.round(v.scrollHeight-v.scrollTop-v.clientHeight),
   detail:document.getElementById('largeDetail').hidden?null:document.getElementById('largeDetailTitle').textContent,
   error:document.getElementById('largeError').hidden?null:document.getElementById('largeError').textContent,
-  exportDisabled:document.getElementById('exportLogs').disabled,searchCount:document.getElementById('largeCount').textContent,searchTotal:document.getElementById('largeTotal').textContent};"""
+  searchCount:document.getElementById('largeCount').textContent,searchTotal:document.getElementById('largeTotal').textContent};"""
 TEXT_OF = "const r=document.querySelector('#logsRows [data-line-number=\"'+arguments[0]+'\"]');return r?r.textContent:null;"
 SCROLL = "const v=document.getElementById('logsViewport');v.scrollTop=arguments[0];v.dispatchEvent(new Event('scroll'));return true;"
 
@@ -39,7 +39,7 @@ def run(ctx):
         app.click('followFile')
         until(lambda v: v['button']['pressed'] == 'true', 'following')
         s = until(lambda v: '300' in v['lines'] and v['bottom'] <= 28, 'end in view')
-        check('turning it on shows following, partial counts and the end of the log', '따라가는 중' in s['status'] and '현재까지 300건' in s['count'] and s['exportDisabled'], s)
+        check('turning it on shows following, partial counts and the end of the log', '따라가는 중' in s['status'] and '현재까지 300건' in s['count'] and app.menu_items()['전체 로그 내보내기…']['disabled'], s)
         check('turning it on keeps the selected row and its detail', s['detail'] == '5행 원문', s['detail'])
         app.capture('02-follow-on', hover='followFile')
         append(' completed\n' + ''.join(row(n, tag='Net' if n % 10 else 'Needle') + '\n' for n in range(301, 351)))
@@ -72,7 +72,7 @@ def run(ctx):
         check('a row still being written is not shown yet', s['count'].endswith('399건') and '400' not in s['lines'], s['count'])
         app.click('followFile')
         s = until(lambda v: v['button']['pressed'] == 'false' and v['count'] == '로그 · 전체 400건' and '400' in v['lines'] and v['status'] == '', 'stopped')
-        check('turning it off ends the rows at the file end and completes them', not s['exportDisabled'] and '따라가는 중' not in s['status'], {k: s[k] for k in ('count', 'status')})
+        check('turning it off ends the rows at the file end and completes them', not app.menu_items()['전체 로그 내보내기…']['disabled'] and '따라가는 중' not in s['status'], {k: s[k] for k in ('count', 'status')})
         app.capture('03-follow-stopped')
         append(' and more\n' + row(401) + '\n')
         s = until(lambda v: '새 줄 있음' in v['status'], 'new rows announced', 10)
@@ -82,7 +82,7 @@ def run(ctx):
         until(lambda v: v['count'].endswith('401건'), '401 rows')
         t400 = js(TEXT_OF, '400')
         check('following again reads them, completing the row closed when it stopped', t400 is not None and 'and more' in t400, t400)
-        app.click('largeClose')
+        app.menu('파일 닫기')
         until(lambda v: v['count'] == '로그 · 0건', 'closed')
         append(row(402) + '\n')
         time.sleep(1)

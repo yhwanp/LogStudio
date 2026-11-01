@@ -55,7 +55,7 @@ def run(ctx):
 
         # Ordering: picks and drops (`arrange`) sort by log time, then by name.
         st = lambda: js(ORDER)
-        app.click('largeClose')
+        app.menu('파일 닫기')
         app.wait(lambda: not app.hidden('emptyState'), what='empty state')
         empty = js("return document.querySelector('#emptyState p').textContent")
         check('the empty state says files picked together combine in time order', '시간순으로 하나의 로그로' in empty, empty)
@@ -84,7 +84,7 @@ def run(ctx):
         time.sleep(.3)
         s = st()
         check('the given order (as command-line paths) is kept without a toast', s['name'] == 'a.log 외 2개' and s['toast'] is None and 'a1' in s['rows'][0], {'name': s['name'], 'toast': s['toast']})
-        app.click('largeClose')
+        app.menu('파일 닫기')
         recent = app.wait(lambda: js("return [...document.querySelectorAll('#recentList li')].map(li=>li.textContent)"), what='recent list')
         check('the recent list records the arranged combination', any(r.startswith('c.log 외 2개') for r in recent), recent)
         js("[...document.querySelectorAll('#recentList li')].find(li=>li.textContent.startsWith('c.log 외 2개')).querySelector('button').click();return true;")

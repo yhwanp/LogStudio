@@ -13,11 +13,14 @@ class Element {
   constructor(tag='div'){this.tagName=tag.toUpperCase();this.children=[];this.listeners={};this.dataset={};this.attributes={};this.value='';this.checked=false;this.hidden=false;this._text='';this.style={setProperty(key,value){this[key]=value;},removeProperty(key){delete this[key];}};this.clientHeight=280;this.scrollTop=0;this.classList={toggle(){}};}
   get textContent(){return this._text+this.children.map(child=>child.textContent).join('');}
   set textContent(value){this._text=String(value);this.children=[];}
-  append(...nodes){for(const node of nodes){if(node.fragment){this.append(...node.children);continue;}if(node.parentElement)node.parentElement.children=node.parentElement.children.filter(child=>child!==node);node.parentElement=this;this.children.push(node);}}
+  append(...nodes){for(const part of nodes){const node=typeof part==='string'?Object.assign(new Element('span'),{_text:part}):part;if(node.fragment){this.append(...node.children);continue;}if(node.parentElement)node.parentElement.children=node.parentElement.children.filter(child=>child!==node);node.parentElement=this;this.children.push(node);}}
   replaceChildren(...nodes){this.children=[];this._text='';this.append(...nodes);}
   insertBefore(node,before){if(node.parentElement)node.parentElement.removeChild(node);const i=before?this.children.indexOf(before):this.children.length;this.children.splice(i,0,node);node.parentElement=this;}
   removeChild(node){this.children=this.children.filter(child=>child!==node);node.parentElement=null;}
   removeAttribute(key){delete this.attributes[key];}
+  querySelectorAll(selector){return selector==='[role^=menuitem]'?this.children.filter(child=>child.attributes.role?.startsWith('menuitem')):[];}
+  querySelector(selector){return this.querySelectorAll(selector)[0];}
+  getBoundingClientRect(){return {left:0,top:0,right:0,bottom:0,width:0,height:0};}
   contains(node){return this===node||this.children.some(child=>child.contains(node));}
   focus(){if(this.ownerDocument)this.ownerDocument.activeElement=this;}
   setAttribute(key,value){this.attributes[key]=String(value);}
@@ -61,7 +64,8 @@ test('the follow toggle shows only for a followable file and turns following on 
   const r=await rig();t.after(()=>r.controller.close());
   const button=r.get('followFile');
   assert.equal(button.hidden,false);assert.equal(button.disabled,false);assert.equal(button.attributes['aria-pressed'],'false');
-  assert.equal(r.get('exportLogs').disabled,false);
+  const exportItem=async()=>{await r.get('moreButton').dispatch('click');const item=r.get('rowMenu').children.find(n=>n.textContent.startsWith('전체 로그 내보내기'));await r.get('rowMenu').dispatch('keydown',{key:'Escape',preventDefault(){},stopPropagation(){}});return item;};
+  assert.equal((await exportItem()).attributes['aria-disabled'],undefined);
   await button.dispatch('click');await settle();
   assert.deepEqual(r.requests.filter(b=>b.action==='follow').map(b=>[b.follow,b.datasetId]),[[true,1]]);
   assert.equal(button.attributes['aria-pressed'],'true');
@@ -69,7 +73,11 @@ test('the follow toggle shows only for a followable file and turns following on 
   // Screen readers hear the change, not the row count that keeps growing.
   assert.equal(r.get('largeStatusNote').textContent,'따라가는 중');
   // Results are partial while rows can still arrive: no export, no final count.
-  assert.equal(r.get('exportLogs').disabled,true);assert.match(r.get('exportLogs').title,/따라가기를 끄면/);
+  const held=await exportItem();
+  assert.equal(held.attributes['aria-disabled'],'true');assert.match(held.textContent,/따라가기를 끄면/);
+  // An empty search box is what keeps the search results, not following.
+  await r.get('moreButton').dispatch('click');const noSearch=r.get('rowMenu').children.find(n=>n.textContent.startsWith('검색 결과 내보내기'));await r.get('rowMenu').dispatch('keydown',{key:'Escape',preventDefault(){},stopPropagation(){}});
+  assert.match(noSearch.textContent,/검색어를 입력하면/);
   assert.match(r.get('logsCount').textContent,/현재까지 6건/);
   // The search pane asked for its status after the toggle.
   assert.ok(r.requests.some(b=>b.action==='status'&&b.pane==='search'));
