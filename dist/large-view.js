@@ -1139,7 +1139,7 @@ export function mountLargeLogView(native, {transport, tips=null, help=null, docu
   function repaintRows(){previousRows.clear();renderLogs(logs.getState());renderSearch(search.getState());}
   const bookmarks=createBookmarks({ui,document,window,notify,mod:MOD,logs,lineCell,onReveal:showBookmark,offerUndo:undoBookmarks,openMenu:openBookmarkMenu,onUserMove:()=>menu.moved(),isRawMode:()=>rawMode,onChange:()=>{repaintRows();saver.schedule();},onCount:count=>{bookmarkCount=count;updateLowerPane();if(count)tips?.offer('bookmarks');}});
   const saver=createWorkSaver({invoke:(command,args)=>native.core.invoke(command,args),capture:captureWork,setTimer:(fn,ms)=>window.setTimeout(fn,ms),clearTimer:id=>window.clearTimeout(id)});
-  saved=mountSavedFilters({native,menu,notify,document,read:()=>({...fieldsOf(currentFilters()),off:filtersOff}),write:writeFields,changed:()=>saver.schedule(),format:()=>shownFormat,isGone:()=>pageGone,filterOff:()=>filtersOff});
+  saved=mountSavedFilters({native,menu,notify,document,read:()=>({...fieldsOf(currentFilters()),off:filtersOff}),write:writeFields,changed:()=>saver.schedule(),format:()=>shownFormat,isGone:()=>pageGone,filterOff:()=>filtersOff,holdPanel:value=>layout.hold(value)});
   editor=mountFilterEditor({document,window,layout,onClose:editorClosed});
   conditionView=mountConditions({document,list:$('conditionList'),empty:$('conditionsEmpty'),tools:{add:$('addCondition'),duplicate:$('duplicateCondition'),remove:$('removeCondition')},editing:editorOpen,rowless:()=>rowless(),problem:rejectedProblem,filterOff:()=>filtersOff,
     onSelect:editCondition,onToggle:toggleCondition,onAdd:newCondition,onDuplicate:duplicateCondition,

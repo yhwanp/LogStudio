@@ -337,9 +337,8 @@ def run(ctx):
         app.exclude_tags('')
         until(lambda v: not js("return !!document.querySelector('.cond-kind.hide')"), 'filter removed again')
 
-        js("document.getElementById('captureStop').focus();return true;")
         box = js(STATE)['bar']['stopBox']
-        app.click('captureStop')
+        app.activate('captureStop')
         s = until(lambda v: v['bar'] and v['bar']['tone'] == 'stopped' and v['bar']['stopLabel'] == '이어서 기록', 'stopped')
         check('stopping ends the capture and says its rows are not saved', s['bar']['text'] == '기록 중지됨 · 저장 안 됨 · Pixel 8', s['bar'])
         check('the stop button turns into recording on, keeping focus', s['bar']['stop'] and s['bar']['focus'] == 'captureStop', s['bar'])
@@ -347,7 +346,7 @@ def run(ctx):
         app.capture('07d-stopped', hover='captureStop')
         # The same button records on into the same log from now on, and the
         # first row after marks where it stopped.
-        app.click('captureStop')
+        app.activate('captureStop')
         s = until(lambda v: v['bar'] and v['bar']['tone'] == 'live' and v['bar']['stopLabel'] == '기록 중지' and v['following'] == 'true'
                   and any('이어서 기록' in b['label'] for b in v['breaks']), 'recorded on')
         mark = next(b['label'] for b in s['breaks'] if '이어서 기록' in b['label'])

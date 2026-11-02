@@ -66,8 +66,7 @@ def run(ctx):
         check('a DLT file has no follow button', app.hidden('followFile'))
         app.capture('01-columns')
 
-        js("const t=document.getElementById('toggleFilters');if(t.getAttribute('aria-expanded')!=='true')t.click();return true;")
-        app.click('addCondition')
+        app.filter_click('addCondition')
         panel = js("""const $=id=>document.getElementById(id),shown=key=>!$(`${key}Row`).hidden;return {fields:['ecu','apid','ctid','tag','pid','tid','message'].filter(shown),
 reading:$('readingOptions').hidden,from:$('timeFrom').placeholder}""")
         check('the editor offers ECU, APID and CTID and no PID, TID or reading options',
@@ -112,7 +111,7 @@ reading:$('readingOptions').hidden,from:$('timeFrom').placeholder}""")
         app.wait_count(len(rows))
         check('its undo takes the condition away and closes the editor', app.hidden('filterEditor'), None)
         # A chip opens its own field.
-        app.click('addCondition')
+        app.filter_click('addCondition')
         app.type('messageFilter', 'Route')
         app.wait(lambda: js("return !!document.querySelector('#activeFilters .chip-edit')"), what='a chip')
         app.close_editor()

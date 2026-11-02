@@ -126,7 +126,7 @@ def run(ctx):
         app.wait_count(300)
         d = js("return {chips:[...document.querySelectorAll('#activeFilters .filter-chip')].map(e=>e.textContent),levels:[...document.querySelectorAll('#levelFilters [aria-pressed=true]')].map(e=>e.dataset.level)};")
         check('Alt+click keeps only that level', d['levels'] == ['W'] and d['chips'] == ['레벨: Warn×'], d)
-        app.click('allLevels')
+        app.remove_chip()
         app.wait_count(3000)
 
         # A non-digit PID is explained beside the field.

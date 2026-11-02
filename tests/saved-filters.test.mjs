@@ -130,8 +130,9 @@ const document = {elements:new Map(), activeElement:null, getElementById(id) {if
 
 function rig({stored=[], format='text'}={}) {
   document.elements.clear();
+  document.activeElement = null;
   let disk = structuredClone(stored), nextId = 100, current = fields(), view = format, off = false;
-  const calls = [], toasts = [], menus = [], changes = [];
+  const calls = [], toasts = [], menus = [], changes = [], holds = [];
   const reply = () => structuredClone(disk);
   const native = {core:{invoke:async (command, args={}) => {
     calls.push([command, args]);
@@ -146,17 +147,47 @@ function rig({stored=[], format='text'}={}) {
     if (command === 'delete_filter') {disk = disk.filter(e => e.id !== args.id); return reply();}
     throw command;
   }}};
-  const saved = mountSavedFilters({native, document, menu:{show:(items, x, y, label) => menus.push({items, label})}, notify:(message, action=null) => toasts.push({message, action}),
-    read:() => current, write:f => {current = f; saved.render();}, changed:() => changes.push(saved.applied()), format:() => view, filterOff:() => off});
+  const saved = mountSavedFilters({native, document, menu:{show:(items, x, y, label, options) => menus.push({items, label, options})}, notify:(message, action=null) => toasts.push({message, action}),
+    read:() => current, write:f => {current = f; saved.render();}, changed:() => changes.push(saved.applied()), format:() => view, filterOff:() => off, holdPanel:value => holds.push(value)});
   const $ = id => document.getElementById(id);
   const button = $('savedFilterButton');
-  return {saved, calls, toasts, menus, changes, $, button, elsewhere:item => disk.push(item),
+  return {saved, calls, toasts, menus, changes, holds, $, button, elsewhere:item => disk.push(item),
     set:f => {current = fields(f); saved.render();}, setOff:value => {off = value; saved.render();}, get fields() {return current;}, setFormat:f => {view = f;},
     label:() => [button.children[0].textContent, !button.children[1].hidden, button.dataset.state],
     async menu() {await button.dispatch('click'); await settle(); return menus.at(-1).items;},
     async pick(label) {const item = (await this.menu()).find(i => i?.[0] === label); assert.ok(item, `menu item ${label}`); await item[1](); await settle();},
     async submit(name) {$('filterNameInput').value = name; await $('filterNameForm').dispatch('submit'); await settle();}};
 }
+
+test('the floating panel stays while a menu or the name dialog opened from it is up', async () => {
+  const r = rig({stored:[entry(1, 'Net')]}), panelButton = r.$('panelSavedFilter');
+  const held = () => r.holds.reduce((count, value) => count + (value ? 1 : -1), 0);
+  await settle();
+  r.set({tag:'MyApp'});
+  await panelButton.dispatch('click'); await settle();
+  const shown = r.menus.at(-1);
+  assert.equal(held(), 1, 'held before the menu takes focus');
+  assert.equal(shown.options.opener, panelButton, 'a click focuses no button on macOS, so focus returns to it by name');
+  // The menu closes as a chosen item's dialog opens: the dialog keeps the hold.
+  shown.items.find(i => i?.[0] === '현재 필터 저장…')[1]();
+  shown.options.onClose(null);
+  assert.equal(held(), 1, 'the dialog outlasts the menu');
+  r.$('filterNameCancel').dispatch('click');
+  assert.equal(held(), 0, 'released once the dialog returned focus');
+  // Two clicks show the menu twice; the first closing leaves the second held.
+  await Promise.all([panelButton.dispatch('click'), panelButton.dispatch('click')]); await settle();
+  const [first, second] = r.menus.slice(-2);
+  first.options.onClose(null);
+  assert.equal(held(), 1);
+  second.options.onClose(null);
+  assert.equal(held(), 0);
+  // The panel's save button opens the dialog without a menu.
+  r.$('saveFilter').dispatch('click');
+  assert.equal(held(), 1);
+  await r.submit('내 앱');
+  assert.equal(r.$('filterNameDialog').open, false);
+  assert.equal(held(), 0);
+});
 
 test('a filter is saved under a name, applied to another file and undone', async () => {
   const r = rig();

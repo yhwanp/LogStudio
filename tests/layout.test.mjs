@@ -71,6 +71,18 @@ test('a held auto-hide panel stays open for a tip and is left open when released
   assert.equal(r.panel.inert,true,'the next press outside hides it as before');
 });
 
+test('a panel held by a tip and a menu stays open until both let go',()=>{
+  const r=rig();r.get('toggleFilters').fire('click');
+  const outside=()=>r.document.listeners.get('focusin')({target:r.selected});
+  r.layout.hold(true);r.layout.hold(true);
+  r.layout.hold(false);outside();
+  assert.equal(r.panel.inert,false,'the tip closing leaves the menu holding it');
+  r.layout.hold(false);r.layout.hold(false);outside();
+  assert.equal(r.panel.inert,true,'a stray release leaves no debt for the next hold');
+  r.get('toggleFilters').fire('click');r.layout.hold(true);outside();
+  assert.equal(r.panel.inert,false);
+});
+
 test('a press outside hides the floating panel only once it and a double-click it begins are over',()=>{
   // Hiding moves the log area, which must not slide under the pointer.
   const r=rig();r.get('toggleFilters').fire('click');

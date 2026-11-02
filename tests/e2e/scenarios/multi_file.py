@@ -43,7 +43,7 @@ def run(ctx):
         js("document.querySelector('#levelFilters [data-level=E]').dispatchEvent(new MouseEvent('click',{bubbles:true,altKey:true}));return true;")
         app.wait_count(2)
         check('a level filter spans the files', [r['badge'] for r in js(CELLS, '#logsRows')] == ['2', '3'])
-        app.click('allLevels')
+        app.remove_chip()
         app.wait_count(5)
         app.open_fixture('third.log')
         app.wait(lambda: app.text('largeName') == 'third.log' and app.count() == '로그 · 전체 1건', what='single file')
