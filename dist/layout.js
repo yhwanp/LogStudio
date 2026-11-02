@@ -58,8 +58,10 @@ export function mountLogLayout({document = globalThis.document, window = globalT
   // Whether a press outside the floating panel is down, and whether its
   // close is waiting (closeAfterPress).
   let pressing = false, settling = false;
-  // While a tip points into the panel, auto-hide leaves it open.
-  let held = false;
+  // While a tip points into the panel, or a menu or dialog opened from it is
+  // up, auto-hide leaves it open. Each owner's hold(true) ends with its own
+  // hold(false), and the two can overlap.
+  let holds = 0, held = false;
   // A combined log adds a file badge to the row column without changing the
   // saved width.
   const FILE_BADGE = 24;
@@ -409,7 +411,8 @@ export function mountLogLayout({document = globalThis.document, window = globalT
     setOpen(false, panel.contains(document.activeElement)); return true;
   }, hold(value) {
     // Released, the panel stays open until the next press or focus elsewhere.
-    held = !!value; if (held) cancelHide();
+    holds = Math.max(0, holds + (value ? 1 : -1)); held = holds > 0;
+    if (value) cancelHide();
   }, setRawMode(value) {
     rawMode = value;
     renderHeaders();

@@ -1,29 +1,32 @@
-"""Saved filters: saving the filter under a name from the panel, the marks in
-the log heading and the panel, a changed filter saved over, reverted and
-undone, applying a saved filter to another file, keeping it across a restart
-with the file's work, renaming, a name in use, deleting with undo, Escape in
-the name dialog, and a DLT file that cannot use text-log filters (ui.log,
-ui-copy.log, vehicle.dlt)."""
+"""Saved filters, with the panel on its default auto-hide: saving the filter
+under a name from the panel, the panel staying open under the menu and the
+name dialog until a press outside, the marks in the log heading and the
+panel, a changed filter saved over, reverted and undone, applying a saved
+filter to another file, keeping it across a restart with the file's work,
+renaming, a name in use, deleting with undo, Escape in the name dialog, and a
+DLT file that cannot use text-log filters (ui.log, ui-copy.log, vehicle.dlt)."""
 import json
 import re
 import shutil
 import time
 
 import fixtures
+from harness import CLICK
 
 STATE = """const $=id=>document.getElementById(id),b=$('savedFilterButton'),p=$('panelSavedFilter'),m=$('rowMenu'),d=$('filterNameDialog'),t=$('toast');
 const label=e=>[...e.children].filter(c=>!c.hidden).map(c=>c.textContent).join('|');return {
- heading:label(b),headingState:b.dataset.state,aria:b.getAttribute('aria-label'),panel:label(p),panelState:p.dataset.state,
+ panelOpen:$('toggleFilters').getAttribute('aria-expanded')==='true',heading:label(b),headingState:b.dataset.state,aria:b.getAttribute('aria-label'),panel:label(p),panelState:p.dataset.state,
  save:$('saveFilter').hidden?null:$('saveFilter').textContent,tag:$('tagFilter').value,hides:[...document.querySelectorAll('.cond-item')].filter(c=>c.querySelector('.cond-kind.hide')).map(c=>c.querySelector('.cond-summary').textContent),query:$('searchInput').value,
  count:$('logsCount').textContent,
  menu:m.hidden?null:[...m.children].map(c=>c.tagName==='HR'?'---':c.tagName==='P'?`(${c.textContent})`:(c.getAttribute('aria-checked')==='true'?'* ':'')+c.textContent),
  dialog:d.open,title:$('filterNameTitle').textContent,name:$('filterNameInput').value,error:$('filterNameError').hidden?null:$('filterNameError').textContent,
  hint:$('filterNameHint').hidden?null:$('filterNameHint').textContent,focus:document.activeElement?.id||null,
  toast:t.hidden?null:t.textContent,action:t.querySelector('.toast-action')?.textContent??null,detail:!$('largeDetail').hidden};"""
-PICK = """const i=[...document.querySelectorAll('#rowMenu [role^=menuitem]')].find(e=>e.textContent===arguments[0]);if(!i)return false;i.click();return true;"""
+PICK = "const r=[...document.querySelectorAll('#rowMenu [role^=menuitem]')].find(e=>e.textContent===arguments[0]),kind='click',keys={};if(!r)return false;" + CLICK + "return true;"
 SUBMIT = "const i=document.getElementById('filterNameInput');i.value=arguments[0];i.dispatchEvent(new Event('input',{bubbles:true}));document.getElementById('filterNameForm').requestSubmit();return true;"
-PIN = "const a=document.getElementById('autoHideFilters');a.checked=arguments[0];a.dispatchEvent(new Event('change',{bubbles:true}));return true;"
 OPEN_PANEL = "const t=document.getElementById('toggleFilters');if(t.getAttribute('aria-expanded')!=='true')t.click();return true;"
+SHOWN_BUTTON = "return document.getElementById('toggleFilters').getAttribute('aria-expanded')==='true'?'panelSavedFilter':'savedFilterButton';"
+LEAVE_PANEL = "document.getElementById('filterPanel').dispatchEvent(new PointerEvent('pointerleave'));return true;"
 
 
 def oracle(lines):
@@ -47,8 +50,8 @@ def run(ctx):
         st = lambda: js(STATE)
         until = lambda pred, what, timeout=20: app.wait(lambda: (lambda v: pred(v) and v)(st()), timeout, what=what)
 
-        def menu(button='panelSavedFilter'):
-            app.click(button)
+        def menu(button=None):
+            app.click(button or js(SHOWN_BUTTON))
             return until(lambda s: s['menu'] is not None, 'saved filter menu')['menu']
 
         def pick(label):
@@ -58,7 +61,6 @@ def run(ctx):
         app.open_fixture('ui.log')
         app.wait_count(3000)
         js(OPEN_PANEL)
-        js(PIN, False)
         time.sleep(.4)
         s = st()
         check('with no saved filter the buttons say so and nothing can be saved',
@@ -66,20 +68,19 @@ def run(ctx):
         check('an empty list explains how to save', menu() == ['(저장된 필터가 없습니다. 조건을 정한 뒤 저장할 수 있습니다)'], st()['menu'])
         app.key('Escape')
         time.sleep(.2)
-        check('Escape closes a menu of notes only, not the pinned panel',
-              st()['menu'] is None and js("return document.getElementById('toggleFilters').getAttribute('aria-expanded')") == 'true', st()['menu'])
+        s = st()
+        check('Escape closes a menu of notes only, not the panel, and returns to its button',
+              s['menu'] is None and s['panelOpen'] and s['focus'] == 'panelSavedFilter', s)
 
         app.enter('tagFilter', 'ExampleApp')
         app.click('errorLevels')
         want = expected(['ExampleApp'], 'WEFA')
         app.wait_count(want)
         check('a filter with conditions can be saved from the panel', st()['save'] == '저장', st())
-        # A click does not focus a button in WebKit, so focus starts on the page.
-        js("document.activeElement.blur();return true;")
         app.click('saveFilter')
         s = until(lambda s: s['dialog'], 'name dialog')
-        check('the name dialog suggests a name from the conditions and says what is saved',
-              s['title'] == '필터 저장' and s['name'] == '레벨: Warn 이상 · 태그: ExampleApp' and s['focus'] == 'filterNameInput'
+        check('the name dialog suggests a name from the conditions and says what is saved, over the open panel',
+              s['panelOpen'] and s['title'] == '필터 저장' and s['name'] == '레벨: Warn 이상 · 태그: ExampleApp' and s['focus'] == 'filterNameInput'
               and s['hint'] == '저장할 조건: 레벨: Warn 이상 · 태그: ExampleApp. 검색어는 저장하지 않습니다.', s)
         app.capture('01-save-dialog')
         js(SUBMIT, '   ')
@@ -87,8 +88,8 @@ def run(ctx):
         check('an empty name is refused in the dialog', s['dialog'] and s['error'] == '이름을 입력해 주세요.', s)
         js(SUBMIT, first)
         s = until(lambda s: not s['dialog'], 'saved')
-        check('saving names the filter in the heading and the panel',
-              s['heading'] == first and s['headingState'] == 'applied' and s['panel'] == first and s['save'] is None
+        check('saving names the filter in the heading and the panel, and returns to the panel',
+              s['panelOpen'] and s['heading'] == first and s['headingState'] == 'applied' and s['panel'] == first and s['save'] is None
               and s['toast'] == f"'{first}' 필터를 저장했습니다." and s['focus'] == 'panelSavedFilter', s)
         disk = json.loads(store.read_text())
         check('saved-filters.json holds the name, format and conditions',
@@ -105,7 +106,6 @@ def run(ctx):
         line = "const h=document.querySelector('.logs-main-pane .pane-heading'),t=e=>Math.round(e.getBoundingClientRect().top);return [t(document.getElementById('logsCount')),t(h.querySelector('.table-tools')),getComputedStyle(document.getElementById('savedFilterButton')).display];"
         top, tools, shown = js(line)
         check('with the panel open its button stands in for the heading one, and the heading stays one line', shown == 'none' and abs(top - tools) <= 4, [top, tools, shown])
-        js(PIN, True)
         js("document.getElementById('collapseFilters').click();return true;")
         time.sleep(.6)
         top, tools, shown = js(line)
@@ -117,18 +117,21 @@ def run(ctx):
         app.key('Escape')
         time.sleep(.2)
         js(OPEN_PANEL)
-        js(PIN, False)
         time.sleep(.6)
         items = menu('panelSavedFilter')
         check('the menu marks the applied filter and offers what fits a changed one',
               items == [f'* {first}', '---', f"'{first}'에 저장", '저장한 조건으로 되돌리기', '다른 이름으로 저장…', '이름 바꾸기…', f"'{first}' 삭제"], items)
         check('the applied filter has focus in the menu', st()['focus'] is None or js("return document.activeElement.getAttribute('aria-checked')") == 'true')
+        js(LEAVE_PANEL)
+        time.sleep(.6)
+        s = st()
+        check('the pointer leaving for the menu closes neither', s['panelOpen'] and s['menu'] is not None, s)
         app.capture('03-menu')
         pick('저장한 조건으로 되돌리기')
         app.wait_count(want)
         s = st()
-        check('reverting puts back the saved conditions and offers to undo',
-              s['tag'] == 'ExampleApp' and s['headingState'] == 'applied' and s['action'] == '실행 취소'
+        check('reverting puts back the saved conditions and offers to undo, with the panel open',
+              s['panelOpen'] and s['tag'] == 'ExampleApp' and s['headingState'] == 'applied' and s['action'] == '실행 취소'
               and s['toast'] == f"'{first}'에 저장한 조건으로 되돌렸습니다.실행 취소", s)
         app.capture('04-undo-toast', hover=None)
         js("document.querySelector('#toast .toast-action').click();return true;")
@@ -153,6 +156,17 @@ def run(ctx):
         check('picking it applies its conditions and keeps the search',
               s['tag'] == 'ExampleApp|WifiMonitor' and s['query'] == 'timeout' and s['heading'] == first
               and s['toast'] == f"'{first}' 필터를 적용했습니다.실행 취소", s)
+        check('picking it from the heading leaves the panel closed', not s['panelOpen'], s)
+        js(OPEN_PANEL)
+        time.sleep(.4)
+        menu()
+        pick(first)
+        s = st()
+        check('picking it from the panel keeps the panel open to show the conditions, with focus on its button',
+              s['panelOpen'] and s['menu'] is None and s['heading'] == first and s['focus'] == 'panelSavedFilter', s)
+        app.click_row(js("return document.querySelector('#logsRows .log-row').dataset.lineNumber"))
+        until(lambda s: not s['panelOpen'], 'panel closed by a press outside')
+        check('a press outside closes it as usual', True)
         time.sleep(1)
 
     # A restart keeps the list, and the file's work keeps the filter it used.
@@ -165,11 +179,11 @@ def run(ctx):
         app.wait_count(expected(['ExampleApp', 'WifiMonitor'], 'WEFA'))
         check('after a restart the file returns with its saved filter', s['tag'] == 'ExampleApp|WifiMonitor' and s['headingState'] == 'applied', s)
         js(OPEN_PANEL)
-        js(PIN, False)
         time.sleep(.4)
+        check('the panel opens on the restored filter', st()['panelOpen'])
 
-        def menu(button='panelSavedFilter'):
-            app.click(button)
+        def menu(button=None):
+            app.click(button or js(SHOWN_BUTTON))
             return until(lambda s: s['menu'] is not None, 'saved filter menu')['menu']
 
         def pick(label):
@@ -181,7 +195,7 @@ def run(ctx):
         check('renaming starts from the current name without the conditions note', s['title'] == '이름 바꾸기' and s['name'] == first and s['hint'] is None, s)
         js(SUBMIT, '내 앱 경고')
         s = until(lambda s: not s['dialog'], 'renamed')
-        check('renaming changes both buttons', s['heading'] == '내 앱 경고' and s['panel'] == '내 앱 경고' and s['toast'] == '이름을 바꿨습니다 · 내 앱 경고', s)
+        check('renaming changes both buttons and keeps the panel', s['panelOpen'] and s['heading'] == '내 앱 경고' and s['panel'] == '내 앱 경고' and s['toast'] == '이름을 바꿨습니다 · 내 앱 경고', s)
 
         app.enter('tagFilter', 'RenderThread')
         app.wait_count(expected(['RenderThread'], 'WEFA'))
@@ -208,7 +222,7 @@ def run(ctx):
 
         # Escape closes the dialog only, not the raw detail under it.
         app.click_row(js("return document.querySelector('#logsRows .log-row').dataset.lineNumber"))
-        until(lambda s: s['detail'], 'detail')
+        until(lambda s: s['detail'] and not s['panelOpen'], 'detail, with the panel closed by the press')
         menu()
         pick('이름 바꾸기…')
         until(lambda s: s['dialog'], 'dialog')

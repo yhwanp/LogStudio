@@ -43,7 +43,7 @@ return {cell:c.clientWidth,timeAndEllipsis:Math.ceil(m.measureText('2026-06-18 1
         check('continuation rows join their entry; malformed rows stay raw',
               all('continuation-row' in cont[n] for n in (3, 5, 7, 11)) and 'level-row-W' in cont[7] and 'raw-row' in cont[12], cont)
         app.capture('01-columns')
-        app.click('includeRaw')
+        app.filter_click('includeRaw')
         app.wait_count(13)
         check('turning off 미인식 줄 포함 hides only the 3 orphan rows', row(12) is None and row(11) is not None, app.count())
         app.type('tagFilter', 'alerts')

@@ -56,7 +56,7 @@ def run(ctx):
               s['search'] == '1004' and s['searchTop'] == before['searchTop'] and s['detail'] == '1,004행 원문' and s['logs'] == '1004', {'before': before, 'after': s})
         # The upper logs, which show the selected search result, follow the row the search puts
         # in place of a hidden one: row 24 (Warn) gives way to row 31 (Info).
-        app.click('allLevels')
+        app.remove_chip()
         app.wait_count(3000)
         app.click('largeFirst')
         time.sleep(.5)
@@ -66,7 +66,7 @@ def run(ctx):
         app.wait(lambda: st()['search'] == '31', what='search row 31 stands in')
         app.wait(lambda: st()['logs'] == '31', what='upper logs follow row 31')
         check('the upper logs follow the row the search puts in place of the hidden one', st()['logs'] == '31', st())
-        app.click('allLevels')
+        app.remove_chip()
         app.wait_count(3000)
         app.type('searchInput', '')
         time.sleep(.4)
@@ -89,7 +89,7 @@ def run(ctx):
         check('a row filtered out gives its place to the next result, its detail too, and says so',
               s['logsTop'] == before['logsTop'] and s['detail'] == '1,007행 원문' and s['toast'] == '1,004행은 새 필터 결과에 없어 다음 결과인 1,007행을 선택했습니다.', s)
         app.capture('01-next-row-kept-in-place')
-        app.click('allLevels')
+        app.remove_chip()
         app.wait_count(3000)
         app.wait(lambda: st()['logs'] == '1004', what='row 1004 selected again')
         s = st()

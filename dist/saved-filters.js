@@ -104,9 +104,9 @@ export function savedState({list, applied, fields, format}) {
 
 // The two menu buttons (log heading and filter panel), the panel's save
 // button and the name dialog. `read` gives the current filter's fields,
-// `write` applies fields, and `changed` reports a change to save with the
-// file's work.
-export function mountSavedFilters({native, menu, notify, read, write, changed, format, isGone=() => false, filterOff=() => false, document=globalThis.document}) {
+// `write` applies fields, `changed` reports a change to save with the file's
+// work, and `holdPanel` keeps the floating panel open.
+export function mountSavedFilters({native, menu, notify, read, write, changed, format, isGone=() => false, filterOff=() => false, holdPanel=() => {}, document=globalThis.document}) {
   const $ = id => document.getElementById(id);
   // Each menu button names the applied filter and marks it once changed.
   const buttons = ['savedFilterButton', 'panelSavedFilter'].map(id => {
@@ -117,7 +117,11 @@ export function mountSavedFilters({native, menu, notify, read, write, changed, f
   const dialog = $('filterNameDialog'), form = $('filterNameForm'), input = $('filterNameInput'), error = $('filterNameError'), title = $('filterNameTitle'), hint = $('filterNameHint'), submit = $('filterNameSubmit');
   // `anchor` is the button the dialog was opened from, where focus returns
   // when nothing else in the page had it.
-  let list = [], applied = null, mode = null, opener = null, anchor = buttons[0].button, busy = false;
+  let list = [], applied = null, mode = null, opener = null, anchor = buttons[0].button, busy = false, releaseDialog = null;
+  // Focus and the pointer leave the panel for a menu or the name dialog opened
+  // from it, and a dialog opened from a menu outlasts that menu, so each holds
+  // the panel on its own. Holding a closed panel does nothing.
+  const hold = () => {holdPanel(true); return () => holdPanel(false);};
   const invoke = (command, args) => native.core.invoke(command, args);
   const state = () => savedState({list, applied, fields:read(), format:format()});
   const current = () => list.find(entry => entry.id === applied) ?? null;
@@ -173,6 +177,7 @@ export function mountSavedFilters({native, menu, notify, read, write, changed, f
     hint.textContent = `저장할 조건: ${describeFilter(fields, format())}. 검색어는 저장하지 않습니다.`;
     input.value = mode === 'rename' ? current()?.name ?? '' : suggestName(fields, format(), list);
     showError('');
+    releaseDialog ??= hold();
     if (typeof dialog.showModal === 'function') dialog.showModal(); else dialog.open = true;
     input.focus(); input.select?.();
   }
@@ -186,6 +191,7 @@ export function mountSavedFilters({native, menu, notify, read, write, changed, f
     // A button that is not shown (the panel closed, or the heading's while
     // the panel is open) cannot take focus; the other one then does.
     for (const next of [target, ...buttons.map(b => b.button)]) {next?.focus?.({preventScroll:true}); if (document.activeElement === next) break;}
+    releaseDialog?.(); releaseDialog = null;
   }
   form.addEventListener('submit', async event => {
     event.preventDefault();
@@ -218,6 +224,7 @@ export function mountSavedFilters({native, menu, notify, read, write, changed, f
   async function openMenu(button) {
     if (isGone()) return;
     anchor = button;
+    const release = hold();
     // Another running app may have changed the filters.
     await refresh();
     const s = state(), items = s.usable.map(entry => [entry.name, () => apply(entry, `'${entry.name}' 필터를 적용했습니다.`), describeFilter(entry.fields, entry.format), {checked:entry.id === applied}]);
@@ -225,7 +232,7 @@ export function mountSavedFilters({native, menu, notify, read, write, changed, f
     if (items.length && s.actions.length) items.push(null);
     items.push(...s.actions.map(action => [action.label, run[action.id]]));
     const box = button.getBoundingClientRect?.();
-    menu.show(items, box ? box.left : 0, box ? box.bottom + 4 : 0, '저장된 필터');
+    menu.show(items, box ? box.left : 0, box ? box.bottom + 4 : 0, '저장된 필터', {opener:button, onClose:release});
   }
   for (const {button} of buttons) button.addEventListener('click', () => void openMenu(button));
   // The panel's save button hides once saved; focus returns to the panel's menu button.

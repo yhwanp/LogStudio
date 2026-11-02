@@ -70,11 +70,24 @@ text:e.textContent,disabled:e.getAttribute('aria-disabled')==='true',title:e.tit
 
 # A click as the mouse sends it on element `r`: pointer and mouse press and
 # release at its centre, then `kind` (click, or a right-button contextmenu).
-CLICK = """const b=r.getBoundingClientRect(),right=kind==='contextmenu',button=right?2:0;
+PRESS = """const b=r.getBoundingClientRect(),right=kind==='contextmenu',button=right?2:0;
 const o={bubbles:true,cancelable:true,detail:1,clientX:b.left+Math.min(200,b.width/2),clientY:b.top+b.height/2,button,...keys};
 const p=buttons=>({...o,buttons,pointerId:1,pointerType:'mouse',isPrimary:true});
-r.dispatchEvent(new PointerEvent('pointerdown',p(right?2:1)));r.dispatchEvent(new MouseEvent('mousedown',{...o,buttons:right?2:1}));
-r.dispatchEvent(new PointerEvent('pointerup',p(0)));r.dispatchEvent(new MouseEvent('mouseup',o));r.dispatchEvent(new MouseEvent(kind,o));"""
+const down=new MouseEvent('mousedown',{...o,buttons:right?2:1});
+r.dispatchEvent(new PointerEvent('pointerdown',p(right?2:1)));r.dispatchEvent(down);"""
+RELEASE = """r.dispatchEvent(new PointerEvent('pointerup',p(0)));r.dispatchEvent(new MouseEvent('mouseup',o));r.dispatchEvent(new MouseEvent(kind,o));"""
+CLICK = PRESS + RELEASE
+# What a press does to focus in WKWebView, which script events leave out: a
+# text field takes it; a button or checkbox takes it only with a tabindex, so
+# it goes to the nearest element around it that has one, or leaves the controls.
+PRESS_FOCUS = """if(!down.defaultPrevented){if(r.matches('textarea,select,input:not([type=checkbox],[type=radio],[type=button])'))r.focus();
+else{const around=r.closest('[tabindex]');if(around)around.focus({preventScroll:true});else document.activeElement?.blur?.();}}"""
+
+# A mouse reaches no control of a closed panel, under a modal dialog or not
+# shown. Checked by state: the panel's width animation stands still in the
+# background, so positions say nothing.
+REACH = """{const modal=document.querySelector('dialog:modal');
+if(r.closest('[inert]')||!r.getClientRects().length||modal&&!modal.contains(r))throw new Error(`a mouse cannot reach #${r.id||r.textContent}`);}"""
 
 
 class App:
@@ -199,7 +212,24 @@ class App:
         return self.js("return document.getElementById(arguments[0]).hidden", id)
 
     def click(self, id):
-        self.js("document.getElementById(arguments[0]).click();return true;", id)
+        """Clicks as the mouse does: the press comes first, so code that acts
+        on presses outside sees it, and it moves focus as it would in WKWebView."""
+        self.js("const r=document.getElementById(arguments[0]),kind='click',keys={};" + REACH + PRESS + PRESS_FOCUS + RELEASE + "return true;", id)
+
+    def activate(self, id):
+        """Focuses a button and presses it with the keyboard: no mouse press."""
+        self.js("const r=document.getElementById(arguments[0]);r.focus();r.click();return true;", id)
+
+    def filter_click(self, id):
+        """Clicks a control of the filter panel or its editor, first opening
+        what a person would have to."""
+        self.js(OPEN_EDITOR + "const t=document.getElementById('toggleFilters');if(t.getAttribute('aria-expanded')!=='true')t.click();"
+                "openEditor(document.getElementById(arguments[0]));return true;", id)
+        self.click(id)
+
+    def remove_chip(self):
+        """Clicks the × of the first filter chip."""
+        self.js("const r=document.querySelector('#activeFilters .chip-remove'),kind='click',keys={};" + REACH + PRESS + PRESS_FOCUS + RELEASE + "return true;")
 
     def enter(self, id, value):
         """Types a value into a field and presses Enter."""
