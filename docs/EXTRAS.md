@@ -4,7 +4,7 @@
 
 ## 켜는 방법
 
-1. 확장 기능이 포함된 앱을 준비합니다. `main` 브랜치에 push될 때마다 실행되는 워크플로가 macOS용 `extras-LogStudio-macos-arm64`와 Windows용 `extras-LogStudio-windows-x64` 아티팩트를 올립니다(실행 요약의 `with extensions (not released)` 링크, 90일 보관). Windows용은 CI가 빌드만 하고 실제로 실행해 확인하지는 않았습니다. 직접 빌드하려면 다음 명령을 씁니다.
+1. 확장 기능이 포함된 앱을 준비합니다. `main` 브랜치에 push될 때마다 실행되는 워크플로가 macOS용 `extras-LogStudio-macos-arm64`와 Windows용 `extras-LogStudio-windows-x64` 아티팩트를 올립니다(실행 요약의 `with extensions (not released)` 링크, 90일 보관). Windows용은 CI가 빌드만 하고 실제로 실행해 확인하지는 않았습니다. 직접 빌드하려면 다음 명령을 씁니다. macOS에서 빌드해 바로 실행하려면 `sh build-run-macos.command --extras`를 씁니다.
 
    ```sh
    cargo build --release --locked -p logstudio-desktop --features extras

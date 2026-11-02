@@ -60,7 +60,7 @@ def prune_backups(parent, keep):
             print('Could not remove older local app ' + str(backup) + ': ' + str(error), file=sys.stderr)
 
 
-def build_binary(root, env):
+def build_binary(root, env, extras=False):
     try:
         version = subprocess.run(['rustc', '-vV'], cwd=root, env=env,
                                  check=True, text=True, stdout=subprocess.PIPE).stdout
@@ -72,7 +72,10 @@ def build_binary(root, env):
         raise ValueError('A native macOS Rust toolchain is required')
     command = ['cargo', 'build', '--locked', '--release', '-p', 'logstudio-desktop',
                '--target', hosts[0], '--message-format=json-render-diagnostics']
-    print('Building normal Release app (no qa/WebDriver)...', flush=True)
+    if extras:
+        command += ['--features', 'extras']
+    print('Building ' + ('Release app with extensions' if extras else 'normal Release app')
+          + ' (no qa/WebDriver)...', flush=True)
     artifacts = set()
     manifest = (root / 'src-tauri/Cargo.toml').resolve()
     with subprocess.Popen(command, cwd=root, env=env, text=True,
@@ -110,7 +113,7 @@ def build_binary(root, env):
     return binary
 
 
-def build_and_run(root):
+def build_and_run(root, extras=False):
     if platform.system() != 'Darwin':
         raise ValueError('This build script requires macOS')
     root = root.resolve()
@@ -127,7 +130,7 @@ def build_and_run(root):
         env = os.environ.copy()
         env['RUSTUP_AUTO_INSTALL'] = '0'
         env.setdefault('MACOSX_DEPLOYMENT_TARGET', '12.0')
-        binary = build_binary(root, env)
+        binary = build_binary(root, env, extras)
         with tempfile.TemporaryDirectory(prefix='.logstudio-local-stage-', dir=parent) as directory:
             staged = Path(directory) / output.name
             package_macos.package(binary, staged)
@@ -159,9 +162,10 @@ def build_and_run(root):
 
 if __name__ == '__main__':
     try:
-        if len(sys.argv) != 1:
-            raise ValueError('Usage: sh build-run-macos.command (no arguments)')
-        build_and_run(Path(__file__).resolve().parents[1])
+        arguments = sys.argv[1:]
+        if arguments not in ([], ['--extras']):
+            raise ValueError('Usage: sh build-run-macos.command [--extras]')
+        build_and_run(Path(__file__).resolve().parents[1], extras=bool(arguments))
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         print('LogStudio build-run: ' + str(error), file=sys.stderr)
         sys.exit(1)
