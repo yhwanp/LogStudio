@@ -228,6 +228,7 @@ sh build-run-macos.command
 
 - `rustup`으로 설치한 Rust(`rust-toolchain.toml`의 1.99.0), Xcode Command Line Tools, Python 3.9 이상이 필요합니다.
 - `--locked` 릴리스 바이너리를 빌드해 `artifacts/desktop/LogStudio-local.app`으로 패키징한 뒤 실행합니다. 직전 빌드는 `LogStudio-local-backup-<고유번호>.app` 한 개만 백업으로 남기고 오래된 백업은 정리합니다.
+- `sh build-run-macos.command --extras`는 확장 기능을 넣어 같은 경로에 빌드합니다([EXTRAS.md](EXTRAS.md)). 옵션 없이 다시 실행하면 그 앱은 확장 기능이 없는 빌드로 바뀝니다.
 - 중복 실행 방지를 위해 빌드 중에는 `artifacts/desktop/.logstudio-local-build.lock` 잠금 폴더를 사용합니다.
 
 ## 검사

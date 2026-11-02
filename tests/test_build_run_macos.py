@@ -50,6 +50,7 @@ class BuildRunTests(unittest.TestCase):
             'features': ['default', 'custom-protocol'], 'executable': str(self.binary),
         }]
         self.build_code = 0
+        self.features = []
         self.launch_failure = False
         self.running = []
         self.addCleanup(patch.stopall)
@@ -81,14 +82,14 @@ class BuildRunTests(unittest.TestCase):
         self.assertEqual(kwargs['cwd'], self.root)
         self.assertEqual(command, ['cargo', 'build', '--locked', '--release', '-p',
                                   'logstudio-desktop', '--target', 'aarch64-apple-darwin',
-                                  '--message-format=json-render-diagnostics'])
+                                  '--message-format=json-render-diagnostics'] + self.features)
         self.assertNotIn('qa', command)
         self.assertEqual(kwargs['env'].get('CARGO_TARGET_DIR'), 'custom target directory')
         return FakeCargo(self.messages, self.build_code)
 
-    def build(self):
+    def build(self, **options):
         with patch.dict(os.environ, {'CARGO_TARGET_DIR': 'custom target directory'}):
-            return workflow.build_and_run(self.root)
+            return workflow.build_and_run(self.root, **options)
 
     def old_output(self):
         self.output.mkdir(parents=True)
@@ -117,6 +118,19 @@ class BuildRunTests(unittest.TestCase):
         self.assertEqual(self.events[1][1], self.binary.resolve())
         self.assertEqual((production / 'untouched').read_text(), 'production')
         self.assertFalse((self.output.parent / '.logstudio-local-build.lock').exists())
+
+    def test_extras_option_builds_the_extras_feature_into_the_same_app(self):
+        self.features = ['--features', 'extras']
+        self.assertEqual(self.build(extras=True), self.output)
+        self.assertEqual([e[0] for e in self.events], ['build', 'package', 'launch'])
+
+    def test_unknown_argument_is_refused_before_building(self):
+        script = Path(__file__).resolve().parents[1] / 'desktop/build_run_macos.py'
+        with patch.object(workflow.subprocess, 'Popen', REAL_POPEN):
+            result = REAL_RUN([sys.executable, str(script), '--qa'], text=True,
+                              stderr=subprocess.PIPE)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('[--extras]', result.stderr)
 
     def backups(self):
         return list(self.output.parent.glob('LogStudio-local-backup-*.app'))
