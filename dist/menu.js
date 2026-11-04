@@ -26,9 +26,10 @@
 // which every show and close changes: an owner whose answer comes late
 // shows it only while `version()` is still the one it saw. The element
 // holds `popupOpener` while open, so a dialog opened from the menu returns
-// focus there (dom.js `focusOwner`).
+// focus there (dom.js `focusOwner`). An `opener` with `aria-haspopup` is
+// marked `aria-expanded` while a menu shown with that `opener` is open.
 export function createPopupMenu({menu, document, window}) {
-  let opener = null, standIn = null, notes = 0, onList = false, onClose = null, at = null, version = 0, alignEnd = false;
+  let opener = null, standIn = null, expanded = null, notes = 0, onList = false, onClose = null, at = null, version = 0, alignEnd = false;
   function close(restore = false, press = null) {
     if (menu.hidden) return;
     const told = take();
@@ -39,7 +40,14 @@ export function createPopupMenu({menu, document, window}) {
     menu.popupOpener = null;
     if (restore) (opener?.isConnected === false ? standIn ?? opener : opener)?.focus({preventScroll:true});
     opener = standIn = null;
+    mark(null);
     told?.(press);
+  }
+  function mark(button) {
+    if (expanded === button) return;
+    expanded?.setAttribute('aria-expanded', 'false');
+    expanded = button;
+    button?.setAttribute('aria-expanded', 'true');
   }
   function take() {
     const told = onClose;
@@ -135,6 +143,7 @@ export function createPopupMenu({menu, document, window}) {
       opener = standIn && (!owner || owner === document.body) ? standIn : owner;
     }
     menu.popupOpener = opener;
+    mark(options.opener?.getAttribute?.('aria-haspopup') ? options.opener : null);
     // A menu shown again in place of another is a new one to its owner.
     take()?.(null);
     onClose = options.onClose ?? null;

@@ -1,5 +1,5 @@
 // App extensions, which only `extras` builds have (extras/src/lib.rs): the
-// 확장 items of the ⋯ menu that open their windows, the row selected here
+// 확장 items of the top-bar menu that open their windows, the row selected here
 // that their pages show, and a row they pick, which is selected here. An
 // extras build shows 확장 even before any settings file exists, so the
 // settings folder can be opened from the menu; other builds refuse `list`,

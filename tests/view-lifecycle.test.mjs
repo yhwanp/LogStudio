@@ -14,7 +14,7 @@ const chipNodes=row=>row.children.flatMap(node=>node.className==='chip-group'?no
 // is the condition's switch, its kind and its summary.
 const chipEdit=chip=>chip.children[0],chipClear=chip=>chip.children[1];
 const listItems=r=>r.get('conditionList').children,itemKinds=r=>listItems(r).map(item=>item.children[1].textContent),itemSummaries=r=>listItems(r).map(item=>item.children[2].textContent);
-// The ⋯ menu's item called `label`, opened for the look of it or the click.
+// The top-bar menu's item called `label`, opened for the look of it or the click.
 const moreItem=async(r,label)=>{await r.get('moreButton').dispatch('click');return r.get('rowMenu').children.find(n=>n.textContent===label||n.textContent.startsWith(`${label} `));};
 const closeMenu=r=>r.get('rowMenu').dispatch('keydown',{key:'Escape',preventDefault(){},stopPropagation(){}});
 const choose=async(r,label)=>{const item=await moreItem(r,label);assert.ok(item,label);await item.dispatch('click');await settle();};
@@ -1571,7 +1571,7 @@ test('search cancel shows inside the search box only while a started search runs
   assert.equal(cancel.hidden,true);assert.equal(delayed().length,0,'a finished search clears the pending show');
 });
 
-test('the ⋯ menu lists what the open file offers, in groups',async t=>{
+test('the top-bar menu lists what the open file offers, in groups',async t=>{
   const r=await rig();t.after(()=>r.controller.close());
   const labels=()=>r.get('rowMenu').children.map(n=>n.tagName==='HR'?null:n.textContent);
   await r.get('moreButton').dispatch('click');
@@ -1694,7 +1694,7 @@ test('Cmd/Ctrl+L with no rows says so instead of doing nothing',async t=>{
   assert.match((await moreState(r,'행 번호로 이동…')).text,/이동할 행이 없습니다/);
 });
 
-test('column width tools open from the ⋯ menu and a header right-click, not in raw view',async t=>{
+test('column width tools open from the top-bar menu and a header right-click, not in raw view',async t=>{
   const r=await rig();t.after(()=>r.controller.close());
   const items=()=>r.get('rowMenu').children.filter(n=>n.tagName==='BUTTON').map(n=>n.textContent);
   await choose(r,'열 폭');

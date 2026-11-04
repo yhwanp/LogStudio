@@ -29,6 +29,6 @@ export function mountRecentFiles({ui, document, native, isGone, onError, guard =
   ui.clearRecent.addEventListener('click',forgetAll);
   void native.core.invoke('recent_files').then(render,()=>{});
   void native.event.listen('recent-changed',({payload})=>render(payload)).catch(()=>{});
-  // The ⋯ menu's list; empty when nothing was opened yet.
+  // The top-bar menu's list; empty when nothing was opened yet.
   return {items:()=>recent.length?recent.map(item=>[item.name,()=>void openRecent(item.id),title(item)]).concat([null,['목록 지우기',forgetAll]]):[]};
 }
