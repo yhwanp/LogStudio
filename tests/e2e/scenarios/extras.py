@@ -1,5 +1,6 @@
-"""App extensions, in a build that has them (--features qa,extras): no 확장
-button without a settings file, the menu that extras/track.json adds, the
+"""App extensions, in a build that has them (--features qa,extras): 확장
+without a settings file, holding a note and the settings folder, the menu
+that extras/track.json adds, the
 track window (its title from the start, points and the rows without one,
 synthetic tiles from a local tile server, the selected row's place and
 coordinates, hovering and clicking the track's end, [ and ] stepping
@@ -86,7 +87,18 @@ def run(ctx):
         with ctx.launch() as app:
             app.open_fixture('track.log')
             app.wait_count(1200)
-            check('without a settings file the menu has no 확장', '확장' not in app.menu_items())
+            try:
+                app.wait(lambda: '확장' in app.menu_items(), 10, what='확장 in the menu')
+            except Timeout:
+                check('the build has extensions (--features qa,extras)', False)
+                return
+            app.menu('확장')
+            items = app.wait(lambda: app.js(MENU), what='extensions menu')
+            notes = app.js("return [...document.querySelectorAll('#rowMenu .menu-note')].map(n=>n.textContent);")
+            check('without a settings file the 확장 menu says so above the settings folder',
+                  [i['label'] for i in items] == ['‹ 메뉴', '설정 폴더 열기'] and not any(i['disabled'] for i in items)
+                  and notes == ['설정 파일(extras/<id>.json)이 없습니다'], {'items': items, 'notes': notes})
+            app.capture('00-extras-menu-empty')
         settings.parent.mkdir(parents=True, exist_ok=True)
         settings.write_text(good, encoding='utf-8')
         with ctx.launch() as app:
@@ -101,13 +113,10 @@ def run(ctx):
                 app.wait(lambda: js(MENU), what='extensions menu')
                 js(CHOOSE, '테스트 궤적')
                 return app.wait(lambda: (lambda h: 'extra-track' in h and h)(handles()), what='track window')
-            try:
-                app.wait(lambda: '확장' in app.menu_items(), 10, what='확장 in the menu')
-            except Timeout:
-                check('the build has extensions (--features qa,extras)', False)
-                return
             app.open_fixture('track.log')
             app.wait_count(1200)
+            # Wait until the first listing puts 확장 in the menu.
+            app.wait(lambda: '확장' in app.menu_items(), 10, what='확장 in the menu')
             app.menu('확장')
             items = app.wait(lambda: js(MENU), what='extensions menu')
             check('the 확장 menu lists the extension by its title, then the settings folder',

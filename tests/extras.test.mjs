@@ -36,16 +36,33 @@ function mount(answers, more = {}) {
 }
 
 test('a build without extensions offers none and sends no rows', async () => {
-  const m = mount({list:[]});
+  const m = mount({list:new Error('This build has no extensions')});
   await settle();
   assert.equal(m.extras.available(), false);
   m.extras.selected('logs', 1, 40);
   m.flush();
   assert.deepEqual(m.native.calls, [{action:'list'}]);
-  // An older build without the command lists none either.
+  // An older build without the command offers none either.
   const old = mount({list:new Error('Unknown command')});
   await settle();
   assert.equal(old.extras.available(), false);
+});
+
+test('an extras build without settings files offers only the settings folder', async () => {
+  const m = mount({list:[], reveal:{}});
+  await settle();
+  assert.equal(m.extras.available(), true);
+  const items = m.extras.items();
+  // A note that cannot be chosen says why the menu is nearly empty.
+  assert.deepEqual(items, [['설정 파일(extras/<id>.json)이 없습니다', null], items[1]]);
+  assert.equal(items[1][0], '설정 폴더 열기');
+  items[1][1]();
+  await settle();
+  assert.deepEqual(m.native.calls.at(-1), {action:'reveal'});
+  // With no configured extension, no row is sent.
+  m.extras.selected('logs', 1, 40);
+  m.flush();
+  assert.deepEqual(m.native.calls, [{action:'list'}, {action:'reveal'}]);
 });
 
 test('the menu lists extensions, opens one, and names a broken one', async () => {
@@ -67,15 +84,27 @@ test('the menu lists extensions, opens one, and names a broken one', async () =>
   assert.deepEqual(m.native.calls.at(-1), {action:'reveal'});
 });
 
+test('a failed listing after a good one keeps 확장 in the menu', async () => {
+  let fail = false;
+  const m = mount({list:() => {if (fail) throw 'IPC failed';return [{id:'track', title:'궤적'}];}});
+  await settle();
+  assert.equal(m.extras.available(), true);
+  fail = true;
+  m.focus();
+  await settle();
+  assert.equal(m.extras.available(), true);
+  assert.deepEqual(m.extras.items().map(item => item?.[0] ?? null), ['설정 파일(extras/<id>.json)이 없습니다', '설정 폴더 열기']);
+});
+
 test('a settings file written while the app runs shows in the menu when the window comes back', async () => {
   let listing = [];
   const m = mount({list:() => listing});
   await settle();
-  assert.equal(m.extras.available(), false);
+  assert.deepEqual(m.extras.items().map(item => item?.[0] ?? null), ['설정 파일(extras/<id>.json)이 없습니다', '설정 폴더 열기']);
   listing = [{id:'track', title:'궤적'}];
   m.focus();
   await settle();
-  assert.equal(m.extras.available(), true);
+  assert.deepEqual(m.extras.items().map(item => item?.[0] ?? null), ['궤적', null, '설정 폴더 열기']);
 });
 
 test('a window that cannot open says why', async () => {

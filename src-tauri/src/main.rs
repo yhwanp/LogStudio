@@ -900,9 +900,11 @@ async fn reopen_source(
         .map_err(|_| "Request failed".to_string())?
 }
 /// The page's app extensions, which only `extras` builds have
-/// (`logstudio_extras::request`): `list` lists none in other builds. It is
-/// async so it runs off the main thread: `open` builds a window, which on
-/// Windows waits for the main thread and hangs a command running on it.
+/// (`logstudio_extras::request`). Other builds refuse every action, `list`
+/// included, so the page can tell them from an extras build whose settings
+/// folder is still empty. It is async so it runs off the main thread: `open`
+/// builds a window, which on Windows waits for the main thread and hangs a
+/// command running on it.
 #[tauri::command]
 async fn extras(window: tauri::WebviewWindow, request: Value) -> Result<Value, String> {
     main_window(&window)?;
@@ -913,11 +915,8 @@ fn extras_request(app: &tauri::AppHandle, request: Value) -> Result<Value, Strin
     logstudio_extras::request(app, request)
 }
 #[cfg(not(feature = "extras"))]
-fn extras_request(_: &tauri::AppHandle, request: Value) -> Result<Value, String> {
-    match request["action"].as_str() {
-        Some("list") => Ok(json!([])),
-        _ => Err("This build has no extensions".into()),
-    }
+fn extras_request(_: &tauri::AppHandle, _: Value) -> Result<Value, String> {
+    Err("This build has no extensions".into())
 }
 #[cfg(feature = "qa")]
 #[tauri::command]
