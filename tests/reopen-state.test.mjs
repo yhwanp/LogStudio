@@ -8,7 +8,7 @@ import {RELOADED, SAVE_DELAY_MS} from '../dist/work-state.js';
 // The mounted view against a scripted engine; same DOM stand-in as
 // view-lifecycle.test.mjs, plus native work-state commands and `lines`.
 async function settle(){for(let i=0;i<12;i++)await nextTurn();}
-// The ⋯ menu's item called `label`, opened for the look of it or the click.
+// The top-bar menu's item called `label`, opened for the look of it or the click.
 const moreItem=async(r,label)=>{await r.get('moreButton').dispatch('click');return r.get('rowMenu').children.find(n=>n.textContent===label||n.textContent.startsWith(`${label} `));};
 const closeMenu=r=>r.get('rowMenu').dispatch('keydown',{key:'Escape',preventDefault(){},stopPropagation(){}});
 const choose=async(r,label)=>{const item=await moreItem(r,label);assert.ok(item,label);await item.dispatch('click');await settle();};
@@ -78,7 +78,7 @@ async function reopenAs(r,id,{rows=r.env.rows,total=rows.length,size=r.env.size,
 }
 async function bookmark(r,line){await r.row(line).dispatch('click',{detail:1});await settle();r.key({key:'b',metaKey:true});await settle();}
 
-test('the ⋯ menu reopens the same file keeping filters, search, view, lower tab, bookmarks and places by physical row',async t=>{
+test('the top-bar menu reopens the same file keeping filters, search, view, lower tab, bookmarks and places by physical row',async t=>{
   const r=await rig();t.after(()=>r.controller.close());
   const offered=await moreState(r,'다시 열기');
   assert.equal(offered.disabled,false);assert.equal(offered.text,'다시 열기 Ctrl+R');assert.match(offered.title,/다시 읽습니다/);

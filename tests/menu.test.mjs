@@ -216,10 +216,11 @@ test('alignEnd puts the menu\'s right edge at x', () => {
   assert.equal(r.menu.style.left, '500px', 'the next menu aligns as it asks');
 });
 
-// The ⋯ menu on the real popup menu: a mock of it cannot show what happens
+// The top-bar menu on the real popup menu: a mock of it cannot show what happens
 // when a chosen item's close comes after the menu that item opened.
 function moreRig() {
   const r = rig(), element = () => new Element(r.document), button = r.opener;
+  button.setAttribute('aria-haspopup', 'menu');
   const ui = {moreButton:button, rowMenu:r.menu, logsJumpForm:element(), logsJump:element(), jumpError:element()};
   const window = {innerWidth:800, addEventListener() {}};
   const items = () => [['최근 파일', () => more.sub('최근 파일', [['a.log', () => {}], ['b.log', () => {}]], 'recent'), null, {opens:true, key:'recent'}], ['파일 닫기', () => {}], ['열 폭', () => more.sub('열 폭', [['내용에 맞춤', () => {}]], 'columns'), null, {opens:true, key:'columns'}]];
@@ -229,7 +230,7 @@ function moreRig() {
   return {...r, button, more, named, key, expanded:() => button.attributes['aria-expanded']};
 }
 
-test('more choices keep the ⋯ menu open and marked so, and focus on a choice', () => {
+test('more choices keep the top-bar menu open and marked so, and focus on a choice', () => {
   const r = moreRig();
   r.button.fire('click');
   assert.equal(r.expanded(), 'true');
@@ -251,7 +252,7 @@ test('Escape in more choices goes back one level, and then closes', () => {
   assert.equal(r.menu.hidden, true);assert.equal(r.expanded(), 'false');assert.equal(r.document.activeElement, r.button);
 });
 
-test('another menu taking over clears the ⋯ menu\'s open mark', () => {
+test('another menu taking over clears the top-bar menu button\'s open mark', () => {
   const r = moreRig();
   r.button.fire('click');
   r.popup.show([['행 복사', () => {}]], 0, 0, '행 작업');
@@ -301,4 +302,19 @@ test('an opener that is gone gives way to the stand-in', () => {
   r.opener.isConnected = false;
   r.menu.fire('keydown', {key:'Escape'});
   assert.equal(r.document.activeElement, standIn);
+});
+
+test('a menu button is marked open while its menu shows, and only then', () => {
+  const r = rig(), other = new Element(r.document, 'button'), plain = new Element(r.document, 'button');
+  r.opener.setAttribute('aria-haspopup', 'menu');other.setAttribute('aria-haspopup', 'menu');
+  r.popup.show([['A', () => {}]], 0, 0, '기기 로그', {opener:r.opener});
+  assert.equal(r.opener.attributes['aria-expanded'], 'true');
+  r.popup.show([['B', () => {}]], 0, 0, '기기 로그', {opener:r.opener});
+  assert.equal(r.opener.attributes['aria-expanded'], 'true', 'filled in again in place');
+  r.popup.show([['C', () => {}]], 0, 0, '앱 실행', {opener:other});
+  assert.equal(r.opener.attributes['aria-expanded'], 'false');assert.equal(other.attributes['aria-expanded'], 'true', 'another button\'s menu takes the mark');
+  r.popup.close();
+  assert.equal(other.attributes['aria-expanded'], 'false');
+  r.popup.show([['D', () => {}]], 0, 0, '행 작업', {opener:plain});
+  assert.equal(plain.attributes['aria-expanded'], undefined, 'an opener without aria-haspopup is not marked');
 });

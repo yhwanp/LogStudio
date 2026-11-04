@@ -1,4 +1,4 @@
-// One modal dialog lists the app's keyboard shortcuts. The ⋯ menu's item or
+// One modal dialog lists the app's keyboard shortcuts. The top-bar menu's item or
 // `?` outside a text field opens it; Escape, the close button or a press on
 // the backdrop closes it and returns focus to the opener. Escape stops at the
 // dialog, so it does not also close the raw detail or the filter panel.

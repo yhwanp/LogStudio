@@ -357,7 +357,7 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
   function showMenu(content) {
     if (!menuAt) return;
     const actions = {refresh:() => void openMenu(menuAt.anchor), pick, help:openHelp, appleHelp:openAppleHelp, start};
-    shownMenu = menu.show(deviceMenuItems({adb, ...content}, actions), menuAt.x, menuAt.y, '기기 로그');
+    shownMenu = menu.show(deviceMenuItems({adb, ...content}, actions), menuAt.x, menuAt.y, '기기 로그', {opener:menuAt.anchor});
   }
   const listing = listed => ({list:listed?.devices, androidError:listed?.androidError, iosError:listed?.iosError});
   // A device that waits on the person (USB debugging, trust, unlocking) is
@@ -403,7 +403,7 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
     const stale = () => sequence !== menuSequence || isGone() || menu.version() !== appMenu || logs.getState().datasetId !== datasetId;
     const copyXcode = () => {void writeClipboard(window, XCODE_URL).then(() => notify('Xcode 설치 주소를 복사했습니다. 브라우저에 붙여 넣어 App Store에서 설치해 주세요.'), () => {});};
     const actions = {refresh:() => void openAppMenu(anchor), launch:app => void launch(datasetId, app), copyXcode};
-    const show = content => {appMenu = menu.show(appMenuItems(content, actions), box.left, box.bottom + 4, '앱 실행');};
+    const show = content => {appMenu = menu.show(appMenuItems(content, actions), box.left, box.bottom + 4, '앱 실행', {opener:anchor});};
     show({loading:true});
     try {
       const list = await invoke('capture_apps', {datasetId});

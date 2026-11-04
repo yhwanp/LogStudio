@@ -1,5 +1,6 @@
 /* Colors live in variables so the dark scheme only swaps values. */
 :root{
+  --caret:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
   color-scheme:light;
   --bg:#edf1f5;--surface:#fff;--surface-2:#f8fafc;--surface-3:#f2f6f8;
   --text:#182b43;--text-2:#26394e;--muted:#58677c;--faint:#5f6d7e;
@@ -61,9 +62,10 @@ kbd{font:11px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;border:1px so
 
 /* Top toolbar: brand, current file and file actions in one row. */
 .topbar{height:52px;background:var(--navy);color:var(--navy-text);display:flex;align-items:center;gap:18px;padding:0 16px;border-bottom:1px solid var(--topbar-edge)}
-.brand{display:flex;gap:9px;align-items:center;flex-shrink:0}
-/* The app icon's lines on a tile, so it reads as a mark and not a menu button. */
-.brand-mark{width:24px;height:24px;flex-shrink:0;fill:#ffffff1f;stroke:var(--navy-text);stroke-width:2.1;stroke-linecap:round}
+.brand{display:flex;gap:7px;align-items:center;flex-shrink:0;cursor:default;user-select:none}
+/* The app icon's lines, bare and set close to the wordmark as one logo: on a
+   tile of its own the mark looked like a menu button people tried first. */
+.brand-mark{width:20px;height:20px;flex-shrink:0;fill:none;stroke:var(--navy-text);stroke-width:2.3;stroke-linecap:round}
 .brand-mark rect{stroke:none}
 .brand-mark .brand-line{stroke:var(--brand)}
 h1{font-size:16px;font-weight:650;letter-spacing:-.02em;margin:0}
@@ -87,6 +89,9 @@ h1{font-size:16px;font-weight:650;letter-spacing:-.02em;margin:0}
    wordmark gives way first, still read by screen readers, the mark stays. */
 @media(max-width:860px){.topbar:has(.capture-bar:not([hidden])) .brand h1{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}}
 @media(max-width:480px){.brand h1{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}}
+/* The smallest window zoomed in cannot also show the file name beside a
+   capture's buttons; screen readers still read it, and the divider goes too. */
+@media(max-width:480px){.topbar:has(.capture-bar:not([hidden])) .file-info{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}.topbar:has(.capture-bar:not([hidden])) .top-actions{border-left:0;padding-left:0}}
 .capture-state::before,.capture-state::after{content:'';flex-shrink:0;width:8px;height:8px;border-radius:50%;background:var(--tone)}
 /* While recording a ring spreads from the dot. */
 .capture-state::after{position:absolute;left:0;top:50%;margin-top:-4px;opacity:0}
@@ -96,7 +101,7 @@ h1{font-size:16px;font-weight:650;letter-spacing:-.02em;margin:0}
 .load-progress{height:3px;border-radius:2px;background:#ffffff1f;overflow:hidden;max-width:420px}
 .load-progress>span{display:block;height:100%;width:0;background:var(--brand);transition:width .2s linear}
 .top-actions{display:flex;align-items:center;gap:8px;flex-shrink:0}
-.topbar .button{background:transparent;color:var(--navy-text);border-color:#ffffff33}
+.topbar .button{background:transparent;color:var(--navy-text);border-color:#ffffff59}
 .topbar .button:hover:not(:disabled){background:#ffffff14}
 .topbar .button.primary{background:var(--brand);border-color:var(--brand);color:#0d2b28}
 .topbar .button.primary:hover:not(:disabled){background:var(--brand)}
@@ -116,10 +121,14 @@ h1{font-size:16px;font-weight:650;letter-spacing:-.02em;margin:0}
 .icon-button svg{width:16px;height:16px;flex-shrink:0}
 /* Clearing takes the rows away at once: the quiet icon takes its border
    and a warning color only when pointed at or focused. */
-.topbar .capture-clear:is(:hover,:focus-visible):not(:disabled,[aria-disabled=true]){color:var(--navy-error-text);border-color:#ffffff33}
+.topbar .capture-clear:is(:hover,:focus-visible):not(:disabled,[aria-disabled=true]){color:var(--navy-error-text);border-color:#ffffff59}
 .topbar .button[aria-disabled=true]:hover{background:transparent}
-.topbar .more-button{width:34px}
-.topbar .more-button[aria-expanded=true]{background:#ffffff14;color:var(--navy-text)}
+/* The top bar's menu buttons keep a border and name themselves in words: a
+   bare ⋯ at the window edge read as decoration, not as the menu. */
+.button.menu-opener{display:inline-flex;align-items:center;gap:4px;padding-right:9px}
+.topbar .menu-opener[aria-expanded=true]{background:#ffffff24;border-color:#ffffff8c}
+/* While a capture shows, a rule sets its controls apart from the app's. */
+.topbar:has(.capture-bar:not([hidden])) .top-actions{border-left:1px solid #ffffff1f;padding-left:16px}
 
 /* Workspace: rail, expanding filter track, logs. The filter track expands in
    flow; auto-hide changes behavior, not geometry. */
@@ -267,7 +276,7 @@ h2{font-size:16px;margin:0;font-weight:650}
 .range-text{font-variant-numeric:tabular-nums;white-space:nowrap;margin-right:4px}
 /* A list still finding its kept row says so in the accent. */
 .range-text.finding{color:var(--accent-text);font-weight:600}
-/* The row number box opens where the ⋯ menu does. */
+/* The row number box opens where the top-bar menu does. */
 .jump-panel{position:fixed;z-index:30;width:272px;padding:10px 12px;background:var(--surface);color:var(--text);border:1px solid var(--border-strong);border-radius:8px;box-shadow:0 10px 30px #0004}
 .jump-panel[hidden]{display:none}
 /* Takes a press on its text, so Escape still reaches it. */
@@ -323,7 +332,11 @@ h2{font-size:16px;margin:0;font-weight:650}
 .selection-info{color:var(--accent-text);font-weight:600;white-space:nowrap}
 .selection-info:empty{display:none}
 .pane-hint{color:var(--faint);white-space:nowrap}
-.menu-button::after{content:'';display:inline-block;margin-left:4px;border:4px solid transparent;border-top-color:currentColor;border-bottom-width:0;vertical-align:2px}
+/* Every button that opens a menu ends in the same caret, turned up while its
+   menu is open (the popup menu sets aria-expanded). */
+.menu-button::after,.menu-opener::after{content:'';flex-shrink:0;width:1.05em;height:1.05em;background:currentColor;opacity:.75;-webkit-mask:var(--caret) center/contain no-repeat;mask:var(--caret) center/contain no-repeat}
+:is(.menu-button,.menu-opener)[aria-expanded=true]::after{transform:rotate(180deg)}
+.menu-button[aria-expanded=true]{background:var(--surface-3);border-color:var(--border-strong)}
 /* Saved filters: a menu button in the log heading and one in the filter panel
    name the applied filter and mark it once its conditions change. */
 .saved-filter-button{display:inline-flex;align-items:center;gap:6px;min-width:0}

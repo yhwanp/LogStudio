@@ -1,4 +1,4 @@
-// The top bar's ⋯ menu keeps what is needed now and then off the main screen.
+// The top bar's menu (메뉴) keeps what is needed now and then off the main screen.
 // `items` lists it as it stands when opened; an item with more choices shows
 // them in the menu's place (`sub`), with a way back. The row number box opens
 // where the menu does, from its item or Cmd/Ctrl+L.
@@ -6,18 +6,15 @@ import {focusOwner} from './dom.js';
 
 export function mountMoreMenu({ui, menu, items, document, window}) {
   const {moreButton:button, rowMenu, logsJumpForm:form, logsJump:input, jumpError:error} = ui;
-  let shown = null, current = null, wasOpen = false, jumpOpen = false, returnTo = null;
+  let shown = null, wasOpen = false, jumpOpen = false, returnTo = null;
   function anchor() {
     const box = button.getBoundingClientRect?.();
     return {x:box ? box.right : 0, y:box ? box.bottom + 4 : 0};
   }
   function show(list, label, focus) {
-    const {x, y} = anchor(), open = {};
-    current = open;
-    // Opening a submenu runs the previous menu's onClose after the new show.
-    const onClose = () => {if (current === open) button.setAttribute('aria-expanded', 'false');};
-    shown = menu.show(list, x, y, label, {alignEnd:true, focus, opener:button, onClose});
-    button.setAttribute('aria-expanded', 'true');
+    const {x, y} = anchor();
+    // The popup menu marks the button open (aria-expanded) while any of these show.
+    shown = menu.show(list, x, y, label, {alignEnd:true, focus, opener:button});
   }
   const main = from => show(items(), '메뉴', from);
   // `from` is the `key` of the item that opened these, focused on the way back.

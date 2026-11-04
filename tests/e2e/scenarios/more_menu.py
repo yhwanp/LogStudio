@@ -1,4 +1,4 @@
-"""The top bar's ⋯ menu: what stays on the main screen, the items and their
+"""The top bar's menu (메뉴): what stays on the main screen, the items and their
 keys, more choices in the menu's place with the way back, the press that
 closes it, the row number box (Cmd+L), a narrow window (ui.log)."""
 import time
@@ -112,7 +112,7 @@ def run(ctx):
         app.wait(lambda: not js(JUMP)['hidden'], what='row box from the menu')
         app.key('Escape', target='logsJump')
         j = js(JUMP)
-        check('opened with the mouse, whose press took focus from the row, Escape returns to the ⋯ button', j['hidden'] and j['focus'] == 'moreButton', j)
+        check('opened with the mouse, whose press took focus from the row, Escape returns to the 메뉴 button', j['hidden'] and j['focus'] == 'moreButton', j)
 
         js("document.activeElement.blur();return true;")
         js(PRESS)

@@ -325,7 +325,7 @@ $('addCondition').click();if(arguments[0])$('kindHide').click();return true;""",
         return taken
 
     def menu(self, *labels):
-        """Opens the ⋯ menu and chooses each labelled item in turn."""
+        """Opens the top-bar menu and chooses each labelled item in turn."""
         self.click('moreButton')
         for label in labels:
             self.wait(lambda: self.js("const i=[...document.querySelectorAll('#rowMenu [role^=menuitem]')].find(e=>(e.querySelector('.menu-label')??e).textContent===arguments[0]);"
@@ -339,7 +339,7 @@ $('addCondition').click();if(arguments[0])$('kindHide').click();return true;""",
         return self.wait(lambda: (lambda v: v is not None and [v])(self.js('return window.__extras')), what='build probe')[0]
 
     def menu_items(self):
-        """The ⋯ menu's items by label, the menu closed again."""
+        """The top-bar menu's items by label, the menu closed again."""
         self.click('moreButton')
         items = self.js(MENU_ITEMS)
         self.key('Escape', target='rowMenu')

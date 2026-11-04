@@ -31,8 +31,8 @@ test('the menu opens under its button, aligned to its right edge',()=>{
   r.ui.moreButton.fire('click');
   const {options,...opened}=r.shown[0];
   assert.deepEqual(opened,{items:[['다시 열기',opened.items[0][1]]],x:800,y:44,label:'메뉴'});
-  assert.equal(options.alignEnd,true);assert.equal(r.ui.moreButton.attributes['aria-expanded'],'true');
-  options.onClose();assert.equal(r.ui.moreButton.attributes['aria-expanded'],'false');
+  // The popup menu marks its opener open (menu.test.mjs).
+  assert.equal(options.alignEnd,true);assert.equal(options.opener,r.ui.moreButton);
 });
 
 test('the press that closes the open menu does not open it again',()=>{
