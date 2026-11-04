@@ -38,6 +38,8 @@ def run(ctx):
         js = app.js
         app.wait_count(3000)
         app.wait(lambda: '최근 파일' in app.menu_items(), what='recent files')
+        # An extras build shows 확장 even with no settings file; others never do.
+        extras = ['확장 ›'] if app.has_extras() else []
         app.type('searchInput', 'timeout')
         app.wait(lambda: not app.hidden('largeSearchPane'), what='search results')
         app.click_row(7)
@@ -50,7 +52,7 @@ def run(ctx):
         js(PRESS)
         m = app.wait(lambda: (lambda v: not v['hidden'] and v)(js(MENU)), what='menu')
         check('the menu opens under its button, right edges together, keys at the items',
-              m['label'] == '메뉴' and abs(m['right']) < 1 and 0 < m['gap'] < 8 and [i and i.split(' · ')[0] for i in m['items']] == ['최근 파일 ›', '다시 열기 ⌘R', '파일 닫기', None, '전체 로그 내보내기…', '검색 결과 내보내기…', None, '행 번호로 이동… ⌘L', '열 폭 ›', None, '단축키·기능 둘러보기 ?']
+              m['label'] == '메뉴' and abs(m['right']) < 1 and 0 < m['gap'] < 8 and [i and i.split(' · ')[0] for i in m['items']] == ['최근 파일 ›', '다시 열기 ⌘R', '파일 닫기', None, '전체 로그 내보내기…', '검색 결과 내보내기…', None, '행 번호로 이동… ⌘L', '열 폭 ›', None, *extras, '단축키·기능 둘러보기 ?']
               and '· 3,000행' in m['items'][4] and '건' in m['items'][5] and m['expanded'] == 'true', m)
         app.capture('02-menu')
         js(PRESS)
@@ -145,4 +147,4 @@ def run(ctx):
         app.menu('파일 닫기')
         app.wait(lambda: not app.hidden('emptyState'), what='empty state')
         items = app.menu_items()
-        check('without a file the menu keeps the recent files and the shortcuts', list(items) == ['최근 파일', '단축키·기능 둘러보기'], items)
+        check('without a file the menu keeps the recent files, 확장 in an extras build, and the shortcuts', list(items) == ['최근 파일', *(['확장'] if extras else []), '단축키·기능 둘러보기'], items)

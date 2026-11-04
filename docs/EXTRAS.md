@@ -10,12 +10,12 @@
    cargo build --release --locked -p logstudio-desktop --features extras
    ```
 
-2. 앱 데이터 폴더의 `extras/` 아래에 확장 기능의 설정 파일 `<id>.json`을 만듭니다.
+2. 앱 데이터 폴더의 `extras/` 아래에 확장 기능의 설정 파일 `<id>.json`을 만듭니다. `⋯` 메뉴 `확장`의 `설정 폴더 열기`로 이 폴더를 바로 열 수 있습니다.
    - macOS: `~/Library/Application Support/dev.logstudio.desktop/extras/`
    - Windows: `%APPDATA%\dev.logstudio.desktop\extras\`
-3. `⋯` 메뉴에 `확장` 항목이 나타납니다. 그 안에서 확장 기능을 고르면 그 기능의 창이 열립니다.
+3. `⋯` 메뉴의 `확장`에 그 확장 기능이 나타납니다. 고르면 그 기능의 창이 열립니다.
 
-- 설정 파일이 하나도 없으면 메뉴에 `확장` 항목이 없습니다. 앱을 실행한 채 설정 파일을 만들었다면, 메인 창으로 돌아올 때 항목이 나타납니다.
+- 설정 파일이 하나도 없어도 `확장` 항목은 보이며, 그 안에는 설정 파일이 없다는 안내와 `설정 폴더 열기`만 있습니다. 앱을 실행한 채 설정 파일을 만들었다면, 메인 창으로 돌아올 때 그 확장 기능이 나타납니다.
 - 설정은 메인 창으로 돌아올 때 다시 읽습니다. 이미 열린 창에는 창을 닫았다 다시 열어야 반영됩니다.
 - 설정 파일에 문제가 있으면 메뉴에 `<이름> · 설정 오류` 항목이 고를 수 없는 상태로 나타나고, 그 아래에 파일 이름과 문제가 표시됩니다.
 - 메뉴의 `설정 폴더 열기`는 `extras/` 폴더를 만들고 Finder(Windows는 탐색기)에서 엽니다.
@@ -113,7 +113,7 @@
 | `extras/web/vendor/leaflet/` | Leaflet 1.9.4 원본 파일과 라이선스·체크섬([README](../extras/web/vendor/leaflet/README.md)) |
 | `dist/extras.js` | 메인 페이지 쪽: `⋯` 메뉴의 `확장` 항목, 선택한 행 전달, 확장 창이 고른 행 선택 |
 
-- **빌드 분리:** `src-tauri`의 `extras` 기능이 `logstudio-extras` 크레이트를 연결합니다. 이 기능 없이 빌드하면 `extras` 명령의 `list`는 빈 목록을 돌려주므로 메뉴에 `확장` 항목이 나타나지 않고, 확장 코드·페이지·Leaflet은 실행 파일에 들어가지 않습니다.
+- **빌드 분리:** `src-tauri`의 `extras` 기능이 `logstudio-extras` 크레이트를 연결합니다. 이 기능 없이 빌드하면 `extras` 명령이 `list`를 포함한 모든 요청을 거절하므로 메뉴에 `확장` 항목이 나타나지 않고, 확장 코드·페이지·Leaflet은 실행 파일에 들어가지 않습니다.
 - **창과 통신:** 확장 창은 라벨 `extra-<id>`로 열리고 `extras://localhost/<id>/`(Windows는 `http://extras.localhost/<id>/`)에서 페이지를 받습니다.
   - 확장 페이지는 Tauri IPC를 쓰지 않고, 같은 스킴으로 `fetch` 요청을 보냅니다.
   - `host/state`는 메인 창의 로그나 선택한 행이 바뀔 때까지 최대 20초 기다렸다가 답합니다.

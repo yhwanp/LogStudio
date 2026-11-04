@@ -331,6 +331,13 @@ $('addCondition').click();if(arguments[0])$('kindHide').click();return true;""",
             self.wait(lambda: self.js("const i=[...document.querySelectorAll('#rowMenu [role^=menuitem]')].find(e=>(e.querySelector('.menu-label')??e).textContent===arguments[0]);"
                                       "if(i)i.click();return !!i;", label), what=f'menu item {label}')
 
+    def has_extras(self):
+        """Whether this build has app extensions: only an extras build answers
+        the page's `extras` command, whatever its settings folder holds."""
+        self.js("window.__extras=null;window.__TAURI__.core.invoke('extras',{request:{action:'list'}})"
+                ".then(()=>{window.__extras=true;},()=>{window.__extras=false;});return true;")
+        return self.wait(lambda: (lambda v: v is not None and [v])(self.js('return window.__extras')), what='build probe')[0]
+
     def menu_items(self):
         """The ⋯ menu's items by label, the menu closed again."""
         self.click('moreButton')

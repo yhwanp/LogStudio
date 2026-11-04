@@ -39,7 +39,7 @@ class Element {
   dispatch(key,event={}){return Promise.all((this.listeners[key]??[]).map(fn=>fn(event)));}
   querySelector(selector){const line=selector.match(/^\[data-line-number="(\d+)"\]$/)?.[1];return this.children.find(child=>line?child.dataset.lineNumber===line:child.className===selector.slice(1));}
 }
-async function rig({rows=[],detail=null,query=null,page=null,startupError=null,files=null,total=6,format=null,exported=null,extrasList=[],capture=null}={}){
+async function rig({rows=[],detail=null,query=null,page=null,startupError=null,files=null,total=6,format=null,exported=null,extrasList=null,capture=null}={}){
   let ownerDocument;const elements=new Map(),get=id=>{if(!elements.has(id))elements.set(id,Object.assign(new Element(),{ownerDocument}));return elements.get(id);};
   // Column layout has its own mounted tests; this rig exercises view lifecycle.
   delete get('workspace').style;
@@ -58,7 +58,8 @@ async function rig({rows=[],detail=null,query=null,page=null,startupError=null,f
     if(action==='cancel_open')return cancel(args);
     if(action==='take_startup_error')return startupError;
     if(action==='export_results')return exported??{rows:3000};
-    if(action==='extras')return args.request.action==='list'?extrasList:{};
+    // Without `extrasList` this is a build without extensions, which refuses every request.
+    if(action==='extras'){if(!extrasList)throw 'This build has no extensions';return args.request.action==='list'?extrasList:{};}
     if(action!=='log_request')return {};
     const b=args.request,id={datasetId:dataset};
     if(b.action==='close')return {closed:true};
@@ -1669,6 +1670,15 @@ test('extensions open in the menu\'s place from the list read when the window ca
   assert.ok(r.get('rowMenu').children.some(n=>n.textContent==='궤적'));
   await closeMenu(r);await settle();
   assert.equal(r.document.activeElement.dataset.key,'extras');
+});
+
+test('an extras build without settings files shows 확장 with a note and the settings folder',async t=>{
+  const r=await rig({extrasList:[]});t.after(()=>r.controller.close());
+  await settle();await choose(r,'확장');
+  const menu=r.get('rowMenu'),note=menu.children.find(n=>n.tagName==='P');
+  assert.deepEqual(menu.children.map(n=>n.tagName==='HR'?null:n.textContent),['‹ 메뉴',null,'설정 파일(extras/<id>.json)이 없습니다','설정 폴더 열기']);
+  // A note, not a choice: menu.test.mjs checks that notes describe the menu.
+  assert.equal(note.textContent,'설정 파일(extras/<id>.json)이 없습니다');assert.equal(note.attributes.role,undefined);
 });
 
 test('a device capture has no file to read again',async t=>{
