@@ -3,8 +3,10 @@ import {desktopTransport} from './desktop.js';
 import {mountZoom} from './zoom.js';
 import {mountShortcutHelp} from './shortcuts.js';
 import {mountTips} from './tips.js';
+import {mountTopbar} from './topbar.js';
 const tauri=window.__TAURI__;
 const $=id=>document.getElementById(id);
+mountTopbar(document,window);
 const help=mountShortcutHelp();
 // The tour runs on the open file, or on the sample log when none is open.
 const tips=mountTips({closeHelp:()=>help?.close(),needsFile:()=>!$('emptyState').hidden,openSample:()=>$('loadDemo').click()});

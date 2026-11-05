@@ -306,6 +306,8 @@ test('the capture bar shows the shown capture and its actions', () => {
   assert.equal(r.ui.captureBar.hidden, false);
   assert.equal(r.ui.captureBar.dataset.tone, 'live');
   assert.equal(r.ui.captureText.textContent, '기록 중 · 저장 안 됨 · Pixel 8');
+  // The top bar keeps the words before the device name in view.
+  assert.equal(r.ui.captureText.dataset.keep, String('기록 중 · 저장 안 됨'.length));
   assert.equal(r.ui.captureStop.hidden, false);
   // Unsaved rows make saving the main action instead of opening a log.
   assert.equal(r.ui.captureSave.classList.contains('primary'), true);
@@ -335,6 +337,8 @@ test('the capture bar shows the shown capture and its actions', () => {
   assert.equal(r.ui.captureClear.hidden, true);
   r.devices.render({datasetId:7, closed:false, capture:{...unsaved, state:'stopped', recovered:true}});
   assert.equal(r.ui.captureStop.hidden, true);
+  // A leftover log names no device, so all its words stay in view.
+  assert.deepEqual([r.ui.captureText.textContent, r.ui.captureText.dataset.keep], ['남은 기기 로그 · 저장 안 됨', String('남은 기기 로그 · 저장 안 됨'.length)]);
   r.devices.render({datasetId:7, closed:true, capture:unsaved});
   assert.equal(r.ui.captureBar.hidden, true);
   assert.equal(r.ui.openFile.classList.contains('primary'), true);
@@ -470,7 +474,7 @@ test('an app starting while its capture is cleared goes on under the new log', a
   assert.equal(r.ui.captureApp.textContent, '앱 실행 중…');
   finish({name:'SampleApp'}); await settle();
   assert.equal(r.notes.at(-1), 'SampleApp 앱을 실행했습니다. 이번 실행의 로그는 <private> 없이 기록합니다.');
-  assert.equal(r.ui.captureApp.textContent, '앱 실행…');
+  assert.equal(r.ui.captureApp.textContent, '앱 실행');
 });
 
 test('saving a capture can be stopped while it copies', async () => {
@@ -582,7 +586,7 @@ test('an iPhone being recorded on a Mac offers to start an app, which runs once 
   }});
   r.devices.render();
   assert.equal(r.ui.captureApp.hidden, false);
-  assert.equal(r.ui.captureApp.textContent, '앱 실행…');
+  assert.equal(r.ui.captureApp.textContent, '앱 실행');
   r.ui.captureApp.fire('click'); await settle();
   assert.deepEqual(r.menus.map(m => m.items[0][0]), ['앱을 찾는 중…', '실행할 앱을 선택해 주세요 · 실행 중이면 종료하고 다시 시작합니다']);
   assert.equal(r.menus.at(-1).label, '앱 실행');
@@ -627,7 +631,7 @@ test('an iPhone being recorded on a Mac offers to start an app, which runs once 
   other.menus.at(-1).items[2][1](); await settle();
   assert.equal(other.ui.captureApp.getAttribute('aria-disabled'), 'true');
   other.devices.render({datasetId:8, closed:false, capture:iphone});
-  assert.deepEqual([other.ui.captureApp.getAttribute('aria-disabled'), other.ui.captureApp.textContent], ['false', '앱 실행…']);
+  assert.deepEqual([other.ui.captureApp.getAttribute('aria-disabled'), other.ui.captureApp.textContent], ['false', '앱 실행']);
   other.devices.render();
   assert.equal(other.ui.captureApp.textContent, '앱 실행 중…');
   held({name:'SampleApp'}); await settle();
