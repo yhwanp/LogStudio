@@ -663,6 +663,10 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
     // The status region announces changes, the tooltip's words with them
     // (screen readers do not read a title); the same words are not news.
     if (ui.captureText.textContent !== words.text) {
+      // How much of the text comes before the device name, which may shorten
+      // first (topbar.js); a leftover log's text names no device.
+      const named = ` · ${capture.device || '기기'}`;
+      ui.captureText.dataset.keep = String(words.text.endsWith(named) ? words.text.length - named.length : words.text.length);
       ui.captureText.textContent = words.text;
       ui.captureHint.textContent = words.title;
     }
@@ -706,7 +710,7 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
     ui.captureApp.disabled = busy;
     const launching = starting.get(state.datasetId)?.name ?? '';
     ui.captureApp.setAttribute('aria-disabled', launching ? 'true' : 'false');
-    ui.captureApp.textContent = launching ? '앱 실행 중…' : '앱 실행…';
+    ui.captureApp.textContent = launching ? '앱 실행 중…' : '앱 실행';
     ui.captureApp.title = launching ? `${launching} 앱을 실행하는 중입니다` : '개발용 서명 앱을 다시 실행해 그 앱의 로그를 <private> 없이 기록합니다';
     ui.captureSave.classList.toggle('primary', unsaved && !saving);
     ui.captureSave.textContent = saving ? '저장 취소' : '저장';

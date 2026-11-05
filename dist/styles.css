@@ -1,5 +1,6 @@
 /* Colors live in variables so the dark scheme only swaps values. */
 :root{
+  --topbar-height:52px;
   --caret:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
   color-scheme:light;
   --bg:#edf1f5;--surface:#fff;--surface-2:#f8fafc;--surface-3:#f2f6f8;
@@ -61,7 +62,7 @@ kbd{font:11px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;border:1px so
 .mini-button:hover:not(:disabled){background:var(--surface-3)}
 
 /* Top toolbar: brand, current file and file actions in one row. */
-.topbar{height:52px;background:var(--navy);color:var(--navy-text);display:flex;align-items:center;gap:18px;padding:0 16px;border-bottom:1px solid var(--topbar-edge)}
+.topbar{height:var(--topbar-height);background:var(--navy);color:var(--navy-text);display:flex;align-items:center;gap:18px;padding:0 16px;border-bottom:1px solid var(--topbar-edge)}
 .brand{display:flex;gap:7px;align-items:center;flex-shrink:0;cursor:default;user-select:none}
 /* The app icon's lines, bare and set close to the wordmark as one logo: on a
    tile of its own the mark looked like a menu button people tried first. */
@@ -85,13 +86,17 @@ h1{font-size:16px;font-weight:650;letter-spacing:-.02em;margin:0}
 .capture-bar[data-tone=waiting] .capture-state{color:var(--navy-warn-text)}
 .capture-bar[data-tone=failed] .capture-state{color:var(--navy-error-text)}
 .capture-text{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-/* In a narrow window a capture's buttons leave its state no room; the
-   wordmark gives way first, still read by screen readers, the mark stays. */
-@media(max-width:860px){.topbar:has(.capture-bar:not([hidden])) .brand h1{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}}
+/* In a narrow one-row bar a capture's buttons leave its state little room;
+   the wordmark gives way first, still read by screen readers, the mark stays. */
+@media(max-width:860px){.topbar:has(.capture-bar:not([hidden])):not(.capture-wrap) .brand h1{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}}
 @media(max-width:480px){.brand h1{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}}
-/* The smallest window zoomed in cannot also show the file name beside a
-   capture's buttons; screen readers still read it, and the divider goes too. */
-@media(max-width:480px){.topbar:has(.capture-bar:not([hidden])) .file-info{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}.topbar:has(.capture-bar:not([hidden])) .top-actions{border-left:0;padding-left:0}}
+/* When one row would still clip the state text before the device name,
+   topbar.js gives the capture a second row: its state takes the free width
+   and its buttons end at the right edge, under the app's. */
+:root:has(.topbar.capture-wrap){--topbar-height:92px}
+.topbar.capture-wrap{display:grid;grid-template-columns:auto minmax(0,1fr) auto;grid-template-rows:minmax(0,1fr) 40px;row-gap:0}
+.topbar.capture-wrap .capture-bar{grid-column:1/-1;grid-row:2;align-self:stretch;margin:0 -16px;padding:0 16px;border-top:1px solid #ffffff1f}
+.topbar.capture-wrap .capture-state{flex:1;max-width:none}
 .capture-state::before,.capture-state::after{content:'';flex-shrink:0;width:8px;height:8px;border-radius:50%;background:var(--tone)}
 /* While recording a ring spreads from the dot. */
 .capture-state::after{position:absolute;left:0;top:50%;margin-top:-4px;opacity:0}
@@ -127,12 +132,14 @@ h1{font-size:16px;font-weight:650;letter-spacing:-.02em;margin:0}
    bare ⋯ at the window edge read as decoration, not as the menu. */
 .button.menu-opener{display:inline-flex;align-items:center;gap:4px;padding-right:9px}
 .topbar .menu-opener[aria-expanded=true]{background:#ffffff24;border-color:#ffffff8c}
+/* A busy menu button hides its caret, which keeps its place. */
+.menu-opener[aria-disabled=true]::after{visibility:hidden}
 /* While a capture shows, a rule sets its controls apart from the app's. */
-.topbar:has(.capture-bar:not([hidden])) .top-actions{border-left:1px solid #ffffff1f;padding-left:16px}
+.topbar:has(.capture-bar:not([hidden])):not(.capture-wrap) .top-actions{border-left:1px solid #ffffff1f;padding-left:16px}
 
 /* Workspace: rail, expanding filter track, logs. The filter track expands in
    flow; auto-hide changes behavior, not geometry. */
-.workspace{position:relative;display:grid;--filter-rail-width:48px;--filter-panel-track:264px;grid-template-columns:calc(var(--filter-rail-width) + 10px) minmax(0,var(--filter-panel-track)) minmax(0,1fr);height:calc(100dvh - 52px);padding:10px 12px;transition:grid-template-columns 180ms ease}
+.workspace{position:relative;display:grid;--filter-rail-width:48px;--filter-panel-track:264px;grid-template-columns:calc(var(--filter-rail-width) + 10px) minmax(0,var(--filter-panel-track)) minmax(0,1fr);height:calc(100dvh - var(--topbar-height));padding:10px 12px;transition:grid-template-columns 180ms ease}
 .workspace.filters-collapsed{--filter-panel-track:0px}
 .filter-rail{width:var(--filter-rail-width);grid-column:1;background:var(--surface-2);border:1px solid var(--border);border-radius:9px;padding:5px;min-height:0}
 .filter-toggle{position:relative;display:flex;flex-direction:column;align-items:center;gap:6px;width:100%;padding:10px 0 7px;border:1px solid transparent;border-radius:6px;background:transparent;color:var(--muted);font-size:11px;line-height:1.3}
@@ -532,7 +539,7 @@ mark{background:var(--mark);color:var(--mark-text);padding:0;border-radius:2px}
 .toast-action{background:none;color:var(--brand);font-size:13px;font-weight:600;padding:3px 6px;border-radius:5px}
 .toast-action:hover,.toast-action:focus-visible{background:#ffffff1a}
 /* Shown briefly while the page zoom changes; it never takes pointer input. */
-.zoom-indicator{position:fixed;left:50%;top:64px;transform:translateX(-50%);background:var(--navy);color:var(--navy-text);border:1px solid #ffffff1f;font-size:13px;font-variant-numeric:tabular-nums;padding:7px 14px;border-radius:8px;box-shadow:0 6px 20px #0003;z-index:20;pointer-events:none;white-space:nowrap}
+.zoom-indicator{position:fixed;left:50%;top:calc(var(--topbar-height) + 12px);transform:translateX(-50%);background:var(--navy);color:var(--navy-text);border:1px solid #ffffff1f;font-size:13px;font-variant-numeric:tabular-nums;padding:7px 14px;border-radius:8px;box-shadow:0 6px 20px #0003;z-index:20;pointer-events:none;white-space:nowrap}
 .log-row.bookmarked .line-number{box-shadow:inset 3px 0 var(--lv-w);color:var(--lv-w);font-weight:700}
 /* Upper rows that are current search results: a tinted row cell with a bar
    on its right edge, apart from the bookmark bar on the left. */

@@ -49,7 +49,16 @@ END = ("const v=document.getElementById('logsViewport'),r=[...document.querySele
 # onto the file name beside them.
 FITS = """const t=document.getElementById('captureText'),info=document.querySelector('.file-info'),s=document.getElementById('captureState');
 const a=info.getBoundingClientRect(),b=s.getBoundingClientRect();
-return {clipped:t.scrollWidth>t.clientWidth,ellipsis:getComputedStyle(t).textOverflow,apart:a.right<=b.left+1&&getComputedStyle(info).overflow==='hidden',text:t.textContent};"""
+return {clipped:t.scrollWidth>t.clientWidth,ellipsis:getComputedStyle(t).textOverflow,apart:a.right<=b.left+1&&getComputedStyle(info).overflow==='hidden',text:t.textContent,
+rows:document.querySelector('.topbar').classList.contains('capture-wrap')?2:1};"""
+# The capture's row of the top bar: whether the state text before the device
+# name shows in full, the capture buttons end at the app buttons' right edge,
+# and the app buttons come first in the DOM, as Tab visits them.
+ROW2 = """const r=id=>document.getElementById(id).getBoundingClientRect(),bar=document.querySelector('.topbar'),t=document.getElementById('captureText'),n=t.firstChild,
+w=t.textContent,e=Number(t.dataset.keep),g=document.createRange();g.setStart(n,0);g.setEnd(n,e);t.style.textOverflow='clip';const need=g.getBoundingClientRect(),shown=r('captureText');t.style.textOverflow='';const order=[...bar.querySelectorAll('button:not([hidden])')].map(b=>b.id);
+return {rows:bar.classList.contains('capture-wrap')?2:1,words:need.right<=shown.right+0.5,below:r('captureBar').top>=r('deviceButton').bottom,
+aligned:Math.abs(r('captureClear').right-r('moreButton').right)<1,appsFirst:order.indexOf('moreButton')<order.indexOf('captureStop'),clear:Math.round(r('captureClear').width),
+overflow:bar.scrollWidth>bar.clientWidth,logs:Math.abs(r('workspace').top-bar.getBoundingClientRect().bottom)<1,text:w,state:Math.round(r('captureText').width),need:Math.round(need.width)};"""
 
 
 def run(ctx):
@@ -446,7 +455,7 @@ def run(ctx):
         # and a mark says where they begin.
         shown = js("const b=document.getElementById('captureApp');return !b.hidden&&[b.textContent,b.getAttribute('aria-haspopup'),document.getElementById(b.getAttribute('aria-describedby')).textContent]")
         check('an iPhone being recorded offers to start an app, as a menu, with its purpose for screen readers',
-              shown == ['앱 실행…', 'menu', '개발용 서명 앱을 다시 실행해 그 앱의 로그를 <private> 없이 기록합니다'], shown)
+              shown == ['앱 실행', 'menu', '개발용 서명 앱을 다시 실행해 그 앱의 로그를 <private> 없이 기록합니다'], shown)
         js(QA, 'ios-no-xcode')
         app.click('captureApp')
         m = menu(lambda v: any(x.startswith('앱을 실행하려면') for x in v), 'app menu without Xcode')
@@ -524,20 +533,37 @@ def run(ctx):
         time.sleep(.5)
         fit = js(FITS)
         unsaved = js("""const t=document.getElementById('captureText'),n=t.firstChild,s=t.textContent.indexOf('저장 안 됨');if(!n||s<0)return null;
-          const r=document.createRange();r.setStart(n,s);r.setEnd(n,s+'저장 안 됨'.length);return r.getBoundingClientRect().right<=t.getBoundingClientRect().right+0.5""")
-        check('at 900 px the iPhone bar ends in an ellipsis beside the file name and still shows the unsaved warning',
-              fit['ellipsis'] == 'ellipsis' and fit['apart'] and unsaved is True, {'fit': fit, 'unsaved': unsaved})
+          const r=document.createRange();r.setStart(n,s);r.setEnd(n,s+'저장 안 됨'.length);t.style.textOverflow='clip';const fits=r.getBoundingClientRect().right<=t.getBoundingClientRect().right+0.5;t.style.textOverflow='';return fits""")
+        check('at 900 px the iPhone bar keeps one row, ends in an ellipsis beside the file name and still shows the unsaved warning',
+              fit['rows'] == 1 and fit['ellipsis'] == 'ellipsis' and fit['apart'] and unsaved is True, {'fit': fit, 'unsaved': unsaved})
         app.capture('11f-ios-recording-900')
-        # In the narrowest window the wordmark gives way, so the state still
-        # leads the bar and the trash button keeps its shape.
+        # At 760 px one row would clip the state text before the device name
+        # even without the wordmark, so the capture takes a second row.
         app.rect(width=760, height=frame['height'])
         time.sleep(.5)
-        narrow = js("""const w=id=>Math.round(document.getElementById(id).getBoundingClientRect().width),bar=document.querySelector('.topbar');
-          return {state:w('captureState'),clear:w('captureClear'),wordmark:Math.round(document.querySelector('.brand h1').getBoundingClientRect().width),
-          overflow:bar.scrollWidth>bar.clientWidth}""")
-        check('at 760 px the iPhone bar keeps its state readable and the trash button square',
-              narrow['state'] >= 60 and narrow['clear'] == 30 and narrow['wordmark'] <= 1 and not narrow['overflow'], narrow)
+        narrow = js(ROW2)
+        check('at 760 px the iPhone capture takes a second row: the state before the device name in full, buttons at the right edge, Tab through the app buttons first',
+              narrow['rows'] == 2 and narrow['words'] and narrow['below'] and narrow['aligned'] and narrow['appsFirst'] and narrow['clear'] == 30
+              and not narrow['overflow'] and narrow['logs'], narrow)
         app.capture('11h-ios-recording-760')
+        # Zoomed in to 200%, the capture takes a second row inside the window,
+        # the logs under it.
+        for _ in range(5):
+            app.key('=', meta=True, code='Equal')
+        rows = app.wait(lambda: (lambda v: v['width'] < 400 and v)(js("""const r=id=>document.getElementById(id).getBoundingClientRect(),bar=document.querySelector('.topbar'),
+          top=bar.getBoundingClientRect(),cap=r('captureBar'),dev=r('deviceButton'),clear=r('captureClear'),ws=r('workspace');
+          return {width:innerWidth,below:cap.top>=dev.bottom,inside:clear.right<=innerWidth&&r('moreButton').right<=innerWidth,state:Math.round(r('captureState').width),
+          logs:Math.abs(ws.top-top.bottom)<1&&ws.bottom<=innerHeight+1,overflow:document.documentElement.scrollWidth>innerWidth}""")), what='200% zoom')
+        check('at 200% the iPhone capture takes its own row under the app buttons, the logs under it',
+              rows['below'] and rows['inside'] and rows['state'] >= 60 and rows['logs'] and not rows['overflow'], rows)
+        row2 = js(ROW2)
+        check('at 200% the second row keeps the capture buttons at the right edge and Tab through the app buttons first',
+              row2['rows'] == 2 and row2['aligned'] and row2['appsFirst'] and row2['clear'] == 30, row2)
+        app.wait(lambda: js("return document.getElementById('zoomIndicator').hidden"), what='zoom indicator gone')
+        app.capture('11i-ios-recording-zoomed')
+        app.key('0', meta=True, code='Digit0')
+        app.wait(lambda: js("return innerWidth>700"), what='zoom reset')
+        time.sleep(.3)
         app.rect(width=frame['width'], height=frame['height'])
         js(QA, 'ios-unplug')
         s = until(lambda v: v['bar'] and v['bar']['tone'] == 'waiting', 'iPhone waiting')
