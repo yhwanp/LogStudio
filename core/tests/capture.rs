@@ -522,6 +522,8 @@ fn a_capture_left_by_an_earlier_run_does_not_resume() {
     let again = Capture::adopt(s.store.adopt(&path).unwrap()).unwrap();
     assert!(again.resume().is_err());
     assert_eq!(again.phase(), Phase::Stopped);
+    // Nor is it cleared: it records no more rows.
+    assert!(!again.clearable());
 }
 
 #[test]
@@ -769,7 +771,7 @@ fn a_cut_capture_records_into_its_new_file_from_then_on() {
     assert!(c.json()["cleared"].is_null());
     let (_, cuts) = c.next_row();
     let slot = s.store.create(Platform::Android, "Pixel 8").unwrap();
-    let old = c.cut(Cut::open(slot).unwrap());
+    let old = c.cut(Cut::open(slot).unwrap()).unwrap();
     assert_eq!(old.path, before);
     assert_ne!(c.path(), before);
     assert_eq!(std::fs::read(&before).unwrap(), first.as_bytes());
@@ -817,7 +819,7 @@ fn a_capture_cut_while_its_device_is_away_records_from_its_return() {
     // The device logs while away, then the capture is cut.
     s.link.log("SER1", &row(2, 0, "away"));
     let slot = s.store.create(Platform::Android, "Pixel 8").unwrap();
-    let old = c.cut(Cut::open(slot).unwrap());
+    let old = c.cut(Cut::open(slot).unwrap()).unwrap();
     assert_eq!(c.phase(), Phase::Waiting);
     s.link.plug("SER1");
     wait("recording again", || c.phase() == Phase::Recording);
@@ -866,8 +868,9 @@ fn clearing_a_capture_log_shows_its_capture_anew() {
     assert!(e.capture(id).is_none());
     assert!(Arc::ptr_eq(&e.capture(next).unwrap(), &c));
     assert!(c.live());
-    // The rows before go with the log that showed them.
-    assert!(!before.exists());
+    // The rows before go with the log that showed them, just after the
+    // capture switched files.
+    wait("old file removed", || !before.exists());
     s.link.log("SER1", &row(3, 0, "three"));
     wait("new row", || {
         let s = state();
@@ -886,6 +889,131 @@ fn clearing_a_capture_log_shows_its_capture_anew() {
     drop(c);
     // Its row was never saved, so its file stays for the next run.
     assert_eq!(s.store.leftovers().len(), 1);
+}
+
+#[test]
+fn a_stopped_capture_log_is_cleared_and_records_from_its_resume() {
+    let s = setup();
+    let e = Arc::new(Engine::default());
+    let id = e.begin_open();
+    let c = s.start("SER1");
+    e.open_capture(id, c.clone()).unwrap();
+    let state = || e.request(json!({"action":"status"})).unwrap();
+    let rows = [row(1, 0, "one"), row(2, 0, "two")].concat();
+    s.link.log("SER1", &rows);
+    wait("rows", || state()["total"] == 2);
+    e.stop_capture(id).unwrap();
+    assert!(c.clearable());
+    let before = c.path();
+    let cut = |s: &Setup| Cut::open(s.store.create(Platform::Android, "Pixel 8").unwrap()).unwrap();
+    let next = e.begin_open();
+    e.clear_capture(id, next, cut(&s)).unwrap();
+    // It stays stopped, with an empty log that is read to its end.
+    wait("cleared", || {
+        let s = state();
+        s["datasetId"] == next && s["following"] == false && s["capture"]["rows"] == 0
+    });
+    assert_eq!(c.phase(), Phase::Stopped);
+    assert!(c.json()["cleared"].is_i64());
+    assert!(!c.unsaved());
+    // Its rows are set aside to be taken back.
+    assert_eq!(c.kept_path(), Some(before.clone()));
+    assert_eq!(std::fs::read(&before).unwrap(), rows.as_bytes());
+    // Taking them back shows them again as they were, and the cleared
+    // file goes once its log closed.
+    let empty = c.path();
+    assert!(e.restore_capture(id, e.begin_open()).is_err());
+    let back = e.begin_open();
+    e.restore_capture(next, back).unwrap();
+    wait("restored", || {
+        let s = state();
+        s["datasetId"] == back && s["total"] == 2 && s["capture"]["rows"] == 2
+    });
+    assert_eq!(c.path(), before);
+    assert!(c.unsaved());
+    assert!(c.json()["cleared"].is_null());
+    assert!(c.kept_path().is_none());
+    wait("cleared file removed", || !empty.exists());
+    assert!(e.restore_capture(back, e.begin_open()).is_err());
+    // Cleared again, rows logged while stopped stay out, and recording on
+    // writes the new file and lets the rows set aside go.
+    let again = e.begin_open();
+    e.clear_capture(back, again, cut(&s)).unwrap();
+    wait("cleared again", || {
+        let s = state();
+        s["datasetId"] == again && s["capture"]["rows"] == 0
+    });
+    assert_eq!(c.kept_path(), Some(before.clone()));
+    s.link.log("SER1", &row(3, 0, "while stopped"));
+    e.resume_capture(again).unwrap();
+    assert!(!before.exists());
+    assert!(c.kept_path().is_none());
+    wait("following again", || state()["following"] == true);
+    s.link.log("SER1", &row(4, 0, "four"));
+    wait("new row", || {
+        let s = state();
+        s["total"] == 1 && s["capture"]["rows"] == 1
+    });
+    assert_eq!(
+        std::fs::read(c.path()).unwrap(),
+        row(4, 0, "four").as_bytes()
+    );
+    // Its first row is where it recorded on after the stop.
+    let breaks = c.breaks();
+    assert_eq!(breaks.len(), 1);
+    assert_eq!((breaks[0].row, breaks[0].stopped), (1, true));
+    // Rows set aside go when the capture closes, or when let go.
+    e.stop_capture(again).unwrap();
+    let last = e.begin_open();
+    e.clear_capture(again, last, cut(&s)).unwrap();
+    wait("cleared once more", || {
+        state()["datasetId"] == last && c.kept_path().is_some()
+    });
+    let aside = c.kept_path().unwrap();
+    c.forget_kept();
+    assert!(!aside.exists());
+    let other = e.begin_open();
+    e.resume_capture(last).unwrap();
+    wait("recording", || c.phase() == Phase::Recording);
+    s.link.log("SER1", &row(5, 0, "five"));
+    wait("five", || c.rows() == 1);
+    e.stop_capture(last).unwrap();
+    e.clear_capture(last, other, cut(&s)).unwrap();
+    wait("cleared before closing", || {
+        state()["datasetId"] == other && c.kept_path().is_some()
+    });
+    let aside = c.kept_path().unwrap();
+    e.close();
+    assert!(!aside.exists());
+}
+
+#[test]
+fn recording_on_as_a_clear_opens_waits_for_the_clear() {
+    let s = setup();
+    let e = Arc::new(Engine::default());
+    let id = e.begin_open();
+    let c = s.start("SER1");
+    e.open_capture(id, c.clone()).unwrap();
+    s.link.log("SER1", &row(1, 0, "one"));
+    wait("row", || c.rows() == 1);
+    e.stop_capture(id).unwrap();
+    let before = c.path();
+    let next = e.begin_open();
+    let cut = Cut::open(s.store.create(Platform::Android, "Pixel 8").unwrap()).unwrap();
+    e.clear_capture(id, next, cut).unwrap();
+    // Pressed before the cleared log finished opening: it records into the
+    // new file, and the rows cleared go.
+    e.resume_capture(next).unwrap();
+    assert_ne!(c.path(), before);
+    assert!(c.kept_path().is_none());
+    assert!(!before.exists());
+    s.link.log("SER1", &row(2, 0, "two"));
+    wait("new row", || c.rows() == 1);
+    assert_eq!(
+        std::fs::read(c.path()).unwrap(),
+        row(2, 0, "two").as_bytes()
+    );
+    e.close();
 }
 
 #[test]

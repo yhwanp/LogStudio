@@ -623,8 +623,9 @@ async fn resume_capture(
         .await
         .map_err(|_| "Request failed".to_string())?
 }
-/// Discards the rows a recording capture has so far: it records into a new
-/// file from now on, shown as a new log that keeps the page's filters.
+/// Discards the rows a recording or stopped capture has so far: it records
+/// into a new file from now on, or from its resume once stopped, shown as a
+/// new log that keeps the page's filters.
 #[tauri::command]
 async fn clear_capture(
     window: tauri::WebviewWindow,
@@ -647,6 +648,40 @@ async fn clear_capture(
     })
     .await
     .map_err(|_| "Request failed".to_string())?
+}
+/// Undoes the last clear of a stopped capture, showing its rows as a new
+/// log that keeps the page's filters.
+#[tauri::command]
+async fn restore_capture(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+    dataset_id: u64,
+) -> Result<Value, String> {
+    main_window(&window)?;
+    let engine = state.0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let id = engine.begin_open();
+        engine
+            .restore_capture(dataset_id, id)
+            .inspect_err(|_| engine.cancel_open(id))
+            .map_err(message)
+    })
+    .await
+    .map_err(|_| "Request failed".to_string())?
+}
+/// Deletes the rows a clear of a stopped capture set aside, once they can
+/// no longer be taken back.
+#[tauri::command]
+fn forget_cleared_capture(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+    dataset_id: u64,
+) -> Result<(), String> {
+    main_window(&window)?;
+    if let Some(c) = state.0.capture(dataset_id) {
+        c.forget_kept();
+    }
+    Ok(())
 }
 /// Why no app can be started for a dataset: it shows no iPhone or iPad
 /// being recorded.
@@ -1322,6 +1357,8 @@ fn main() {
                 stop_capture,
                 resume_capture,
                 clear_capture,
+                restore_capture,
+                forget_cleared_capture,
                 save_capture,
                 discard_capture,
                 capture_leftovers,
@@ -1368,6 +1405,8 @@ fn main() {
             stop_capture,
             resume_capture,
             clear_capture,
+            restore_capture,
+            forget_cleared_capture,
             save_capture,
             discard_capture,
             capture_leftovers,

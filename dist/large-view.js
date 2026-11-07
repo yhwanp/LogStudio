@@ -130,6 +130,20 @@ export function mountLargeLogView(native, {transport, tips=null, help=null, docu
   // Only macOS reads a copied file from the native pasteboard.
   if(MOD!=='⌘'){$('searchShortcut').textContent='Ctrl+F';$('pasteHint').textContent='로그 텍스트 붙여넣기';for(const key of document.querySelectorAll?.('.mod-key')??[])key.textContent='Ctrl';}
   let toastTimer=null,toastAction=false,toastNext=null,exporting=false,exportTotal=0;
+  function hideToast(){
+    if(toastTimer!==null)window.clearTimeout(toastTimer);toastTimer=null;ui.toast.hidden=true;toastAction=false;
+    const next=toastNext;toastNext=null;if(next&&!disposed)notify(...next);
+  }
+  // Takes down the toast while it shows `message`, which is no longer true.
+  function dismiss(message){if(!ui.toast.hidden&&ui.toast.firstChild?.textContent===message)hideToast();}
+  // The width a first row's break label takes at its end, with its gaps.
+  let labelMeasure=null;
+  function breakRoom(label){
+    labelMeasure??=document.createElement('canvas').getContext?.('2d')??null;
+    if(!labelMeasure)return label.length*10+32;
+    labelMeasure.font='600 10.5px Inter,"Noto Sans KR",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif';
+    return Math.ceil(labelMeasure.measureText(label).width)+32;
+  }
   // A toast may offer one action, such as undoing what it reports; it then
   // stays a little longer and takes pointer input. A notice that comes on
   // its own (`wait`) shows after such a toast instead of replacing it.
@@ -137,10 +151,7 @@ export function mountLargeLogView(native, {transport, tips=null, help=null, docu
   function notify(message,action=null,{ms=action?6000:2500,wait=false}={}){
     if(wait&&toastAction&&!ui.toast.hidden){toastNext=[message,action,{ms}];return;}
     if(toastTimer!==null)window.clearTimeout(toastTimer);
-    const hide=()=>{
-      if(toastTimer!==null)window.clearTimeout(toastTimer);toastTimer=null;ui.toast.hidden=true;toastAction=false;
-      const next=toastNext;toastNext=null;if(next&&!disposed)notify(...next);
-    };
+    const hide=hideToast;
     toastAction=!!action;
     ui.toast.replaceChildren(textSpan(document,message));
     if(action){const button=document.createElement('button');button.type='button';button.className='toast-action';button.textContent=action.label;button.addEventListener('click',()=>{hide();void action.run();});ui.toast.append(button);}
@@ -316,6 +327,8 @@ export function mountLargeLogView(native, {transport, tips=null, help=null, docu
             const kindClass=entryOwner?continuationClass(entryOwner):entry.kind!=='parsed'?'raw-row':`level-row-${entry.level}`;
             row.className=`log-row ${kindClass}${continued?' record-continued':''}${fileStart?' file-start':''}${captureBreak?` capture-break${index===0?' capture-break-start':''}`:''}${current.selectedLine===entry.lineNumber?' selected-log-row':''}${entry.encodingDamaged?' encoding-damaged-row':''}${multiple&&inRanges(selected,index)?' in-selection':''}${bookmarks.has(entry.lineNumber)?' bookmarked':''}${!isSearch&&entry.searchHit?' search-hit':''}`; row.tabIndex=-1;row.dataset.lineNumber=String(entry.lineNumber);row.setAttribute('role','listitem');row.setAttribute('aria-posinset',String(index+1));row.setAttribute('aria-setsize',String(current.queryComplete?current.count:-1));
             if(captureBreak)row.dataset.captureBreak=captureBreak;else delete row.dataset.captureBreak;
+            // The first row's label sits at its end: its last cell ends before it.
+            if(captureBreak&&index===0)row.style.setProperty('--break-room',`${breakRoom(captureBreak)}px`);else row.style.removeProperty('--break-room');
             if(current.selectedLine===entry.lineNumber){row.setAttribute('aria-current','true');selectedAt.set(prefix,{identity:selectionIdentity(current),line:entry.lineNumber,index});}
             else row.removeAttribute('aria-current');
             if(fresh){
@@ -746,7 +759,9 @@ export function mountLargeLogView(native, {transport, tips=null, help=null, docu
     // Someone editing hears what the condition did once it settles.
     const told=editorOpen()&&p.exact?`결과 ${formatNumber(state.count)}건`:'';if(told&&$('filterResultNote').textContent!==told)$('filterResultNote').textContent=told;
     // Only a message is news; with rows, the viewport reports the range.
-    showRange('logs',logs,p.range.replaceAll('검색 결과','필터 결과'),!!p.range);
+    // A log with no rows at all has nothing a filter left out.
+    const none=p.exact&&state.total===0&&!state.count?(state.capture?'기록한 로그가 없습니다':'로그가 없습니다'):'';
+    showRange('logs',logs,none||p.range.replaceAll('검색 결과','필터 결과'),!!p.range);
     ui.logsLast.textContent=p.exact?'끝':'현재 끝';if(ui.largeStatus.textContent!==p.status)ui.largeStatus.textContent=p.status;if(ui.largeStatusNote.textContent!==p.note)ui.largeStatusNote.textContent=p.note;updateLevels(state.summary,state.summaryComplete);
     const empty=state.closed||!state.count;ui.logsFirst.disabled=empty||state.viewportStart===0;ui.logsLast.disabled=empty||state.viewportStart>=state.count-1;
     const jumpHelp=jumpTitle(filtersOff?'':'현재 필터 결과',state);if(ui.jumpHelp.textContent!==jumpHelp)ui.jumpHelp.textContent=jumpHelp;
@@ -1128,8 +1143,10 @@ export function mountLargeLogView(native, {transport, tips=null, help=null, docu
   const columnItems=()=>[['내용에 맞춤',()=>layout.fitColumns(),'현재 표시된 로그에 맞춰 열 폭 조절'],['폭 초기화',()=>layout.resetColumns(),'열 폭을 기본값으로 되돌리기']];
   for(const header of [ui.logsHeaders,ui.largeHeaders,$('bookmarkHeaders')])header.addEventListener('contextmenu',event=>{if(rawMode||disposed)return;event.preventDefault();menu.show(columnItems(),event.clientX,event.clientY,'열 폭',{onList:true});});
   devices=mountDevices({ui,document,window,native,menu,logs,isGone:()=>pageGone,report:message=>{inputError=message;errors();},unreport:message=>{if(message&&inputError===message){inputError='';errors();}},notify,
-    // A cleared capture's log replaces this one keeping the filters and search, as a reload does.
-    keepInput:(from,notice,noticeMs)=>{reloadRequest={from,snapshot:{filters:currentFilters(),filtersOff,savedFilter:saved?.applied()??null,notice,noticeMs}};return ()=>{if(reloadRequest?.from===from)reloadRequest=null;};}});
+    // A cleared capture's log replaces this one keeping the filters and search, as a reload does;
+    // undoing a clear brings back the whole input `holdInput` took, bookmarks and places too.
+    keepInput:(from,notice,noticeMs,noticeAction=null,whole=null)=>{reloadRequest={from,snapshot:{...(whole??{filters:currentFilters(),filtersOff,savedFilter:saved?.applied()??null}),notice,noticeMs,noticeAction}};return ()=>{if(reloadRequest?.from===from)reloadRequest=null;};},
+    holdInput:()=>reloadSnapshot(),dismiss});
   // A row an extension picks is selected in the upper logs, as a typed row
   // number is, without moving focus.
   extras=mountExtras({native,notify,isGone:()=>pageGone,
@@ -1537,7 +1554,7 @@ export function mountLargeLogView(native, {transport, tips=null, help=null, docu
       if(snapshot?.upper?.viewportStart)logs.seek(snapshot.upper.viewportStart,{restore:true,selectedLine:snapshot.upper.selectedLine});
       if(valid()&&snapshot?.lower?.viewportStart&&filters.query)search.seek(snapshot.lower.viewportStart,{restore:true});
     }
-    if(snapshot?.notice)notify(snapshot.notice,null,{ms:snapshot.noticeMs});
+    if(snapshot?.notice)notify(snapshot.notice,snapshot.noticeAction??null,{ms:snapshot.noticeMs});
     resolveMarks(logs.getState());
   }
   // The filters to keep: what is typed when valid, else what was applied.
