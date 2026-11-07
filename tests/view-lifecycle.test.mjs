@@ -942,7 +942,7 @@ test('row menu adds removable conditions without changing existing ones',async t
   const menu=()=>r.get('rowMenu').children.filter(n=>n.tagName==='BUTTON').map(n=>n.textContent);
   await row(1).dispatch('contextmenu',{clientX:10,clientY:20,preventDefault(){}});await settle();
   assert.equal(r.get('rowMenu').hidden,false);
-  assert.deepEqual(menu(),['이 행으로 조건 추가…',"태그 'Choreographer' 보기 조건 추가","태그 'Choreographer' 제외","메시지 'x' 보기 조건 추가","메시지 'x' 제외",'PID 100 보기 조건 추가','TID 200 보기 조건 추가','06-18 19:24:00.000부터 보기 조건 추가','06-18 19:24:00.000까지 보기 조건 추가','Info 레벨 보기 조건 추가','행 원문 복사','북마크 추가']);
+  assert.deepEqual(menu(),['이 행으로 조건 추가…',"태그 'Choreographer' 보기 조건 추가","태그 'Choreographer' 제외","메시지 'x' 보기 조건 추가","메시지 'x' 제외",'PID 100 보기 조건 추가','TID 200 보기 조건 추가','06-18 19:24:00.000부터만 보기','06-18 19:24:00.000까지만 보기','Info 레벨 보기 조건 추가','행 원문 복사','북마크 추가']);
   const title=label=>r.get('rowMenu').children.find(n=>n.textContent===label).title;
   assert.equal(title('PID 100 보기 조건 추가'),'이 조건에 맞는 줄만 보여 줍니다','no showing condition is in use yet');
   assert.equal(r.controller.logs.getState().selectedLine,1,'right-click selects the row');
@@ -985,6 +985,117 @@ test('row menu adds removable conditions without changing existing ones',async t
   assert.deepEqual(menu(),['행 원문 복사','북마크 추가'],'raw rows offer no field actions');
   await r.get('rowMenu').dispatch('keydown',{key:'Escape',preventDefault(){},stopPropagation(){}});
   assert.equal(r.get('rowMenu').hidden,true);
+});
+
+test('row menu times narrow the rows shown, so a start and an end make one range',async t=>{
+  const at=(line,time,tag)=>({lineNumber:line,kind:'parsed',raw:`06-18 ${time}  100 200 I ${tag}: m${line}`,date:'06-18',time,pid:'100',tid:'200',level:'I',tag,message:`m${line}`});
+  const rows=[at(1,'19:24:00.000','A'),at(2,'19:24:00.100','B'),{lineNumber:3,kind:'continuation',raw:'  more',owner:{lineNumber:2,date:'06-18',time:'19:24:00.100',level:'I',tag:'B',pid:'100',tid:'200'}},at(4,'19:24:00.300','A'),{lineNumber:5,kind:'raw',raw:'plain'}];
+  const r=await rig({rows,detail:{text:'x',startByte:0,nextByte:1,totalBytes:1,complete:true,highlights:[]}});t.after(()=>r.controller.close());
+  await r.get('closeEditor').dispatch('click');await settle();
+  const row=line=>r.get('logsRows').children.find(n=>n.dataset.lineNumber===String(line));
+  // Items with a note read `label note`.
+  const item=label=>r.get('rowMenu').children.find(n=>n.tagName==='BUTTON'&&(n.textContent===label||n.textContent.startsWith(`${label} `)));
+  const noteOf=label=>item(label).textContent.slice(label.length+1);
+  const open=async line=>{await row(line).dispatch('contextmenu',{clientX:10,clientY:20,preventDefault(){}});await settle();};
+  const choose=async(line,label)=>{await open(line);await item(label).dispatch('click');await settle();};
+  const query=()=>r.calls.filter(c=>c.args.request?.action==='query'&&c.args.request.pane==='logs').at(-1).args.request;
+  const shown=()=>query().filters.include.map(c=>[c.tag,c.timeFrom,c.timeTo]);
+  const toast=r.get('toast'),undo=async()=>{await toast.children[1].dispatch('click');await settle();};
+  // With no showing condition in use, a time starts one.
+  await open(1);
+  assert.equal(item('06-18 19:24:00.000부터만 보기').title,'이 시각부터의 줄만 보여 줍니다');
+  assert.equal(item('06-18 19:24:00.000부터만 보기').textContent,'06-18 19:24:00.000부터만 보기','nothing to combine, so no note');
+  assert.equal(r.get('rowMenu').children.some(n=>/시간 범위만 보기/.test(n.textContent)),false,'one selected row has no range item');
+  await item('06-18 19:24:00.000부터만 보기').dispatch('click');await settle();
+  assert.deepEqual(shown(),[['','06-18 19:24:00.000','']]);
+  assert.equal(toast.children[0].textContent,'보기 조건을 추가했습니다 · 시간: 06-18 19:24:00.000 ~ 끝');
+  // The end goes into that condition: one range, not 또는. The menu names
+  // the range before the click.
+  await open(4);
+  assert.equal(item('06-18 19:24:00.300까지만 보기').title,'보기 조건에 맞는 줄 중 이 시각까지의 줄만 보여 줍니다');
+  assert.equal(noteOf('06-18 19:24:00.300까지만 보기'),'시간: 06-18 19:24:00.000 ~ 19:24:00.300');
+  await item('06-18 19:24:00.300까지만 보기').dispatch('click');await settle();
+  assert.deepEqual(shown(),[['','06-18 19:24:00.000','06-18 19:24:00.300']]);assert.equal(listItems(r).length,1);
+  assert.equal(toast.children[0].textContent,'보기 조건의 시간을 바꿨습니다 · 시간: 06-18 19:24:00.000 ~ 06-18 19:24:00.300');
+  // The same range again cannot be chosen.
+  await open(4);
+  const same=item('06-18 19:24:00.300까지만 보기');
+  assert.equal(same.attributes['aria-disabled'],'true');assert.equal(noteOf('06-18 19:24:00.300까지만 보기'),'지금 보는 시간과 같습니다');
+  await r.get('rowMenu').dispatch('keydown',{key:'Escape',preventDefault(){},stopPropagation(){}});
+  await undo();assert.deepEqual(shown(),[['','06-18 19:24:00.000','']],'undo takes the end back out');
+  // A start after the range's end clears the end.
+  await choose(2,'06-18 19:24:00.100까지만 보기');
+  await open(4);
+  assert.equal(noteOf('06-18 19:24:00.300부터만 보기'),'시간: 06-18 19:24:00.300 ~ 끝');
+  await item('06-18 19:24:00.300부터만 보기').dispatch('click');await settle();
+  assert.deepEqual(shown(),[['','06-18 19:24:00.300','']]);
+  assert.equal(toast.children[0].textContent,'보기 조건의 시간을 바꿨습니다 · 시간: 06-18 19:24:00.300 ~ 끝 · 끝 시각은 비웠습니다');
+  // Undo after the time was cleared from its chip.
+  await chipClear(chipNodes(r.get('activeFilters'))[0]).dispatch('click');await settle();
+  assert.deepEqual(query().filters.include,[]);
+  await undo();
+  assert.deepEqual(query().filters.include,[],'the cleared time stays cleared');
+  assert.equal(toast.children[0].textContent,'조건이 이미 바뀌어 되돌리지 않았습니다.');
+  // Every showing condition in use takes the time; a switched-off one is left.
+  await r.get('resetFilters').dispatch('click');await settle();
+  await choose(1,"태그 'A' 보기 조건 추가");await choose(2,"태그 'B' 보기 조건 추가");
+  await choose(4,"PID 100 보기 조건 추가");
+  const off=listItems(r)[2].children[0];off.checked=false;await off.dispatch('change');await settle();
+  await open(2);
+  assert.equal(noteOf('06-18 19:24:00.100부터만 보기'),'보기 조건 2개 · 시간: 06-18 19:24:00.100 ~ 끝');
+  await item('06-18 19:24:00.100부터만 보기').dispatch('click');await settle();
+  assert.deepEqual(shown(),[['A','06-18 19:24:00.100',''],['B','06-18 19:24:00.100','']]);
+  assert.equal(r.controller.logs.getState().fieldFiltering,true);
+  assert.equal(toast.children[0].textContent,'보기 조건 2개의 시간을 바꿨습니다 · 시간: 06-18 19:24:00.100 ~ 끝');
+  // With the filter switched off, a row action turns it back on and says so.
+  const filter=r.get('filtersOn');filter.checked=false;await filter.dispatch('change');await settle();
+  await choose(4,'06-18 19:24:00.300까지만 보기');
+  assert.equal(filter.checked,true);
+  assert.equal(toast.children[0].textContent,'보기 조건 2개의 시간을 바꿨습니다 · 시간: 06-18 19:24:00.100 ~ 06-18 19:24:00.300 · 꺼 둔 필터를 다시 켰습니다');
+  await undo();assert.equal(filter.checked,false,'undo switches the filter off again');
+  // A selection narrows to its time range: a continuation row has its
+  // record's time and a row without a time is passed over.
+  await r.get('resetFilters').dispatch('click');await settle();
+  await row(3).dispatch('click',{detail:1});await settle();await row(5).dispatch('click',{detail:1,shiftKey:true});await settle();
+  await open(3);
+  assert.deepEqual(r.get('rowMenu').children.filter(n=>n.tagName==='BUTTON').map(n=>n.textContent).slice(0,1),['선택한 3행의 시간 범위만 보기'],'a row inside a record offers the range too');
+  await r.get('rowMenu').dispatch('keydown',{key:'Escape',preventDefault(){},stopPropagation(){}});
+  await open(4);
+  assert.equal(item('선택한 3행의 시간 범위만 보기').title,'선택한 첫 행의 시각부터 마지막 행의 시각까지의 줄만 보여 줍니다');
+  assert.equal(item('선택한 3행의 시간 범위만 보기').textContent,'선택한 3행의 시간 범위만 보기','a range the list cannot tell yet has no note');
+  const labels=r.get('rowMenu').children.filter(n=>n.tagName==='BUTTON').map(n=>n.textContent),range=labels.indexOf('선택한 3행의 시간 범위만 보기');
+  assert.deepEqual(labels.slice(range,range+3),['선택한 3행의 시간 범위만 보기','06-18 19:24:00.300부터만 보기','06-18 19:24:00.300까지만 보기'],'the range heads the time items');
+  await item('선택한 3행의 시간 범위만 보기').dispatch('click');await settle();
+  assert.deepEqual(shown(),[['','06-18 19:24:00.100','06-18 19:24:00.300']]);
+});
+
+test('a selection range reads rows the list has not loaded, and bookmarks narrow to theirs',async t=>{
+  const time=i=>`19:24:00.${String(i).padStart(3,'0')}`;
+  const rows=Array.from({length:450},(_,i)=>i>=445?{lineNumber:i+1,kind:'raw',raw:`plain ${i}`}:{lineNumber:i+1,kind:'parsed',raw:`06-18 ${time(i)}  1 2 I T: m`,date:'06-18',time:time(i),pid:'1',tid:'2',level:'I',tag:'T',message:'m'});
+  const r=await rig({rows,detail:{text:'x',startByte:0,nextByte:1,totalBytes:1,complete:true,highlights:[]}});t.after(()=>r.controller.close());
+  await r.get('closeEditor').dispatch('click');await settle();
+  const row=line=>r.get('logsRows').children.find(n=>n.dataset.lineNumber===String(line));
+  const item=label=>r.get('rowMenu').children.find(n=>n.textContent===label);
+  const query=()=>r.calls.filter(c=>c.args.request?.action==='query'&&c.args.request.pane==='logs').at(-1).args.request;
+  const reads=()=>r.calls.filter(c=>c.args.request?.action==='page'&&c.args.request.pane==='search').map(c=>c.args.request.start);
+  r.get('searchInput').value='m';await r.get('searchInput').dispatch('input');await r.get('searchInput').dispatch('keydown',{key:'Enter',preventDefault(){}});await settle();
+  const lower=r.get('largeViewport');lower.focus();
+  r.handlers.get('keydown')({key:'a',ctrlKey:true,target:lower,preventDefault(){}});await settle();
+  await r.get('largeRows').children[2].dispatch('contextmenu',{clientX:10,clientY:20,preventDefault(){}});await settle();
+  assert.equal(reads().includes(400),false,'the last page is not loaded yet');
+  await item('선택한 450행의 시간 범위만 보기').dispatch('click');for(let i=0;i<4;i++)await settle();
+  assert.ok(reads().includes(400),'the end of the selection is read');
+  assert.deepEqual(query().filters.include.map(c=>[c.timeFrom,c.timeTo]),[['06-18 19:24:00.000','06-18 19:24:00.444']],'rows without a time at the end are passed over');
+  // Bookmarks narrow to the range of the selected marks.
+  await r.get('resetFilters').dispatch('click');await settle();
+  for(const line of [5,9]){await row(line).dispatch('click',{detail:1});await settle();r.handlers.get('keydown')({key:'b',ctrlKey:true,target:new Element(),preventDefault(){}});await settle();}
+  await r.get('bookmarkTab').dispatch('click');await settle();
+  const [first,second]=r.get('bookmarkList').children;
+  await first.dispatch('keydown',{key:'ArrowDown',shiftKey:true,target:first,preventDefault(){}});await settle();
+  await second.dispatch('contextmenu',{clientX:10,clientY:20,preventDefault(){}});await settle();
+  assert.equal(r.get('rowMenu').children.find(n=>n.textContent.startsWith('선택한 2행의 시간 범위만 보기')).textContent,'선택한 2행의 시간 범위만 보기 시간: 06-18 19:24:00.004 ~ 19:24:00.008','the marks name the range before the click');
+  await r.get('rowMenu').children.find(n=>n.textContent.startsWith('선택한 2행의 시간 범위만 보기')).dispatch('click');for(let i=0;i<4;i++)await settle();
+  assert.deepEqual(query().filters.include.map(c=>[c.timeFrom,c.timeTo]),[['06-18 19:24:00.004','06-18 19:24:00.008']]);
 });
 
 test('a row makes a condition of its values in the editor, as DLT Viewer does',async t=>{

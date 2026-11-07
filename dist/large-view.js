@@ -7,7 +7,7 @@ import {mountLogLayout, widestLine} from './layout.js';
 import {createContinuousViewport, ROW_HEIGHT} from './continuous-view.js';
 import {selectOne, selectAll, extendTo, toggleRow, selectedRanges, selectedCount, inRanges} from './row-selection.js';
 import {rowGestures} from './row-gestures.js';
-import {createLargeLogController, DEFAULT_FILTERS, DETAIL_SETTLE_MS, FINAL_QUERY_STATES} from './controller.js';
+import {createLargeLogController, DEFAULT_FILTERS, DETAIL_SETTLE_MS, FINAL_QUERY_STATES, PAGE_SIZE} from './controller.js';
 import {LEVEL_NAMES, formatNumber, formatSize, describeLargeProgress, describeLogError, describeFileError, describeFollowError, describeActiveFilters, rowSource} from './describe.js';
 import {textSpan, writeClipboard} from './dom.js';
 import {createPopupMenu} from './menu.js';
@@ -949,7 +949,8 @@ export function mountLargeLogView(native, {transport, tips=null, help=null, docu
     }};
   }
   // Row actions add conditions rather than rewrite one the user may not be
-  // looking at; each says in a toast what it did and can be undone there.
+  // looking at, except times, which narrow the showing conditions in use
+  // (`narrowTime`); each says in a toast what it did and can be undone there.
   // A showing value fills a blank showing condition, or starts a new one.
   const menu=createPopupMenu({menu:ui.rowMenu,document,window});
   const more=mountMoreMenu({ui,menu,items:()=>moreItems(),document,window});
@@ -972,6 +973,18 @@ export function mountLargeLogView(native, {transport, tips=null, help=null, docu
     window.addEventListener('blur',done);
   }
   const quote=text=>text.length>24?`${text.slice(0,24)}…`:text;
+  // The row's time, or its record's for a row inside one, when it reads as a
+  // time bound; else ''.
+  function timeOf(entry){
+    const from=entry?.kind==='parsed'?entry:continuationOwner(entry),stamp=from?[from.date,from.time].filter(Boolean).join(' '):'';
+    return stamp&&isTimeBound(stamp)?stamp:'';
+  }
+  // Two times as [earlier, later], or null without both.
+  const orderedTimes=(a,b)=>a&&b?isEmptyTimeRange(a,b)?[b,a]:[a,b]:null;
+  // Positions of sorted ranges, first to last or last to first.
+  function* positionsIn(ranges,backward=false){
+    for(const [a,b] of backward?[...ranges].reverse():ranges)for(let k=0;k<=b-a;k++)yield backward?b-k:a+k;
+  }
   // With `edit`, the editor opens on the condition, as DLT Viewer's Filter Add
   // does, and takes it away if the toast undoes it.
   function addShowing(values,{edit=false}={}){
@@ -987,12 +1000,94 @@ export function mountLargeLogView(native, {transport, tips=null, help=null, docu
     apply();
     if(edit)openEditor();
     const summary=conditionSummary(c,shownFormat);
-    offerUndo(`보기 조건을 추가했습니다 · ${summary}${others?' · 기존 보기 조건과 이 조건 중 하나라도 맞으면 보입니다':''}`,()=>{
+    offerUndo(`보기 조건을 추가했습니다 · ${summary}${others?' · 기존 보기 조건과 이 조건 중 하나라도 맞으면 보입니다':''}${filterBackOn()}`,()=>{
       syncEditor();if(edit&&activeCondition()===c)editor.close({focus:false});
       const i=conds.include.indexOf(c);if(i<0)return;
       if(blank<0){removeCondition('include',i);return;}
       Object.assign(c,emptyCondition());loadEditor();buildConditions();apply();
     });
+  }
+  const showingInUse=()=>conds.include.filter(c=>c.enabled!==false&&!isEmptyCondition(c));
+  // A bound replaces its side and clears the other end if it crosses it, so
+  // an item keeps its name's promise: `13:00부터만` on 10:00 ~ 12:00 is 13:00 ~ 끝.
+  function narrowedTime(c,bounds){
+    const next={timeFrom:bounds.timeFrom??c.timeFrom??'',timeTo:bounds.timeTo??c.timeTo??''};
+    if(isEmptyTimeRange(next.timeFrom,next.timeTo))next['timeFrom' in bounds?'timeTo':'timeFrom']='';
+    return next;
+  }
+  const sameTime=(c,t)=>(c.timeFrom??'')===t.timeFrom&&(c.timeTo??'')===t.timeTo;
+  // A menu note's range; an end on the start's date omits the date.
+  function rangeText({timeFrom,timeTo}){
+    const from=String(timeFrom??'').trim(),to=String(timeTo??'').trim(),[date,clock]=from.split(/\s+/);
+    return `${from||'처음'} ~ ${(clock&&to.startsWith(`${date} `)?to.slice(date.length+1):to)||'끝'}`;
+  }
+  // Showing conditions combine with 또는, so a time goes into every showing
+  // condition in use instead of adding one, unless none is in use.
+  function narrowTime(bounds){
+    syncEditor();
+    const targets=showingInUse();
+    if(!targets.length)return void addShowing(bounds);
+    const before=targets.map(c=>({timeFrom:c.timeFrom??'',timeTo:c.timeTo??''})),after=targets.map(c=>narrowedTime(c,bounds));
+    if(targets.every((c,i)=>sameTime(c,after[i])))return void notify('이미 이 시간으로 보고 있습니다.');
+    targets.forEach((c,i)=>Object.assign(c,after[i]));
+    loadEditor();buildConditions();apply();
+    // The toast also says when the new bound cleared the other end.
+    const cleared=['timeFrom','timeTo'].find(key=>!(key in bounds)&&targets.some((c,i)=>before[i][key]&&!after[i][key]));
+    const times=[...new Set(after.map(t=>conditionSummary({...emptyCondition(),...t},shownFormat)))];
+    const summary=targets.length===1?conditionSummary(targets[0],shownFormat):times.length===1?times[0]:`${bounds.timeFrom??bounds.timeTo}${bounds.timeFrom?'부터':'까지'}`;
+    offerUndo(`보기 조건${targets.length>1?` ${targets.length}개`:''}의 시간을 바꿨습니다 · ${summary}${cleared?` · ${cleared==='timeTo'?'끝':'시작'} 시각은 비웠습니다`:''}${filterBackOn()}`,()=>{
+      syncEditor();
+      // Restore only times still as this set them; later edits stay.
+      const back=targets.filter((c,i)=>conds.include.includes(c)&&sameTime(c,after[i]));
+      if(!back.length)return false;
+      for(const c of back)Object.assign(c,before[targets.indexOf(c)]);
+      loadEditor();buildConditions();apply();
+    });
+  }
+  // Says when a row action switched the filter back on, since its toast
+  // replaces the one `apply` showed.
+  const filterBackOn=()=>turnedOn?' · 꺼 둔 필터를 다시 켰습니다':'';
+  // The time range of a selection, from the first selected row with a time
+  // to the last one, in time order, or null. Rows come from the list or a
+  // page read; the list's query must stay the one the selection is of.
+  async function selectionTimes(prefix){
+    const owner=prefix==='logs'?logs:search,state=owner.getState(),view=viewports.get(prefix);
+    const ranges=selectedRanges(selectionOf(prefix,state),state.count);
+    if(!ranges.length||!view)return null;
+    const pages=new Map();
+    const rowAt=async i=>{
+      const cached=view.cachedRows(i,i)?.[0];if(cached)return cached;
+      const start=i-i%PAGE_SIZE;
+      if(!pages.has(start)){
+        const now=owner.getState();if(now.datasetId!==state.datasetId||now.queryId!==state.queryId)throw new Error('Selection changed');
+        pages.set(start,await owner.readRows(start));
+      }
+      return pages.get(start)?.[i-start];
+    };
+    // The right-clicked row is selected and has a time, so each scan stops
+    // there at the latest.
+    const firstTime=async positions=>{for(const i of positions){const time=timeOf(await rowAt(i));if(time)return time;}return '';};
+    const from=await firstTime(positionsIn(ranges)),to=await firstTime(positionsIn(ranges,true));
+    return orderedTimes(from,to);
+  }
+  function bookmarkTimes(){
+    const times=bookmarks.selectedMarks().map(timeOf).filter(Boolean);
+    return orderedTimes(times[0],times.at(-1));
+  }
+  // The selection's time range when both end rows are already read and have
+  // a time, so the menu can show it before the item reads.
+  function cachedSelectionTimes(prefix){
+    const state=(prefix==='logs'?logs:search).getState(),view=viewports.get(prefix),ranges=selectedRanges(selectionOf(prefix,state),state.count);
+    if(!ranges.length||!view)return null;
+    const at=i=>timeOf(view.cachedRows(i,i)?.[0]);
+    return orderedTimes(at(ranges[0][0]),at(ranges.at(-1)[1]));
+  }
+  async function narrowToSelection(times){
+    let range=null,changed=false;
+    try{range=await times();}catch(error){changed=/changed/.test(String(error?.message??error));}
+    if(disposed)return;
+    if(!range)return void notify(changed?'목록이 바뀌어 선택한 행의 시각을 읽지 못했습니다. 다시 선택해 주세요.':'선택한 행의 시각을 읽지 못했습니다. 다시 시도해 주세요.');
+    narrowTime({timeFrom:range[0],timeTo:range[1]});
   }
   // A hidden value is a hiding condition of its own, unless it is already
   // hidden; the toast undoes it.
@@ -1003,7 +1098,7 @@ export function mountLargeLogView(native, {transport, tips=null, help=null, docu
     if(!addCondition('exclude',values,{select:false}))return;
     const added=conds.exclude.at(-1);
     loadEditor();buildConditions();apply();
-    offerUndo(`제외 조건을 추가했습니다 · ${conditionSummary(added,shownFormat,true)}`,()=>{
+    offerUndo(`제외 조건을 추가했습니다 · ${conditionSummary(added,shownFormat,true)}${filterBackOn()}`,()=>{
       syncEditor();const i=conds.exclude.indexOf(added);if(i>=0)removeCondition('exclude',i);
     });
   }
@@ -1014,7 +1109,8 @@ export function mountLargeLogView(native, {transport, tips=null, help=null, docu
   }
   function openRowMenu(entry,index,prefix,owner,isSearch,x,y){
     if(disposed)return;
-    const items=[...textItems(ui[prefix+'Rows'],entry.lineNumber),...conditionItems(entry,pickedText(ui[prefix+'Rows'],entry.lineNumber))],state=owner.getState(),size=selectedCount(selectionOf(prefix,state),state.count)||1;
+    const state=owner.getState(),size=selectedCount(selectionOf(prefix,state),state.count)||1;
+    const items=[...textItems(ui[prefix+'Rows'],entry.lineNumber),...conditionItems(entry,pickedText(ui[prefix+'Rows'],entry.lineNumber),size>1?{size,times:cachedSelectionTimes(prefix),run:()=>narrowToSelection(()=>selectionTimes(prefix))}:null)];
     items.push([size>1?`선택한 ${formatNumber(size)}행 복사`:'행 원문 복사',()=>copyFromPane(prefix)]);
     // A row of a multi-line log entry also copies the whole entry.
     const next=Number.isSafeInteger(index)?viewports.get(prefix)?.cachedRows(index+1,index+1)?.[0]:null;
@@ -1034,7 +1130,7 @@ export function mountLargeLogView(native, {transport, tips=null, help=null, docu
   // and unmark.
   function openBookmarkMenu(mark,size,x,y){
     if(disposed)return;
-    const items=[...textItems(ui.bookmarkList,mark.lineNumber),...conditionItems(mark,pickedText(ui.bookmarkList,mark.lineNumber))];
+    const items=[...textItems(ui.bookmarkList,mark.lineNumber),...conditionItems(mark,pickedText(ui.bookmarkList,mark.lineNumber),size>1?{size,times:bookmarkTimes(),run:()=>narrowToSelection(bookmarkTimes)}:null)];
     items.push([size>1?`선택한 ${formatNumber(size)}행 복사`:'행 원문 복사',()=>copyFromPane('bookmarks')]);
     items.push([size>1?`선택한 북마크 ${formatNumber(size)}개 해제`:'북마크 해제',()=>bookmarks.removeSelected()]);
     menu.show(items,x,y,'북마크 작업',{onList:true});
@@ -1050,11 +1146,27 @@ export function mountLargeLogView(native, {transport, tips=null, help=null, docu
     const text=window.getSelection?.(),value=text&&!text.isCollapsed?String(text):'',row=value?rowOf(text.anchorNode):null;
     return row&&rows?.contains?.(row)&&row.dataset.lineNumber===String(line)?value:'';
   }
+  // A row-menu time item. It previews the resulting range when a condition
+  // already has a time or several conditions change, and an item that would
+  // change nothing cannot be chosen. `bounds` is null while still unknown.
+  function timeItem(label,action,bounds,rows){
+    const targets=showingInUse(),title=`${targets.length?'보기 조건에 맞는 줄 중 ':''}${rows}만 보여 줍니다`;
+    if(!bounds)return [label,action,title];
+    const after=targets.map(c=>narrowedTime(c,bounds));
+    if(targets.length&&targets.every((c,i)=>sameTime(c,after[i])))return [label,action,title,{disabled:true,note:'지금 보는 시간과 같습니다'}];
+    const timed=targets.some(c=>String(c.timeFrom??'').trim()||String(c.timeTo??'').trim()),both='timeFrom' in bounds&&'timeTo' in bounds;
+    const ranges=[...new Set((targets.length?after:[narrowedTime({},bounds)]).map(rangeText))],what=ranges.length===1?`시간: ${ranges[0]}`:'조건마다 다른 시간';
+    const note=targets.length>1?`보기 조건 ${targets.length}개 · ${what}`:timed||both?what:'';
+    return [label,action,title,note?{note}:{}];
+  }
+  const rangeItem=({size,times,run})=>timeItem(`선택한 ${formatNumber(size)}행의 시간 범위만 보기`,run,times&&{timeFrom:times[0],timeTo:times[1]},'선택한 첫 행의 시각부터 마지막 행의 시각까지의 줄');
   // Conditions a row's values make, then a separator; none for an
   // unrecognized row. The message conditions take `picked`, text selected in
-  // the row's message, or else the whole message.
-  function conditionItems(entry,picked=''){
-    if(entry.kind!=='parsed')return [];
+  // the row's message, or else the whole message. `range`, given with more
+  // than one row selected ({size, times, run}), narrows to the selection's
+  // time range; a row inside a record offers it too.
+  function conditionItems(entry,picked='',range=null){
+    if(entry.kind!=='parsed'){syncEditor();return range&&timeOf(entry)?[rangeItem(range),null]:[];}
     // A DLT row's IDs go into the condition together; a text log's tags one
     // at a time.
     const ids=entry.dlt?DLT_IDS.map(([key,label])=>[key,label,entry.dlt[key]]):(Array.isArray(entry.tags)&&entry.tags.length?entry.tags:[entry.tag]).map(tag=>['tag','태그',tag]);
@@ -1062,7 +1174,8 @@ export function mountLargeLogView(native, {transport, tips=null, help=null, docu
     // Showing conditions combine with 또는, so with another one in use an
     // added condition shows more rows, not fewer.
     syncEditor();
-    const note=conds.include.some(c=>c.enabled!==false&&!isEmptyCondition(c))?'기존 보기 조건에 더해, 이 조건에 맞는 줄도 함께 보여 줍니다':'이 조건에 맞는 줄만 보여 줍니다';
+    const inUse=conds.include.some(c=>c.enabled!==false&&!isEmptyCondition(c));
+    const note=inUse?'기존 보기 조건에 더해, 이 조건에 맞는 줄도 함께 보여 줍니다':'이 조건에 맞는 줄만 보여 줍니다';
     const values=Object.fromEntries(entry.dlt?named.map(([key,,value])=>[key,value]):named.slice(0,1).map(([key,,value])=>[key,value]));
     // One group per field, separated, so the menu reads by field.
     const groups=[named.length?[['이 행으로 조건 추가…',()=>addShowing(values,{edit:true}),`${entry.dlt?'이 행의 ECU·APID·CTID':'이 행의 태그'}로 조건을 만들고 편집창을 엽니다`]]:[],named.flatMap(([key,label,value])=>[...(entry.dlt?[]:[[`${label} '${quote(value)}' 보기 조건 추가`,()=>addShowing({[key]:value}),note]]),[`${label} '${quote(value)}' 제외`,()=>addExcluded({[key]:value}),'이 조건에 맞는 줄을 숨깁니다']])];
@@ -1072,8 +1185,9 @@ export function mountLargeLogView(native, {transport, tips=null, help=null, docu
     const partly=chosen?'':' · 일부만 쓰려면 텍스트를 선택해 우클릭';
     if(message)groups.push([[`${field} '${quote(message)}' 보기 조건 추가`,()=>addShowing({message}),note+partly],[`${field} '${quote(message)}' 제외`,()=>addExcluded({message}),`이 내용이 들어 있는 줄을 숨깁니다${partly}`]]);
     groups.push([['pid','PID'],['tid','TID']].filter(([key])=>/^\d+$/.test(String(entry[key]??''))).map(([key,label])=>[`${label} ${entry[key]} 보기 조건 추가`,()=>addShowing({[key]:String(entry[key])}),note]));
-    const stamp=[entry.date,entry.time].filter(Boolean).join(' ');
-    if(isTimeBound(stamp)&&stamp)groups.push([[`${stamp}부터 보기 조건 추가`,()=>addShowing({timeFrom:stamp}),note],[`${stamp}까지 보기 조건 추가`,()=>addShowing({timeTo:stamp}),note]]);
+    const stamp=timeOf(entry);
+    if(stamp)groups.push([...(range?[rangeItem(range)]:[]),
+      timeItem(`${stamp}부터만 보기`,()=>narrowTime({timeFrom:stamp}),{timeFrom:stamp},'이 시각부터의 줄'),timeItem(`${stamp}까지만 보기`,()=>narrowTime({timeTo:stamp}),{timeTo:stamp},'이 시각까지의 줄')]);
     const names=levelNames(shownFormat);
     if(names[entry.level])groups.push([[`${names[entry.level]} 레벨 보기 조건 추가`,()=>addShowing({levels:[entry.level]}),note]]);
     return groups.filter(group=>group.length).flatMap(group=>[...group,null]);
@@ -1422,12 +1536,16 @@ export function mountLargeLogView(native, {transport, tips=null, help=null, docu
   // 초기화 and a condition that comes or goes as a whole (삭제, a chip
   // clearing its last field, a row action) can be undone from the toast
   // while the same log is open.
+  // `undo` returns false when its change was edited since: then nothing,
+  // the filter included, goes back.
   function offerUndo(message,undo){
     const dataset=logs.getState().datasetId,off=turnedOn;turnedOn=false;
     notify(message,{label:'실행 취소',run:()=>{
-      if(disposed||logs.getState().datasetId!==dataset)return;undo();if(off)setFiltersOff(true);
+      if(disposed||logs.getState().datasetId!==dataset)return;
+      const done=undo()!==false;if(done&&off)setFiltersOff(true);
       // The toast goes with the focus it held: the condition takes it, or the log.
       if(ui.toast.contains?.(document.activeElement)||document.activeElement===document.body)(conditionView?.summaryOf(active.list,active.index)??ui.logsViewport).focus({preventScroll:true});
+      if(!done)notify('조건이 이미 바뀌어 되돌리지 않았습니다.');
     }});
   }
   // Removes a condition and offers it back where it was; a lone blank

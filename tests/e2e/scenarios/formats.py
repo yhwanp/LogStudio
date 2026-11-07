@@ -59,7 +59,7 @@ return {cell:c.clientWidth,timeAndEllipsis:Math.ceil(m.measureText('2026-06-18 1
         app.click_row(10)
         app.click_row(10, event='contextmenu')
         menu = app.wait(lambda: js("const m=document.getElementById('rowMenu');return m&&!m.hidden&&m.textContent"), what='row menu')
-        check('the brief row menu offers tag, PID and level but no time or TID', 'ActivityManager' in menu and 'PID 1000' in menu and '부터 보기' not in menu and 'TID' not in menu, menu)
+        check('the brief row menu offers tag, PID and level but no time or TID', 'ActivityManager' in menu and 'PID 1000' in menu and '부터만 보기' not in menu and 'TID' not in menu, menu)
 
         # threadtime, -v year, -v nsec and iOS stamps; the stack line stays raw.
         app.key('Escape', target='rowMenu')

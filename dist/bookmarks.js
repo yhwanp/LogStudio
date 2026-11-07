@@ -215,10 +215,15 @@ export function createBookmarks({ui, document, window, notify, mod, logs, lineCe
     for(const mark of marks)lines.push(mark.truncated?await logs.readLineText(mark.lineNumber):mark.raw);
     return lines.join('\n');
   }
+  // The selected marks in line order.
+  function selectedMarks(){
+    const lines=sorted(),s=chosen();
+    return s?[...selectedPositions(s,lines.length)].map(i=>bookmarks.get(lines[i])):[];
+  }
   // ⌘/Ctrl+C in the list copies the selected rows.
   function copyPlan(){
-    const lines=sorted(),s=chosen();if(!s)return null;
-    const marks=[...selectedPositions(s,lines.length)].map(i=>bookmarks.get(lines[i]));
+    if(!chosen())return null;
+    const marks=selectedMarks();
     return {count:marks.length,text:marks.some(mark=>mark.truncated)?null:marks.map(mark=>mark.raw).join('\n'),load:()=>text(marks)};
   }
   // Replaces every mark without repainting rows; the caller repaints.
@@ -241,5 +246,5 @@ export function createBookmarks({ui, document, window, notify, mod, logs, lineCe
     writeClipboard(window,text()).then(()=>notify(`북마크 ${formatNumber(count)}행을 복사했습니다.`),()=>notify('복사하지 못했습니다. 다시 시도해 주세요.'));
   });
   ui.clearBookmarks.addEventListener('click',()=>{if(bookmarks.size)unmarkLines(sorted(),{message:'북마크를 모두 해제했습니다.'});});
-  return {has:line=>bookmarks.has(line), size:()=>bookmarks.size, toggle, step, restore, render, focusList, copyPlan, removeSelected, selectAll:selectEvery, collapse, snapshot:()=>new Map(bookmarks)};
+  return {has:line=>bookmarks.has(line), size:()=>bookmarks.size, toggle, step, restore, render, focusList, copyPlan, selectedMarks, removeSelected, selectAll:selectEvery, collapse, snapshot:()=>new Map(bookmarks)};
 }
