@@ -10,9 +10,11 @@ const at = (h, m, s) => new Date(2026, 9, 24, h, m, s).getTime();
 test('capture states from the engine are checked; other logs have none', () => {
   assert.equal(captureState(undefined), null);
   assert.equal(captureState({state:'unknown'}), null);
-  const c = captureState({state:'waiting', device:'Pixel 8', serial:'emulator-5554', bytes:2048, error:7, lost:at(14, 2, 11), unsaved:true, recovered:'yes', breaks:[{row:3, lost:1, resumed:2, reboot:true}, {row:0}, {row:'x'}, null]});
-  assert.deepEqual(c, {state:'waiting', device:'Pixel 8', serial:'emulator-5554', bytes:2048, error:'', breaks:[{row:3, lost:1, resumed:2, reboot:true, gap:false, stopped:false}], launches:[], lost:at(14, 2, 11), stopped:null, cleared:null, reason:'', unsaved:true, recovered:false, platform:'android'});
+  const c = captureState({state:'waiting', device:'Pixel 8', serial:'emulator-5554', bytes:2048, rows:31, error:7, lost:at(14, 2, 11), unsaved:true, recovered:'yes', breaks:[{row:3, lost:1, resumed:2, reboot:true}, {row:0}, {row:'x'}, null]});
+  assert.deepEqual(c, {state:'waiting', device:'Pixel 8', serial:'emulator-5554', bytes:2048, rows:31, error:'', breaks:[{row:3, lost:1, resumed:2, reboot:true, gap:false, stopped:false}], launches:[], lost:at(14, 2, 11), stopped:null, cleared:null, reason:'', unsaved:true, recovered:false, platform:'android'});
   assert.equal(captureState({state:'recording', breaks:[{row:9, stopped:true, gap:true}]}).breaks[0].stopped, true);
+  // The clear notice names the rows that went.
+  assert.equal(captureState({state:'recording', rows:-1}).rows, 0);
   assert.equal(captureState({state:'recording', cleared:at(14, 5, 0)}).cleared, at(14, 5, 0));
   assert.equal(captureState({state:'waiting', stopped:at(14, 4, 0)}).stopped, at(14, 4, 0));
   assert.equal(captureState({state:'recording', cleared:'soon'}).cleared, null);
@@ -108,6 +110,10 @@ test('the capture bar names each state; breaks name where the device left and ca
   assert.equal(describeCapture({...base, state:'stopped'}).text, '기록 중지됨 · 저장 안 됨 · Pixel 8');
   // Stopping says what recording on will not bring back.
   assert.equal(describeCapture({...base, state:'stopped'}).title, '기록을 멈췄습니다. 멈춘 동안의 로그는 기록되지 않습니다. 지금까지 기록한 로그(3.0 MiB)를 저장할 수 있습니다.');
+  // Cleared while stopped, it holds nothing to save yet.
+  const empty = describeCapture({...base, state:'stopped', bytes:0, unsaved:false});
+  assert.equal(empty.text, '기록 중지됨 · Pixel 8');
+  assert.equal(empty.title, '기록을 멈췄습니다. 멈춘 동안의 로그는 기록되지 않습니다. 아직 기록한 로그가 없습니다.');
   // A capture resumed after a stop waits for its device without saying the
   // connection was lost, and says what it waits on.
   const resumed = describeCapture({...base, state:'waiting', lost:at(14, 5, 0), stopped:at(14, 4, 0)});
@@ -140,6 +146,13 @@ test('the capture bar names each state; breaks name where the device left and ca
   assert.equal(breakLabel(cleared, 0, 1), '14:05:00 로그 비움 · 14:04:00 연결 끊김 → 14:06:00 다시 연결 · 끊긴 동안 로그 기록 안 됨');
   assert.equal(breakLabel(cleared, 0, 3), breakLabel(cleared, 0, 1));
   assert.equal(breakLabel(captureBreaks({cleared:at(14, 5, 0)}), 0, 4), '14:05:00 로그 비움');
+  // Cleared while stopped, its first row is where it recorded on; the stop
+  // before the clear is not named. A later stop still is.
+  const picked = captureBreaks({cleared:at(14, 5, 0), breaks:[
+    {row:1, lost:at(14, 4, 0), resumed:at(14, 7, 0), reboot:true, gap:true, stopped:true},
+    {row:30, lost:at(14, 8, 0), resumed:at(14, 9, 0), reboot:false, gap:true, stopped:true}]});
+  assert.equal(breakLabel(picked, 0, 1), '14:05:00 로그 비움 → 14:07:00 이어서 기록 · 기기 재부팅');
+  assert.equal(breakLabel(picked, 0, 30), '14:05:00 로그 비움 → 14:07:00 이어서 기록 · 기기 재부팅 · 14:08:00 기록 중지 → 14:09:00 이어서 기록');
   // An app started with its private values shown marks where its rows
   // begin, by the name its rows carry when that differs.
   const marked = captureBreaks({breaks:[{row:9, lost:at(14, 2, 11), resumed:at(14, 2, 35), reboot:false, gap:true}],
@@ -193,7 +206,7 @@ class Dialog extends Element {
   close() {if (!this.open) return; this.open = false; this.fire('close');}
 }
 // A page with the device parts, a scripted native side and log state.
-function rig({state = {}, answers = {}, platform = 'MacIntel', unreport = null, keepInput} = {}) {
+function rig({state = {}, answers = {}, platform = 'MacIntel', unreport = null, keepInput, holdInput} = {}) {
   const document = {activeElement:null, body:null};
   const elements = new Map();
   document.getElementById = id => {
@@ -223,11 +236,12 @@ function rig({state = {}, answers = {}, platform = 'MacIntel', unreport = null, 
     close:(restore = false) => {if (ui.rowMenu.hidden) return; version++; ui.rowMenu.hidden = true; if (restore) opener?.focus(); opener = null;}, version:() => version};
   const timers = [];
   const window = {navigator:{platform}, setTimeout:(fn, ms) => {timers.push(fn); return timers.length;}, clearTimeout:() => {}};
-  const unreported = [];
-  const devices = mountDevices({ui, document, window, native, menu, logs, isGone:() => false, report:m => reports.push(m), unreport:unreport ?? (m => unreported.push(m)), notify:(m, action, options) => {notes.push(m); if (options?.wait) waited.push(m);}, keepInput});
-  return {document, ui, calls, listeners, menu, menus, notes, waited, reports, unreported, logs, devices, dialog:document.getElementById('captureDialog'), $:document.getElementById, timers};
+  const unreported = [], dismissed = [];
+  const devices = mountDevices({ui, document, window, native, menu, logs, isGone:() => false, report:m => reports.push(m), unreport:unreport ?? (m => unreported.push(m)), notify:(m, action, options) => {notes.push(m); if (options?.wait) waited.push(m);},
+    dismiss:m => dismissed.push(m), keepInput, holdInput});
+  return {document, ui, calls, listeners, menu, menus, notes, waited, reports, unreported, dismissed, logs, devices, dialog:document.getElementById('captureDialog'), $:document.getElementById, timers};
 }
-const unsaved = {state:'recording', device:'Pixel 8', bytes:4096, unsaved:true, breaks:[]};
+const unsaved = {state:'recording', device:'Pixel 8', bytes:4096, rows:32, unsaved:true, breaks:[]};
 
 test('a capture with unsaved rows asks; others close without a question', async () => {
   let r = rig();
@@ -317,7 +331,6 @@ test('the capture bar shows the shown capture and its actions', () => {
   // The button keeps its other name's width, unseen and unread.
   assert.equal(r.ui.captureStopOther.textContent, '이어서 기록');
   assert.match(r.ui.captureStopHint.textContent, /^기록을 멈춥니다/);
-  assert.equal(r.ui.captureClear.classList.contains('place-only'), false);
   r.devices.render({datasetId:7, closed:false, capture:{...unsaved, state:'stopped', unsaved:false}});
   // A stopped capture's button records on into the same log, and says so
   // to screen readers too.
@@ -326,9 +339,8 @@ test('the capture bar shows the shown capture and its actions', () => {
   assert.equal(r.ui.captureStopOther.textContent, '기록 중지');
   assert.match(r.ui.captureStop.title, /멈춘 동안의 로그는 기록되지 않습니다$/);
   assert.equal(r.ui.captureStopHint.textContent, r.ui.captureStop.title);
-  // The trash keeps its place unseen, so the button does not move.
+  // The trash stays, to clear before recording on.
   assert.equal(r.ui.captureClear.hidden, false);
-  assert.equal(r.ui.captureClear.classList.contains('place-only'), true);
   assert.equal(r.ui.captureSave.classList.contains('primary'), false);
   assert.equal(r.ui.openFile.classList.contains('primary'), true);
   // One that failed or that an earlier run left does not.
@@ -396,7 +408,7 @@ test('the trash button clears a live capture at once, keeping the filters for it
   const kept = [];
   let finish;
   const r = rig({state:{capture:unsaved}, answers:{clear_capture:() => new Promise((resolve, reject) => {finish = {resolve, reject};})},
-    keepInput:(from, notice, ms) => {kept.push(['keep', from, notice, ms]); return () => kept.push(['forget', from]);}});
+    keepInput:(from, notice, ms, action) => {kept.push(['keep', from, notice, ms, action]); return () => kept.push(['forget', from]);}});
   r.devices.render();
   assert.equal(r.ui.captureClear.hidden, false);
   assert.equal(r.ui.captureClear.getAttribute('aria-disabled'), 'false');
@@ -408,7 +420,8 @@ test('the trash button clears a live capture at once, keeping the filters for it
   // to name what went, for as long as a notice with an action stays.
   assert.equal(r.dialog.open, false);
   assert.deepEqual(r.calls.filter(c => c[0] === 'clear_capture'), [['clear_capture', {datasetId:7}]]);
-  assert.deepEqual(kept, [['keep', 7, '기록한 로그(4.0 KiB)를 비웠습니다. 지금부터 들어오는 로그를 기록합니다.', 6000]]);
+  // A live clear offers no undo: its rows went to make room for new ones.
+  assert.deepEqual(kept, [['keep', 7, '기록한 로그 32행(4.0 KiB)을 비웠습니다. 지금부터 들어오는 로그를 기록합니다.', 6000, null]]);
   // The bar's status stays quiet for screen readers while the notice speaks.
   assert.equal(r.ui.captureState.getAttribute('aria-live'), 'off');
   // The button keeps focus while it clears; it, stopping and saving wait.
@@ -436,17 +449,22 @@ test('the trash button clears a live capture at once, keeping the filters for it
   assert.equal(r.ui.captureClear.title, '지금까지 기록한 로그를 비우고 계속 기록합니다');
   r.devices.render({datasetId:7, closed:false, capture:{...unsaved, state:'waiting', lost:0}});
   assert.equal(r.ui.captureClear.hidden, false);
-  // A stopped capture's trash only keeps its place; a failed one has none.
+  // A stopped capture is cleared too and stays stopped, and the button
+  // says so; a failed one or one an earlier run left has none.
   r.devices.render({datasetId:7, closed:false, capture:{...unsaved, state:'stopped'}});
-  assert.equal(r.ui.captureClear.classList.contains('place-only'), true);
+  assert.equal(r.ui.captureClear.hidden, false);
+  assert.equal(r.ui.captureClear.getAttribute('aria-disabled'), 'false');
+  assert.equal(r.ui.captureClear.title, '지금까지 기록한 로그를 비웁니다. 이어서 기록을 누른 때부터 새로 기록합니다. 비운 직후에는 알림에서 실행 취소할 수 있습니다');
   r.devices.render({datasetId:7, closed:false, capture:{...unsaved, state:'failed'}});
   assert.equal(r.ui.captureClear.hidden, true);
+  r.devices.render({datasetId:7, closed:false, capture:{...unsaved, state:'stopped', recovered:true}});
+  assert.equal(r.ui.captureClear.hidden, true);
   // A clear that fails keeps the log, reports why and lets the status speak.
-  const failing = rig({state:{capture:unsaved}, answers:{clear_capture:new Error('No device capture is recording')},
+  const failing = rig({state:{capture:unsaved}, answers:{clear_capture:new Error('No device capture to clear')},
     keepInput:(from) => () => kept.push(['forget', from])});
   failing.ui.captureClear.fire('click'); await settle();
   assert.deepEqual(kept.at(-1), ['forget', 7]);
-  assert.deepEqual(failing.reports, ['No device capture is recording']);
+  assert.deepEqual(failing.reports, ['No device capture to clear']);
   assert.equal(failing.ui.captureState.getAttribute('aria-live'), 'polite');
   // While a save copies, the button keeps focus and says why it waits.
   const saving = rig({state:{capture:unsaved}, answers:{save_capture:() => new Promise(() => {})}});
@@ -456,6 +474,86 @@ test('the trash button clears a live capture at once, keeping the filters for it
   assert.equal(saving.ui.captureClear.title, '저장하는 동안에는 비울 수 없습니다');
   saving.ui.captureClear.fire('click'); await settle();
   assert.equal(saving.calls.some(c => c[0] === 'clear_capture'), false);
+});
+
+test('the trash button clears a stopped capture, which stays stopped until recorded on', async () => {
+  const kept = [], before = {filters:'held', bookmarks:[3]};
+  const stopped = {...unsaved, state:'stopped'};
+  const r = rig({state:{capture:stopped}, answers:{clear_capture:{datasetId:8}, resume_capture:{state:'recording'}, restore_capture:{datasetId:9}},
+    keepInput:(from, notice, ms, action, whole) => {kept.push({from, notice, ms, action, whole}); return () => {};}, holdInput:() => before});
+  r.devices.render();
+  r.ui.captureClear.focus();
+  r.ui.captureClear.fire('click'); await settle();
+  assert.deepEqual(r.calls.filter(c => c[0].endsWith('_capture')), [['clear_capture', {datasetId:7}]]);
+  // The notice says how much went, that recording waits for the user, and
+  // offers to take the rows back.
+  assert.equal(kept[0].notice, '기록한 로그 32행(4.0 KiB)을 비웠습니다. 이어서 기록을 누른 때부터 새로 기록합니다.');
+  assert.equal(kept[0].action.label, '실행 취소');
+  assert.equal(kept[0].whole, null);
+  // While no log is shown, the bar and its focus stay.
+  r.logs.state = {datasetId:null, closed:false, capture:null};
+  r.devices.render();
+  assert.equal(r.ui.captureBar.hidden, false);
+  assert.equal(r.document.activeElement, r.ui.captureClear);
+  r.logs.state = {datasetId:8, closed:false, capture:{...stopped, bytes:0, rows:0, unsaved:false, cleared:Date.UTC(2026, 9, 23, 5, 5)}};
+  r.devices.render();
+  // The emptied log says so, keeps its buttons and focus, and makes
+  // recording on the next step: nothing to clear or save, and opening
+  // another log is no longer the main action.
+  assert.equal(r.ui.captureText.textContent, '기록 중지됨 · 비움 · Pixel 8');
+  assert.match(r.ui.captureState.title, /에 로그를 비웠습니다\. 이어서 기록을 누른 때부터 새로 기록합니다\.$/);
+  assert.equal(r.ui.captureClear.hidden, false);
+  assert.equal(r.ui.captureClear.getAttribute('aria-disabled'), 'true');
+  assert.equal(r.document.activeElement, r.ui.captureClear);
+  assert.equal(r.ui.captureStop.classList.contains('primary'), true);
+  assert.equal(r.ui.openFile.classList.contains('primary'), false);
+  assert.equal(r.ui.captureSave.getAttribute('aria-disabled'), 'true');
+  assert.equal(r.ui.captureSave.title, '아직 저장할 로그가 없습니다');
+  assert.equal(await r.devices.save(), false);
+  assert.equal(r.calls.some(c => c[0] === 'save_capture'), false);
+  // Undo takes the rows back with the input held before the clear.
+  await kept[0].action.run(); await settle();
+  assert.deepEqual(r.calls.filter(c => c[0] === 'restore_capture'), [['restore_capture', {datasetId:8}]]);
+  assert.equal(kept[1].notice, '비운 로그 32행(4.0 KiB)을 되살렸습니다.');
+  assert.equal(kept[1].whole, before);
+  r.logs.state = {datasetId:9, closed:false, capture:stopped};
+  r.devices.render();
+  assert.equal(r.ui.captureStop.classList.contains('primary'), false);
+  assert.equal(r.ui.captureSave.getAttribute('aria-disabled'), 'false');
+  // Recording on takes down the notice and lets the status speak at once.
+  assert.equal(r.ui.captureState.getAttribute('aria-live'), 'off');
+  r.ui.captureStop.fire('click', {detail:1}); await settle();
+  assert.deepEqual(r.calls.filter(c => c[0] === 'resume_capture'), [['resume_capture', {datasetId:9}]]);
+  assert.deepEqual(r.dismissed, [kept[1].notice]);
+  assert.equal(r.ui.captureState.getAttribute('aria-live'), 'polite');
+  // While a resume is in flight, the trash waits too.
+  assert.equal(r.ui.captureClear.getAttribute('aria-disabled'), 'true');
+  r.ui.captureClear.fire('click'); await settle();
+  assert.equal(r.calls.filter(c => c[0] === 'clear_capture').length, 1);
+  // The rows set aside go once the notice has: a timer lets them go.
+  r.timers.forEach(fn => fn()); await settle();
+  assert.deepEqual(r.calls.filter(c => c[0] === 'forget_cleared_capture'), [['forget_cleared_capture', {datasetId:8}]]);
+});
+
+test('a failed clear of a stopped capture shows the log again with the bar and its focus', async () => {
+  const stopped = {...unsaved, state:'stopped'};
+  const r = rig({state:{capture:stopped}, answers:{clear_capture:{datasetId:8}}, keepInput:() => () => {}});
+  r.ui.captureBar.children = [r.ui.captureClear];
+  r.devices.render();
+  r.ui.captureClear.focus();
+  r.ui.captureClear.fire('click'); await settle();
+  r.logs.state = {datasetId:null, closed:false, capture:null};
+  r.devices.render();
+  assert.equal(r.document.activeElement, r.ui.captureClear);
+  // The new log did not open: the old one is shown again.
+  r.logs.state = {datasetId:7, closed:false, capture:stopped};
+  r.devices.render();
+  assert.equal(r.ui.captureBar.hidden, false);
+  // A log closed meanwhile takes the bar with it.
+  r.logs.state = {datasetId:null, closed:false, capture:null};
+  r.devices.render();
+  assert.equal(r.ui.captureBar.hidden, true);
+  assert.equal(r.document.activeElement, r.ui.deviceButton);
 });
 
 test('an app starting while its capture is cleared goes on under the new log', async () => {
@@ -682,7 +780,10 @@ test('a focused bar button that hides hands focus on, and the app menu goes with
   r.ui.captureBar.children = [r.ui.captureSave];
   r.devices.render();
   r.ui.captureClear.focus();
+  // Stopping keeps the trash, and its focus.
   r.devices.render({datasetId:7, closed:false, capture:{...unsaved, state:'stopped'}});
+  assert.equal(r.document.activeElement, r.ui.captureClear, 'a stopped capture keeps its trash');
+  r.devices.render({datasetId:7, closed:false, capture:{...unsaved, state:'failed', error:'Recording stopped at 8 GiB'}});
   assert.equal(r.document.activeElement, r.ui.captureSave, 'the trash button hid; saving stays');
   r.devices.render({datasetId:7, closed:true, capture:unsaved});
   assert.equal(r.document.activeElement, r.ui.deviceButton, 'the bar hid; the device button stays');

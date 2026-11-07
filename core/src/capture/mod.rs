@@ -41,6 +41,7 @@ pub const LIMIT: &str = "Recording stopped at 8 GiB";
 pub const DISK_FULL: &str = "Recording stopped: not enough disk space";
 pub const WRITE_FAILED: &str = "Recording stopped: the capture file could not be written";
 pub const NOT_STOPPED: &str = "Only a stopped device capture can record on";
+pub const NOTHING_TO_RESTORE: &str = "The cleared device log can no longer be restored";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase {
@@ -129,6 +130,22 @@ struct Status {
     /// While waiting: why the device, listed again, cannot be used yet,
     /// such as USB debugging awaiting the user's approval.
     reason: String,
+    /// The rows a cut of the stopped capture set aside, to be restored
+    /// until the capture records again, closes or lets them go.
+    kept: Option<Kept>,
+}
+/// What a capture had before a cut made while stopped.
+struct Kept {
+    slot: Slot,
+    file: File,
+    tail: Vec<u8>,
+    bytes: u64,
+    rows: u64,
+    breaks: Vec<Break>,
+    launches: Vec<Launch>,
+    cleared: Option<i64>,
+    saved: u64,
+    discard: bool,
 }
 type Observer = Arc<dyn Fn(&Capture) + Send + Sync>;
 pub struct Capture {
@@ -286,6 +303,7 @@ impl Capture {
                 launches: vec![],
                 lost: None,
                 reason: String::new(),
+                kept: None,
             }),
             wake: Condvar::new(),
             stop: AtomicBool::new(false),
@@ -340,6 +358,7 @@ impl Capture {
                 launches: vec![],
                 lost: None,
                 reason: String::new(),
+                kept: None,
             }),
             wake: Condvar::new(),
             stop: AtomicBool::new(true),
@@ -396,16 +415,40 @@ impl Capture {
     /// Records into `cut`'s file from now on, as a capture started now
     /// would: the rows so far stay in the file it wrote, whose slot it
     /// returns to be deleted once nothing reads it, and the breaks and app
-    /// starts are cleared. A row being received goes to the new file. A capture left by an
-    /// earlier run writes nothing and returns `cut`'s slot unused.
-    pub fn cut(&self, cut: Cut) -> Slot {
+    /// starts are cleared. A row being received goes to the new file. A
+    /// stopped capture stays stopped, and records into the new file once it
+    /// resumes; its rows so far are set aside for `restore` instead, and no
+    /// file is returned. A capture left by an earlier run writes nothing and
+    /// returns `cut`'s slot unused.
+    pub fn cut(&self, cut: Cut) -> Option<Slot> {
         let Some(writer) = &self.writer else {
-            return cut.slot;
+            return Some(cut.slot);
         };
         let old = {
             let mut w = writer.lock().unwrap();
             let mut s = self.status.lock().unwrap();
-            (w.file, w.bytes, w.rows) = (cut.file, 0, 0);
+            let file = std::mem::replace(&mut w.file, cut.file);
+            let slot = std::mem::replace(&mut s.slot, cut.slot);
+            // Keep the first set of cleared rows: clearing again while still
+            // stopped and empty discards only the empty file.
+            let old = if s.phase == Phase::Stopped && s.kept.is_none() {
+                s.kept = Some(Kept {
+                    slot,
+                    file,
+                    tail: std::mem::take(&mut w.tail),
+                    bytes: w.bytes,
+                    rows: w.rows,
+                    breaks: std::mem::take(&mut s.breaks),
+                    launches: std::mem::take(&mut s.launches),
+                    cleared: s.cleared,
+                    saved: self.saved.load(Ordering::Acquire),
+                    discard: self.discard.load(Ordering::Acquire),
+                });
+                None
+            } else {
+                Some(slot)
+            };
+            (w.bytes, w.rows) = (0, 0);
             (s.bytes, s.rows) = (0, 0);
             s.breaks.clear();
             s.launches.clear();
@@ -414,10 +457,51 @@ impl Capture {
             s.fresh |= s.phase == Phase::Waiting;
             self.saved.store(0, Ordering::Release);
             self.discard.store(false, Ordering::Release);
-            std::mem::replace(&mut s.slot, cut.slot)
+            old
         };
         self.notify();
         old
+    }
+    /// The file of the rows a cut of the stopped capture set aside.
+    pub fn kept_path(&self) -> Option<PathBuf> {
+        let s = self.status.lock().unwrap();
+        s.kept.as_ref().map(|k| k.slot.path.clone())
+    }
+    /// Takes back the rows a cut of the stopped capture set aside: the
+    /// capture writes their file again, with their breaks, app starts and
+    /// saves. Returns the file the cut made, to be deleted once nothing
+    /// reads it. Fails once the capture recorded again or let them go.
+    pub fn restore(&self) -> io::Result<Slot> {
+        let writer = self
+            .writer
+            .as_ref()
+            .ok_or_else(|| error(NOTHING_TO_RESTORE))?;
+        let empty = {
+            let mut w = writer.lock().unwrap();
+            let mut s = self.status.lock().unwrap();
+            if s.phase != Phase::Stopped || s.bytes > 0 {
+                return Err(error(NOTHING_TO_RESTORE));
+            }
+            let k = s.kept.take().ok_or_else(|| error(NOTHING_TO_RESTORE))?;
+            (w.file, w.tail, w.bytes, w.rows) = (k.file, k.tail, k.bytes, k.rows);
+            (s.bytes, s.rows) = (k.bytes, k.rows);
+            (s.breaks, s.launches, s.cleared) = (k.breaks, k.launches, k.cleared);
+            // A save of the cut file must not count for these rows.
+            s.cuts += 1;
+            self.saved.store(k.saved, Ordering::Release);
+            self.discard.store(k.discard, Ordering::Release);
+            std::mem::replace(&mut s.slot, k.slot)
+        };
+        self.notify();
+        Ok(empty)
+    }
+    /// Deletes the rows a cut of the stopped capture set aside.
+    pub fn forget_kept(&self) {
+        let kept = self.status.lock().unwrap().kept.take();
+        if let Some(k) = kept {
+            drop(k.file);
+            let _ = k.slot.remove();
+        }
     }
     /// Marks the file to be deleted when the capture closes, or kept.
     pub fn discard(&self, on: bool) {
@@ -429,6 +513,7 @@ impl Capture {
     pub fn close(&self) {
         self.closed.store(true, Ordering::Release);
         self.stop();
+        self.forget_kept();
         if self.discard.load(Ordering::Acquire) || !self.unsaved() {
             let _ = self.status.lock().unwrap().slot.remove();
         }
@@ -444,6 +529,13 @@ impl Capture {
     /// Whether rows may still arrive.
     pub fn live(&self) -> bool {
         matches!(self.phase(), Phase::Recording | Phase::Waiting)
+    }
+    /// Whether a clear may cut it: it records, or the user stopped it and
+    /// it can record on. One that failed or that an earlier run left cannot.
+    pub fn clearable(&self) -> bool {
+        self.writer.is_some()
+            && !self.closed.load(Ordering::Acquire)
+            && self.phase() != Phase::Failed
     }
     pub fn bytes(&self) -> u64 {
         self.status.lock().unwrap().bytes
@@ -565,6 +657,8 @@ impl Capture {
             // A device found ready records at once; the page then never
             // shows the capture waiting for it.
             let back = self.attempt(&mut HashMap::new())?;
+            // Recording on keeps the clear.
+            self.forget_kept();
             self.stop.store(false, Ordering::Release);
             let stream = match back {
                 Some(back) => Some(self.returned(back)),

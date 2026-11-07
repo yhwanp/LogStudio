@@ -9,7 +9,7 @@
 // them; clearing them records into a new file from then on. One button stops
 // a capture and records on into the same log from the moment it is pressed
 // again.
-import {formatSize, describeLogError} from './describe.js';
+import {formatSize, formatNumber, describeLogError} from './describe.js';
 import {textSpan, writeClipboard, focusOwner} from './dom.js';
 
 const ORIGINS = {chosen:'직접 지정', sdk:'ANDROID_HOME', studio:'Android Studio', path:'PATH', homebrew:'Homebrew'};
@@ -203,10 +203,18 @@ export function describeCapture(capture) {
       if (capture.recovered) {
         return {tone:'stopped', text:`남은 기기 로그${kept}`, title:`이전 실행이 기록을 마치지 못하고 남긴 로그입니다(${size}).`};
       }
+      // Emptied while stopped, it waits for the moment the user records on.
+      if (!(capture.bytes > 0) && Number.isSafeInteger(capture.cleared)) {
+        return {
+          tone:'stopped',
+          text:`기록 중지됨 · 비움 · ${device}`,
+          title:`${clockTime(capture.cleared)}에 로그를 비웠습니다. 이어서 기록을 누른 때부터 새로 기록합니다.`,
+        };
+      }
       return {
         tone:'stopped',
         text:`기록 중지됨${kept} · ${device}`,
-        title:`기록을 멈췄습니다. ${STOPPED_ROWS} ${capture.unsaved ? `지금까지 기록한 로그(${size})를 저장할 수 있습니다.` : `기록한 로그(${size})를 저장했습니다.`}`,
+        title:`기록을 멈췄습니다. ${STOPPED_ROWS} ${!(capture.bytes > 0) ? '아직 기록한 로그가 없습니다.' : capture.unsaved ? `지금까지 기록한 로그(${size})를 저장할 수 있습니다.` : `기록한 로그(${size})를 저장했습니다.`}`,
       };
   }
 }
@@ -227,8 +235,13 @@ export function breakLabel(breaks, after, row) {
   if (!between.length) return '';
   // Each kind reads as one part, in the order its first mark came.
   const parts = [], away = between.filter(b => b.kind === 'away'), started = between.filter(b => b.kind === 'launch');
-  const cleared = between.find(b => b.kind === 'clear'), stops = between.filter(b => b.kind === 'stop');
-  if (cleared) parts.push({row:cleared.row, text:`${clockTime(cleared.at)} 로그 비움`});
+  const cleared = between.find(b => b.kind === 'clear');
+  // A log cleared while stopped starts where it recorded on: the stop
+  // before the clear names no rows of this log.
+  const resumed = cleared && between.find(b => b.kind === 'stop' && b.row === cleared.row);
+  const stops = between.filter(b => b.kind === 'stop' && b !== resumed);
+  if (resumed) parts.push({row:cleared.row, text:`${clockTime(cleared.at)} 로그 비움 → ${clockTime(resumed.resumed)} 이어서 기록${resumed.reboot ? ' · 기기 재부팅' : ''}`});
+  else if (cleared) parts.push({row:cleared.row, text:`${clockTime(cleared.at)} 로그 비움`});
   if (stops.length) {
     // Rows the device logged while stopped were never recorded.
     const first = stops[0], last = stops[stops.length - 1], reboot = stops.some(b => b.reboot) ? ' · 기기 재부팅' : '';
@@ -262,11 +275,17 @@ export function installCommand(platform) {
 export const PLATFORM_TOOLS_URL = 'https://developer.android.com/tools/releases/platform-tools';
 // Native code's word for a save the user stopped.
 const SAVE_CANCELLED = 'Save cancelled';
-// What the trash button does, and the notice once it has, which stays as
-// long as a notice with an action: the rows it names are gone.
+// Tooltips and notices for clearing a capture and undoing a stopped clear.
 const CLEAR_HINT = '지금까지 기록한 로그를 비우고 계속 기록합니다';
-export const clearedNotice = bytes => `기록한 로그(${formatSize(bytes)})를 비웠습니다. 지금부터 들어오는 로그를 기록합니다.`;
+const CLEAR_STOPPED_HINT = '지금까지 기록한 로그를 비웁니다. 이어서 기록을 누른 때부터 새로 기록합니다';
+const clearedRows = capture => `기록한 로그 ${formatNumber(capture.rows)}행(${formatSize(capture.bytes)})`;
+export const clearedNotice = (capture, stopped = false) => `${clearedRows(capture)}을 비웠습니다. ${stopped ? '이어서 기록을 누른 때부터 새로 기록합니다.' : '지금부터 들어오는 로그를 기록합니다.'}`;
+export const restoredNotice = capture => `비운 로그 ${formatNumber(capture.rows)}행(${formatSize(capture.bytes)})을 되살렸습니다.`;
 const CLEARED_MS = 6000;
+// How long after a stopped clear its rows are kept to be taken back: the
+// notice's time, and a little more for one that showed late.
+const RESTORABLE_MS = CLEARED_MS + 1500;
+const UNDO = '실행 취소';
 // A second press of a double click, after a clear that ended at once, is
 // not a second clear.
 const CLEAR_REPEAT_MS = 600;
@@ -329,7 +348,7 @@ export function mountCaptureDialog({document = globalThis.document} = {}) {
   return {ask, dismiss:() => close('cancel'), get isOpen() {return dialog.open;}};
 }
 
-export function mountDevices({ui, document, window, native, menu, logs, isGone, report, unreport = () => {}, notify, keepInput = () => () => {}}) {
+export function mountDevices({ui, document, window, native, menu, logs, isGone, report, unreport = () => {}, notify, dismiss = () => {}, keepInput = () => () => {}, holdInput = () => null}) {
   const invoke = (command, args) => native.core.invoke(command, args);
   const fail = error => report(String(error).slice(0, 500));
   const $ = id => document.getElementById(id);
@@ -349,6 +368,12 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
   // A stop or resume press still in flight. It lasts until the bar shows
   // the new state, so the button stays unavailable while its name is old.
   let toggling = null;
+  // A clear or undo that swaps the shown log. The bar stays, with its focus,
+  // until the new log's capture shows.
+  let swap = null;
+  // `quiet` turns the bar's live status back on after a clear's notice has
+  // been read; `cleared` is that notice, closed when recording resumes.
+  let quiet = null, cleared = '';
 
   // The device menu opens at once and fills in when adb and the devices
   // answer. `shownMenu` is the version of the menu this module last showed:
@@ -559,7 +584,8 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
   // Saves a copy of the rows so far; false when the user cancelled. While it
   // copies, 저장 becomes 저장 취소: a capture can be gigabytes.
   async function save(datasetId = logs.getState().datasetId) {
-    if (saving || clearing || !logs.getState().capture) return false;
+    // A log with no rows has nothing to save, such as one just cleared.
+    if (saving || clearing || !(logs.getState().capture?.bytes > 0)) return false;
     saving = true;
     render();
     try {
@@ -583,35 +609,66 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
     if (!(capture?.bytes > 0)) return '아직 비울 로그가 없습니다';
     return '';
   }
-  // Discards the rows so far at once, unsaved or not: the capture records
-  // into a new file from now on, shown as a new log that keeps the filters
-  // and search. Bookmarks and marks went with the rows. The bar's status
-  // stays quiet meanwhile: the notice says what happened, and the status
-  // turning unsaved again as rows arrive is no news.
+  // Discards the rows so far, saved or not, without asking. The capture
+  // records into a new file, shown as a new log that keeps the filters and
+  // search; bookmarks and marks go with the rows. A stopped capture stays
+  // stopped and records from its resume; its notice offers an undo until
+  // RESTORABLE_MS passes or recording resumes. The bar's live status is
+  // off while the notice is read, so the two do not talk over each other.
   async function clear() {
     const {datasetId, capture} = logs.getState();
-    if (clearing || unclearable(capture) || Date.now() - clearedAt < CLEAR_REPEAT_MS || isGone() || !Number.isSafeInteger(datasetId)) return;
+    if (clearing || toggling || unclearable(capture) || Date.now() - clearedAt < CLEAR_REPEAT_MS || isGone() || !Number.isSafeInteger(datasetId)) return;
+    const stopped = capture.state === 'stopped', notice = clearedNotice(capture, stopped);
+    const before = stopped ? holdInput() : null;
+    const undo = stopped ? {label:UNDO, run:() => restore(capture, before)} : null;
+    const status = await replace(datasetId, 'clear_capture', notice, undo);
+    if (!status) return;
+    clearedAt = Date.now();
+    const job = starting.get(datasetId);
+    if (job && Number.isSafeInteger(status.datasetId)) {
+      starting.delete(datasetId);
+      job.datasetId = status.datasetId;
+      starting.set(job.datasetId, job);
+    }
+    if (stopped && Number.isSafeInteger(status.datasetId)) {
+      window.setTimeout(() => void invoke('forget_cleared_capture', {datasetId:status.datasetId}).catch(() => {}), RESTORABLE_MS);
+    }
+  }
+  // Takes back the rows a clear of the stopped capture set aside, as the
+  // log they were, with its bookmarks and places.
+  async function restore(was, before) {
+    const {datasetId, capture} = logs.getState();
+    if (clearing || toggling || capture?.state !== 'stopped' || isGone() || !Number.isSafeInteger(datasetId)) return;
+    await replace(datasetId, 'restore_capture', restoredNotice(was), null, before);
+  }
+  // Replaces the shown log by a clear or its undoing, keeping the input for
+  // the next log, the bar and its focus. Returns the new log's status, or
+  // null when it failed and the log stays.
+  async function replace(datasetId, command, notice, action, whole = null) {
     clearing = true;
+    swap = {from:datasetId, busy:true};
+    cleared = notice;
     render();
-    const forget = keepInput(datasetId, clearedNotice(capture.bytes), CLEARED_MS);
+    const forget = keepInput(datasetId, notice, CLEARED_MS, action, whole);
     ui.captureState.setAttribute('aria-live', 'off');
-    const speak = () => ui.captureState.setAttribute('aria-live', 'polite');
+    const speak = () => {
+      if (quiet === speak) quiet = null;
+      ui.captureState.setAttribute('aria-live', 'polite');
+    };
+    quiet = speak;
     try {
-      const status = await invoke('clear_capture', {datasetId});
-      const job = starting.get(datasetId);
-      if (job && Number.isSafeInteger(status?.datasetId)) {
-        starting.delete(datasetId);
-        job.datasetId = status.datasetId;
-        starting.set(job.datasetId, job);
-      }
+      const status = await invoke(command, {datasetId});
+      if (swap?.from === datasetId) swap.busy = false;
       window.setTimeout(speak, CLEARED_MS);
+      return status ?? {};
     } catch (error) {
+      if (swap?.from === datasetId) swap = null;
       speak();
       forget();
       fail(error);
+      return null;
     } finally {
       clearing = false;
-      clearedAt = Date.now();
       render();
     }
   }
@@ -627,6 +684,11 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
     const {datasetId, capture} = logs.getState();
     if (clearing || toggling || event.detail > 1 || !capture || isGone()) return;
     const press = toggling = {datasetId, from:capture.state};
+    // Recording on is news a clear's notice must not hide or contradict.
+    if (capture.state === 'stopped') {
+      quiet?.();
+      if (cleared) dismiss(cleared);
+    }
     render();
     try {
       await invoke(capture.state === 'stopped' ? 'resume_capture' : 'stop_capture', {datasetId});
@@ -648,6 +710,17 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
     const capture = state.datasetId !== null && !state.closed ? state.capture : null, words = describeCapture(capture);
     if (toggling && (state.datasetId !== toggling.datasetId || capture?.state !== toggling.from)) toggling = null;
     const unsaved = !!words && !!capture.unsaved && capture.bytes > 0;
+    // The log a clear replaces leaves the page without a log for a moment;
+    // the bar and its focus wait for the new log's capture, or for the old
+    // log shown again when the new one fails to open.
+    if (swap) {
+      if (!capture) swap.gone = true;
+      else if (state.datasetId !== swap.from || (swap.gone && !swap.busy)) swap = null;
+    }
+    if (!words && swap && !state.closed) return;
+    // A stopped capture with no rows waits to record on: that is the next
+    // step, not opening another log.
+    const armed = !!words && capture.state === 'stopped' && !capture.recovered && !(capture.bytes > 0);
     // A focused control about to hide hands focus to one that stays. The
     // app menu goes with its button, or with the bar: its focus goes back
     // to the button first, to be handed on from there.
@@ -657,7 +730,7 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
     if (!words) handOff(ui.captureBar, []);
     ui.captureBar.hidden = !words;
     ui.deviceButton.disabled = busy;
-    ui.openFile.classList.toggle('primary', !unsaved);
+    ui.openFile.classList.toggle('primary', !unsaved && !armed);
     if (!words) return;
     ui.captureBar.dataset.tone = words.tone;
     // The status region announces changes, the tooltip's words with them
@@ -675,20 +748,16 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
     // A capture the user stopped records on; one that failed or that an
     // earlier run left does not.
     const resumable = capture.state === 'stopped' && !capture.recovered;
-    if (!live) handOff(ui.captureClear, [ui.captureSave]);
-    if (!live && !resumable) handOff(ui.captureStop, [ui.captureSave]);
+    if (!live && !resumable) for (const button of [ui.captureClear, ui.captureStop]) handOff(button, [ui.captureSave]);
     if (appHidden) handOff(ui.captureApp, [ui.captureSave]);
     // The bar's buttons keep focus while they cannot act, so they are only
     // marked unavailable, and the trash button says why. A stopped
-    // capture's trash keeps its place unseen, so the stop button stays
-    // under the pointer.
+    // capture is cleared too, to record on from a moment the user picks.
     ui.captureClear.hidden = !live && !resumable;
-    ui.captureClear.classList.toggle('place-only', !live);
     ui.captureClear.disabled = busy;
     const why = unclearable(capture);
-    ui.captureClear.setAttribute('aria-disabled', clearing || why ? 'true' : 'false');
-    // Rows no save holds cannot come back.
-    const hint = why || (unsaved ? `${CLEAR_HINT}. 저장하지 않은 로그는 되살릴 수 없습니다` : CLEAR_HINT);
+    ui.captureClear.setAttribute('aria-disabled', clearing || toggling || why ? 'true' : 'false');
+    const hint = why || (!live ? `${CLEAR_STOPPED_HINT}. 비운 직후에는 알림에서 ${UNDO}할 수 있습니다` : unsaved ? `${CLEAR_HINT}. 저장하지 않은 로그는 되살릴 수 없습니다` : CLEAR_HINT);
     if (ui.captureClear.title !== hint) {
       ui.captureClear.title = hint;
       ui.captureClearHint.textContent = hint;
@@ -696,6 +765,7 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
     ui.captureStop.hidden = !live && !resumable;
     ui.captureStop.disabled = busy;
     ui.captureStop.setAttribute('aria-disabled', clearing || toggling ? 'true' : 'false');
+    ui.captureStop.classList.toggle('primary', armed);
     // It is as wide as its other name too, so it does not move either.
     const [now, other] = live ? [STOP, RESUME] : [RESUME, STOP];
     ui.captureStopName.textContent = now.name;
@@ -704,7 +774,8 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
       ui.captureStop.title = now.hint;
       ui.captureStopHint.textContent = now.hint;
     }
-    ui.captureSave.setAttribute('aria-disabled', clearing ? 'true' : 'false');
+    const empty = !(capture.bytes > 0);
+    ui.captureSave.setAttribute('aria-disabled', clearing || empty ? 'true' : 'false');
     // An app starts on an iPhone or iPad only while it is being recorded.
     ui.captureApp.hidden = appHidden;
     ui.captureApp.disabled = busy;
@@ -715,6 +786,7 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
     ui.captureSave.classList.toggle('primary', unsaved && !saving);
     ui.captureSave.textContent = saving ? '저장 취소' : '저장';
     if (saving) ui.captureSave.title = '저장을 멈춥니다. 저장하던 파일은 남기지 않습니다';
+    else if (empty) ui.captureSave.title = '아직 저장할 로그가 없습니다';
     else if (capture.unsaved) ui.captureSave.title = `지금까지 기록한 로그를 원본 그대로 파일로 저장합니다 (${mod}S)`;
     else ui.captureSave.title = `기록한 로그를 이미 저장했습니다 · 다시 저장할 수 있습니다 (${mod}S)`;
   }

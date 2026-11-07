@@ -45,6 +45,11 @@ NEAR_END = "const r=[...document.querySelectorAll('#logsRows .log-row')];return 
 # The last row's line while the logs pane shows its end, else false.
 END = ("const v=document.getElementById('logsViewport'),r=[...document.querySelectorAll('#logsRows .log-row')].at(-1);"
        "return !!r&&r.getBoundingClientRect().bottom<=v.getBoundingClientRect().bottom+1&&Number(r.dataset.lineNumber)")
+# The first logs row with a break label inside it: whether its last cell
+# ends before the label (the label is drawn, so its room is the padding).
+ROOM = ("""const r=document.querySelector('#logsRows .log-row.capture-break-start');if(!r)return null;"""
+        """const c=r.lastElementChild,pad=parseFloat(getComputedStyle(c).paddingRight),room=parseFloat(r.style.getPropertyValue('--break-room'));"""
+        """return {label:r.dataset.captureBreak,pad,room,clear:room>60&&Math.abs(pad-room)<1};""")
 # Whether the capture state's words end in an ellipsis instead of spilling
 # onto the file name beside them.
 FITS = """const t=document.getElementById('captureText'),info=document.querySelector('.file-info'),s=document.getElementById('captureState');
@@ -312,17 +317,23 @@ def run(ctx):
         recorded = lambda: [p for p in captures.glob('logcat-*.log') if p != left]
         before = recorded()
         last = before[0].read_text(encoding='utf-8').splitlines()[-1][:18] if len(before) == 1 else ''
-        app.click('captureClear')
+        # Pressed from the keyboard, where focus matters: the log swap must
+        # not move it. (A mouse press in WKWebView does not focus a button.)
+        app.activate('captureClear')
         # The filter may hide the first row; the next row shown takes its mark.
         s = until(lambda v: v['bar'] and v['bar']['tone'] == 'live' and v['following'] == 'true' and not v['dialog']
                   and len(v['breaks']) == 1 and '로그 비움' in v['breaks'][0]['label'], 'cleared')
         toast = app.wait(lambda: js("const t=document.getElementById('toast');return !t.hidden&&t.textContent"), what='clear notice')
-        check('clearing asks nothing and says how much went',
-              re.fullmatch(r'기록한 로그\([0-9.,]+ (B|KiB|MiB)\)를 비웠습니다\. 지금부터 들어오는 로그를 기록합니다\.', toast or '') is not None, toast)
+        check('clearing asks nothing and says how many rows went',
+              re.fullmatch(r'기록한 로그 [1-9][0-9,]*행\([0-9.,]+ (B|KiB|MiB)\)을 비웠습니다\. 지금부터 들어오는 로그를 기록합니다\.', toast or '') is not None, toast)
+        check('clearing keeps focus on the trash button', s['bar']['focus'] == 'captureClear', s['bar'])
         # The list's first row has no row above, so its label sits inside it.
         inside = js("const r=document.querySelector('#logsRows .log-row.capture-break');return !!r&&r.classList.contains('capture-break-start')&&getComputedStyle(r,'::after').right")
         check('the first row of the cleared log is marked inside it with when it was cleared',
               re.fullmatch(r'\d\d:\d\d:\d\d 로그 비움', s['breaks'][0]['label']) is not None and inside == '10px', {'breaks': s['breaks'], 'inside': inside})
+        # Its last cell ends before the label, so no log text hides under it.
+        room = js(ROOM)
+        check('the first row ends its text before its label', room and room['clear'], room)
         after = app.wait(lambda: (lambda f: len(f) == 1 and f[0] not in before and f[0].stat().st_size > 0 and f)(recorded()), what='new capture file')
         first = after[0].read_text(encoding='utf-8').splitlines()[0][:18]
         check('the rows so far go with their file, and the new file holds only rows from then on',
@@ -366,6 +377,60 @@ def run(ctx):
         app.capture('07e-recorded-on')
         app.click('captureStop')
         until(lambda v: v['bar'] and v['bar']['tone'] == 'stopped' and v['bar']['stopLabel'] == '이어서 기록', 'stopped again')
+        # A stopped capture is cleared too and stays stopped, so recording on
+        # starts at the moment the user picks.
+        trash = lambda: js("const b=document.getElementById('captureClear');return {hidden:b.hidden,visible:getComputedStyle(b).visibility,busy:b.getAttribute('aria-disabled'),title:b.title}")
+        shown = trash()
+        check('a stopped capture shows the trash button, saying recording stays stopped and the clear can be undone',
+              shown == {'hidden': False, 'visible': 'visible', 'busy': 'false',
+                        'title': '지금까지 기록한 로그를 비웁니다. 이어서 기록을 누른 때부터 새로 기록합니다. 비운 직후에는 알림에서 실행 취소할 수 있습니다'}, shown)
+        app.capture('07e1-stopped-clear-hover', hover='captureClear')
+        before = recorded()
+        rows = js(STATE)['count']
+        app.activate('captureClear')
+        s = until(lambda v: v['bar'] and v['bar']['text'] == '기록 중지됨 · 비움 · Pixel 8' and not js("return document.querySelectorAll('#logsRows .log-row').length"), 'cleared while stopped')
+        toast = app.wait(lambda: js("const t=document.getElementById('toast');return !t.hidden&&t.textContent"), what='clear notice while stopped')
+        check('clearing a stopped capture keeps it stopped, says recording starts on 이어서 기록 and offers undo',
+              s['bar']['tone'] == 'stopped' and s['bar']['stopLabel'] == '이어서 기록'
+              and re.fullmatch(r'기록한 로그 [1-9][0-9,]*행\([0-9.,]+ (B|KiB|MiB)\)을 비웠습니다\. 이어서 기록을 누른 때부터 새로 기록합니다\.실행 취소', toast or '') is not None,
+              {'bar': s['bar'], 'toast': toast})
+        empty = trash()
+        check('the emptied log keeps its trash and focus, unavailable until rows come',
+              empty['hidden'] is False and empty['busy'] == 'true' and empty['title'] == '아직 비울 로그가 없습니다' and s['bar']['focus'] == 'captureClear', {'trash': empty, 'bar': s['bar']})
+        armed = js("return {stop:document.getElementById('captureStop').classList.contains('primary'),open:document.getElementById('openFile').classList.contains('primary'),"
+                   "save:document.getElementById('captureSave').getAttribute('aria-disabled'),saveTitle:document.getElementById('captureSave').title,range:document.getElementById('logsRange').textContent}")
+        check('the emptied log makes recording on the main action, with nothing to save and no filter blamed',
+              armed == {'stop': True, 'open': False, 'save': 'true', 'saveTitle': '아직 저장할 로그가 없습니다', 'range': '기록한 로그가 없습니다'}, armed)
+        check('the rows before are kept while the clear can be undone', len(before) == 1 and before[0].exists(), [p.name for p in before])
+        app.capture('07e2-cleared-stopped')
+        # Undo brings the rows back as the log they were.
+        cleared_file = [p for p in recorded() if p not in before]
+        js("document.querySelector('#toast .toast-action').click();return true;")
+        s = until(lambda v: v['bar'] and v['bar']['text'] == '기록 중지됨 · 저장 안 됨 · Pixel 8' and v['count'] == rows, 'restored')
+        check('undoing the clear brings back its rows and file, and drops the cleared file',
+              before[0].exists() and app.wait(lambda: all(not p.exists() for p in cleared_file), what='cleared file removed'),
+              {'count': s['count'], 'rows': rows, 'cleared': [p.name for p in cleared_file]})
+        restored = app.wait(lambda: js("const t=document.getElementById('toast');return !t.hidden&&t.textContent"), what='restore notice')
+        check('the undo says what came back', re.fullmatch(r'비운 로그 [1-9][0-9,]*행\([0-9.,]+ (B|KiB|MiB)\)을 되살렸습니다\.', restored or '') is not None, restored)
+        app.capture('07e3-restored')
+        # Cleared again, recording on takes the notice down at once and lets
+        # the rows set aside go.
+        app.activate('captureClear')
+        until(lambda v: v['bar'] and v['bar']['text'] == '기록 중지됨 · 비움 · Pixel 8', 'cleared again while stopped')
+        app.wait(lambda: js("const t=document.getElementById('toast');return !t.hidden&&t.textContent.includes('비웠습니다')"), what='clear notice again')
+        app.click('captureStop')
+        s = until(lambda v: v['bar'] and v['bar']['tone'] == 'live' and any('로그 비움' in b['label'] for b in v['breaks']), 'recorded on after clearing')
+        mark = next(b['label'] for b in s['breaks'] if '로그 비움' in b['label'])
+        check('recording on after clearing marks the first row with both moments',
+              re.fullmatch(r'\d\d:\d\d:\d\d 로그 비움 → \d\d:\d\d:\d\d 이어서 기록', mark) is not None, mark)
+        gone = js("const t=document.getElementById('toast');return t.hidden||!t.textContent.includes('비웠습니다')")
+        check('recording on takes down the clear notice and lets the rows set aside go',
+              gone and app.wait(lambda: not before[0].exists(), what='rows set aside removed'), {'toastGone': gone})
+        room = js(ROOM)
+        check('the longer first-row label leaves the row text clear', room and room['clear'], room)
+        app.capture('07e4-recorded-after-clear')
+        app.click('captureStop')
+        until(lambda v: v['bar'] and v['bar']['tone'] == 'stopped' and v['bar']['stopLabel'] == '이어서 기록', 'stopped after recording on')
         # Recording on without the device waits for it, and does not say it
         # was cut off then.
         js(QA, 'unplug')

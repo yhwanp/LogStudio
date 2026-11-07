@@ -16,8 +16,10 @@ use source::{error, Source};
 use std::{
     io,
     path::Path,
-    sync::{atomic::AtomicBool, Arc, Mutex},
+    sync::{atomic::AtomicBool, Arc, Condvar, Mutex},
 };
+/// The shown log holds no capture a clear can cut.
+pub const NOTHING_TO_CLEAR: &str = "No device capture to clear";
 #[derive(Default)]
 struct State {
     active: Option<Arc<Dataset>>,
@@ -29,8 +31,10 @@ struct State {
     /// being cleared is listed under both its datasets.
     captures: Vec<(u64, Arc<Capture>)>,
     /// Captures being cleared: the dataset that opens the new file, the
-    /// dataset that shows the rows so far, and the new file.
-    clears: Vec<(u64, u64, Cut)>,
+    /// dataset that shows the rows so far, and the new file. Without a new
+    /// file, the dataset opens the rows a clear of the stopped capture set
+    /// aside, to take them back.
+    clears: Vec<(u64, u64, Option<Cut>)>,
 }
 /// Receives every engine notification.
 type Observer = Arc<dyn Fn(Value) + Send + Sync>;
@@ -38,6 +42,10 @@ pub struct Engine {
     state: Mutex<State>,
     open_gate: Mutex<()>,
     notify: Mutex<Option<Observer>>,
+    /// Held while a clear, or its undoing, switches its capture's file.
+    cutting: Mutex<()>,
+    /// Signalled when a pending clear is made or dropped.
+    cut_made: Condvar,
 }
 impl Default for Engine {
     fn default() -> Self {
@@ -45,6 +53,8 @@ impl Default for Engine {
             state: Mutex::new(State::default()),
             open_gate: Mutex::new(()),
             notify: Mutex::new(None),
+            cutting: Mutex::new(()),
+            cut_made: Condvar::new(),
         }
     }
 }
@@ -307,16 +317,17 @@ impl Engine {
             engine.emit(json!({"status":"capture","datasetId":id,"capture":c.json()}));
         });
     }
-    /// Clears the recording capture that the shown dataset `from` holds:
-    /// opens `cut`'s empty file as dataset `id`, and once that opens the
-    /// capture records into it and `from` closes with the rows so far. If
-    /// it does not open, the capture goes on in its file.
+    /// Clears the capture that the shown dataset `from` holds, recording or
+    /// stopped by the user: opens `cut`'s empty file as dataset `id`, and
+    /// once that opens the capture records into it, at once or from its
+    /// resume, and `from` closes with the rows so far. If it does not open,
+    /// the capture goes on in its file.
     pub fn clear_capture(self: &Arc<Self>, from: u64, id: u64, cut: Cut) -> io::Result<Value> {
         let capture = match self.shown_capture() {
-            Some((shown, c)) if shown == from && c.live() => c,
+            Some((shown, c)) if shown == from && c.clearable() => c,
             _ => {
                 cut.remove();
-                return Err(error("No device capture is recording"));
+                return Err(error(NOTHING_TO_CLEAR));
             }
         };
         let source = match Source::granted(cut.path()) {
@@ -329,7 +340,7 @@ impl Engine {
         {
             let mut s = self.state.lock().unwrap();
             s.captures.push((id, capture));
-            s.clears.push((id, from, cut));
+            s.clears.push((id, from, Some(cut)));
         }
         let opened = self.install(id, source);
         if opened.is_err() {
@@ -343,6 +354,32 @@ impl Engine {
         }
         opened
     }
+    /// Undoes the last clear of the stopped capture shown as dataset `from`:
+    /// opens the set-aside file as dataset `id`, then switches the capture
+    /// back to it and closes `from`. If the file does not open, the clear
+    /// stays.
+    pub fn restore_capture(self: &Arc<Self>, from: u64, id: u64) -> io::Result<Value> {
+        let (capture, path) = match self.shown_capture() {
+            Some((shown, c)) if shown == from && c.phase() == capture::Phase::Stopped => {
+                match c.kept_path() {
+                    Some(path) => (c, path),
+                    None => return Err(error(capture::NOTHING_TO_RESTORE)),
+                }
+            }
+            _ => return Err(error(capture::NOTHING_TO_RESTORE)),
+        };
+        let source = Source::granted(&path)?;
+        {
+            let mut s = self.state.lock().unwrap();
+            s.captures.push((id, capture));
+            s.clears.push((id, from, None));
+        }
+        let opened = self.install(id, source);
+        if opened.is_err() {
+            self.forget(id);
+        }
+        opened
+    }
     /// The dataset that `id` replaces while a cleared capture opens.
     pub fn cleared_from(&self, id: u64) -> Option<u64> {
         let s = self.state.lock().unwrap();
@@ -351,20 +388,29 @@ impl Engine {
             .find(|(to, _, _)| *to == id)
             .map(|(_, from, _)| *from)
     }
-    /// Makes the clear that dataset `d` opened for: its capture records
-    /// into `d`'s file from now on. Returns the file of the rows before.
+    /// Makes the clear, or its undoing, that dataset `d` opened for: its
+    /// capture writes `d`'s file from now on. Returns the file to delete
+    /// once nothing reads it.
     fn cut(self: &Arc<Self>, d: &Arc<Dataset>) -> Option<capture::store::Slot> {
+        let _cutting = self.cutting.lock().unwrap();
         let cut = {
             let mut s = self.state.lock().unwrap();
             let k = s.clears.iter().position(|(id, _, _)| *id == d.id)?;
-            s.clears.remove(k).2
+            let cut = s.clears.remove(k).2;
+            self.cut_made.notify_all();
+            cut
         };
         let Some(c) = self.capture(d.id) else {
-            cut.remove();
-            return None;
+            return cut.and_then(|cut| {
+                cut.remove();
+                None
+            });
         };
         self.watch(d.id, &c);
-        Some(c.cut(cut))
+        match cut {
+            Some(cut) => c.cut(cut),
+            None => c.restore().ok(),
+        }
     }
     /// Drops dataset `id`'s capture and pending clear; the capture is
     /// returned unless another dataset still shows it.
@@ -375,7 +421,23 @@ impl Engine {
             .map(|k| s.captures.remove(k).1)
             .filter(|c| !s.captures.iter().any(|(_, o)| Arc::ptr_eq(o, c)));
         let k = s.clears.iter().position(|(d, _, _)| *d == id);
-        (capture, k.map(|k| s.clears.remove(k).2))
+        let cut = k.and_then(|k| s.clears.remove(k).2);
+        if k.is_some() {
+            self.cut_made.notify_all();
+        }
+        (capture, cut)
+    }
+    /// Waits until a clear, or its undoing, that dataset `id` opens for is
+    /// made or dropped, and no capture is switching its file.
+    fn wait_for_cut(&self, id: u64) {
+        let s = self.state.lock().unwrap();
+        let s = self
+            .cut_made
+            .wait_while(s, |s| s.clears.iter().any(|(to, _, _)| *to == id))
+            .unwrap();
+        drop(s);
+        // `cut` takes the clear from the list before it switches the file.
+        drop(self.cutting.lock().unwrap());
     }
     /// The dataset the window shows, for app extensions that read its rows
     /// (`Dataset::read_blocks`): the log being opened from the moment it
@@ -407,6 +469,9 @@ impl Engine {
     /// Records again into the stopped capture that the shown dataset `id`
     /// holds, which then follows its new rows.
     pub fn resume_capture(&self, id: u64) -> io::Result<Value> {
+        // A clear of this log is made once its file opened. Recording on
+        // before then would write rows into the file the clear discards.
+        self.wait_for_cut(id);
         let (d, c) = {
             let s = self.state.lock().unwrap();
             let d = s.active.clone().filter(|d| d.id == id);
