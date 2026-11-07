@@ -1,6 +1,7 @@
 """Time bounds: inclusive date+time bounds, malformed and inverted bounds,
 the error moving to the banner when the panel closes, ranges over midnight,
-the pending note for invalid input, and the row menu's start time."""
+the pending note for invalid input, and the row menu's times, which narrow
+the rows shown: a start and an end, or a selection, make one range."""
 import time
 
 import fixtures
@@ -39,11 +40,35 @@ def run(ctx):
         app.wait_count(3000)
         js("document.body.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));return true;")
 
-        app.click_row(5, event='contextmenu')
-        app.wait(lambda: not app.hidden('rowMenu'), what='row menu')
-        js("[...document.querySelectorAll('#rowMenu [role=menuitem]')].find(e=>e.textContent.endsWith('부터 보기 조건 추가')).click();return true;")
+        # Row menu times narrow what shows: a start, then an end, make one
+        # range, where two showing conditions would join with 또는.
+        menu = lambda n: (app.click_row(n, event='contextmenu'), app.wait(lambda: not app.hidden('rowMenu'), what='row menu'))
+        find = "const i=[...document.querySelectorAll('#rowMenu [role=menuitem]')].find(e=>(e.querySelector('.menu-label')??e).textContent===arguments[0]);"
+        pick = lambda label: js(find + "if(i)i.click();return !!i;", label)
+        note = lambda label: js(find + "return i?.querySelector('.menu-sub')?.textContent??null;", label)
+        items = "return document.querySelectorAll('#conditionList .cond-item').length"
+        menu(5)
+        check('the row menu offers the row time as a start', pick('06-18 19:24:00.200부터만 보기'))
         app.wait_count(2996)
         check('the row menu sets a start time from the row', js("return document.getElementById('timeFrom').value") == '06-18 19:24:00.200')
+        menu(10)
+        app.capture('05-row-menu-end')
+        check('the end item names the range it makes', note('06-18 19:24:00.450까지만 보기') == '시간: 06-18 19:24:00.200 ~ 19:24:00.450', note('06-18 19:24:00.450까지만 보기'))
+        check('the row menu offers the row time as an end', pick('06-18 19:24:00.450까지만 보기'))
+        app.wait_count(6)
+        check('a start and then an end make one range', chips() == ['시간: 06-18 19:24:00.200 ~ 06-18 19:24:00.450×'] and js(items) == 1, {'chips': chips(), 'items': js(items)})
+        app.capture('06-time-range')
+        js("document.querySelector('#activeFilters .chip-remove').click();return true;")
+        app.wait_count(3000)
+        # A selection narrows to the time from its first row to its last.
+        app.click_row(3)
+        app.click_row(8, shift=True)
+        menu(8)
+        app.capture('07-selection-range-menu')
+        check('the range item counts the rows and names the range', note('선택한 6행의 시간 범위만 보기') == '시간: 06-18 19:24:00.100 ~ 19:24:00.350', note('선택한 6행의 시간 범위만 보기'))
+        check('a selection offers its time range', pick('선택한 6행의 시간 범위만 보기'))
+        app.wait_count(6)
+        check('the selection range applies', chips() == ['시간: 06-18 19:24:00.100 ~ 06-18 19:24:00.350×'] and js(items) == 1, chips())
         js("document.querySelector('#activeFilters .chip-remove').click();return true;")
         app.wait_count(3000)
 

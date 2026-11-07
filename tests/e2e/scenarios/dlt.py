@@ -153,7 +153,7 @@ reading:$('readingOptions').hidden,from:$('timeFrom').placeholder}""")
         items = app.wait(lambda: js(MENU), what='row menu')
         check('the row menu filters by ECU, APID and CTID, by time and level, never by PID',
               '이 행으로 조건 추가…' in items and "ECU 'ECU1' 제외" in items and "APID 'NAV' 제외" in items and "CTID 'RTE' 제외" in items and not any(i.endswith("' 보기 조건 추가") and i.split()[0] in ('ECU', 'APID', 'CTID') for i in items)
-              and f"{local(e1['seconds'], e1['micros'])}부터 보기 조건 추가" in items and 'Warn 레벨 보기 조건 추가' in items and not any(i.startswith(('PID', 'TID')) for i in items), items)
+              and f"{local(e1['seconds'], e1['micros'])}부터만 보기" in items and 'Warn 레벨 보기 조건 추가' in items and not any(i.startswith(('PID', 'TID')) for i in items), items)
         app.capture('04-row-menu')
         app.key('Escape', target='rowMenu')
         app.wait(lambda: js(MENU) is None, what='menu closed')
