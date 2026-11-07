@@ -480,7 +480,8 @@ fn a_row_cut_short_by_stopping_ends_before_the_resumed_rows() {
     s.link.log("SER1", &row(3, 0, "three"));
     written(&c, &format!("{cut}\n{}", row(3, 0, "three")));
     assert_eq!(c.breaks()[0].row, 3);
-    assert_eq!(c.rows(), 3);
+    // The count follows the file's bytes a moment later.
+    wait("rows counted", || c.rows() == 3);
     c.stop();
 }
 
@@ -602,9 +603,8 @@ fn an_engine_follows_a_capture_until_it_stops() {
     // The product polls every 500 ms.
     wait("rows", || {
         let s = state();
-        s["total"] == 2 && s["query"]["count"] == 2
+        s["total"] == 2 && s["query"]["count"] == 2 && s["capture"]["rows"] == 2
     });
-    assert_eq!(state()["capture"]["rows"], 2);
     s.link.log("SER1", &row(3, 0, "three"));
     let stopped = e.stop_capture(id).unwrap();
     assert_eq!(stopped["state"], "stopped");
@@ -865,12 +865,12 @@ fn clearing_a_capture_log_shows_its_capture_anew() {
         s["datasetId"] == next && s["following"] == true && s["capture"]["rows"] == 0
     });
     assert!(e.cleared_from(next).is_none());
-    assert!(e.capture(id).is_none());
     assert!(Arc::ptr_eq(&e.capture(next).unwrap(), &c));
     assert!(c.live());
-    // The rows before go with the log that showed them, just after the
+    // The log before closes, and its rows go with it, just after the
     // capture switched files.
     wait("old file removed", || !before.exists());
+    assert!(e.capture(id).is_none());
     s.link.log("SER1", &row(3, 0, "three"));
     wait("new row", || {
         let s = state();
@@ -983,6 +983,8 @@ fn a_stopped_capture_log_is_cleared_and_records_from_its_resume() {
         state()["datasetId"] == other && c.kept_path().is_some()
     });
     let aside = c.kept_path().unwrap();
+    // The log before closes just after the capture switched files.
+    wait("old log closed", || e.capture(last).is_none());
     e.close();
     assert!(!aside.exists());
 }
