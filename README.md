@@ -17,7 +17,7 @@ https://github.com/user-attachments/assets/8667f925-cfe9-41f2-af76-31c8e7babd5a
 
 ## 주요 기능
 
-- **대용량 파일 즉시 열기:** 최대 8 GiB(UTF-8) 파일을 끝까지 읽을 때까지 기다리지 않고 첫 행부터 바로 보여 줍니다. 손상된 UTF-8 바이트가 섞여 있어도 행을 버리지 않고 해당 구간만 표시합니다.
+- **대용량 파일 즉시 열기:** 최대 8 GiB(UTF-8 텍스트·DLT) 파일을 끝까지 읽을 때까지 기다리지 않고 첫 행부터 바로 보여 줍니다. 손상된 UTF-8 바이트가 섞여 있어도 행을 버리지 않고 해당 구간만 표시합니다.
 - **Android·iOS 로그 파싱:** Android `logcat`(`threadtime`·`time`·`brief`·`long`, `-v uid`·`year`·`usec`·`nsec`·`zone`·`epoch`·`monotonic`·`color`), Android Studio Logcat 복사본, iOS 로그(`idevicesyslog` 출력 포함)를 날짜·시간·PID·TID·레벨·태그·메시지 열로 나누어 보여 줍니다. 형식에 맞지 않는 줄은 원문 그대로 표시합니다.
 - **DLT 파일 지원:** COVESA DLT(`.dlt`, 버전 1) 파일을 시간·타임스탬프·ECU·APID·CTID·레벨·페이로드 열로 표시합니다. ECU·APID·CTID로 필터링하고 결과를 `.dlt` 원본이나 텍스트(`.txt`)로 내보낼 수 있습니다.
 - **조건별 필터와 프리셋:** 레벨, 태그, PID/TID, 시간 범위를 조합한 포함·제외 조건으로 로그를 거릅니다(DLT Viewer의 포함·제외 필터와 동일한 방식). 자주 쓰는 필터 조합은 이름을 붙여 저장해 두고 다른 파일에서도 바로 불러올 수 있습니다.
@@ -95,16 +95,16 @@ LogStudio.exe C:\logs\main.log.1 C:\logs\main.log
 
 ## 제약 사항
 
-- **열 수 없는 파일:** 8 GiB 초과 파일, 1 MiB를 넘는 행이 포함된 파일, 심볼릭 링크, 일반 바이너리 파일(NUL 포함), UTF-16 텍스트 파일, 압축 파일(`.zip`, `.gz` 등), 스토리지 헤더가 없는 DLT 파일 및 DLT 버전 2 파일
+- **열 수 없는 파일:** 8 GiB 초과 파일, 1 MiB를 넘는 행이 포함된 파일, 심볼릭 링크, 일반 바이너리 파일(NUL 포함), UTF-16·UTF-32 텍스트 파일, 압축 파일(`.zip`, `.gz` 등), 스토리지 헤더가 없는 DLT 파일 및 DLT 버전 2 파일
 - **DLT 기능 제한:** 실시간 따라가기, 텍스트 로그와의 병합 열기, FIBEX 해석은 지원하지 않습니다.
-- **기타 미지원 기능:** ADB 직접 연결, 멀티라인 로그 접기/펼치기, 정규식의 전후방 탐색(lookaround) 및 역참조(backreference)
+- **기타 미지원 기능:** adb 없이 Android 기기에 직접 연결(Android 기기 로그는 adb 필요), 멀티라인 로그 접기/펼치기, 정규식의 전후방 탐색(lookaround) 및 역참조(backreference)
 - 대용량 로그 성능 측정 조건과 미검증 범위는 [LARGE_LOG_VALIDATION.md](docs/LARGE_LOG_VALIDATION.md)에 정리되어 있습니다.
 
 ## 개발
 
 Tauri 기반 데스크톱 앱입니다. 화면(`dist/`)은 번들러 없는 ES 모듈로 작성되어 실행 파일에 내장되며, 파일 읽기·파싱·검색은 Rust 코어(`core/`)가 담당합니다. 빌드된 앱은 Python이나 Node.js 없이 단독으로 실행됩니다.
 
-`rust-toolchain.toml`(Rust 1.99.0)과 `Cargo.lock`으로 의존성 버전을 고정합니다. 빌드에 필요한 시스템 도구는 [Tauri 사전 준비 문서](https://v2.tauri.app/start/prerequisites/)를 참고하세요. Node.js 22 이상은 프론트엔드 테스트에, Python 3은 패키징 및 테스트 스크립트에 사용됩니다.
+`rust-toolchain.toml`(Rust 1.99.0)과 `Cargo.lock`으로 의존성 버전을 고정합니다. 빌드에 필요한 시스템 도구는 [Tauri 사전 준비 문서](https://v2.tauri.app/start/prerequisites/)를 참고하세요. Node.js 22 이상은 프론트엔드 테스트에, Python 3.9 이상은 패키징 및 테스트 스크립트에 사용됩니다.
 
 ```sh
 cargo test --locked --workspace

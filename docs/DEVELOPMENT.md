@@ -13,7 +13,7 @@
 | `core/src/parser.rs` | Android(`threadtime`·`-v time`·`brief`·`-v long`, `-v uid`·`-v year`·`-v usec`·`-v nsec`·`-v zone`·`-v epoch`·`-v monotonic`·`-v color`, Android Studio Logcat 복사본) 및 iOS(`idevicesyslog` 포함) 필드 파싱, 앞쪽 줄 번호 인식, 데이터셋 형식별 파서 선택(`parse_in`·`starts_entry_in`), DLT 행 필드 분리 |
 | `core/src/dlt.rs` | DLT(프로토콜 버전 1) 단위 분할(`units`), 헤더 파싱, `dlt-viewer` 호환 페이로드 포매팅 및 행 렌더링(`Decoder::render`), 행 필드 추출(`parse_row`), 로컬 시각 변환(`Clock`), 테스트·벤치마크용 합성 생성기(`synth`) |
 | `core/src/search.rs` | 고정 버전 `grep-regex` / `grep-searcher` 기반 문자열·정규식 검색 및 하이라이트 범위 계산, 필터 조건(레벨·태그·PID·TID·시간·메시지) 컴파일과 블록·행 판정 |
-| `core/src/encoding.rs` | 표시 텍스트 디코딩: 손상된 UTF-8 바이트의 표시용 대체(``)와 손상 위치 마스크, Mac OS Roman으로 잘못 읽혀 깨진 UTF-8 문자 복원(`repair`), UTF-16·압축 파일 판별 |
+| `core/src/encoding.rs` | 표시 텍스트 디코딩: 손상된 UTF-8 바이트의 표시용 대체(`U+FFFD`)와 손상 위치 마스크, Mac OS Roman으로 잘못 읽혀 깨진 UTF-8 문자 복원(`repair`), UTF-16(UTF-32 BOM 포함)·압축 파일 판별 |
 | `core/src/launch.rs` | CLI 경로 인자(복수 지정 시 병합 열기) 및 `--large-log`(반복 가능) 옵션 해석 |
 | `core/src/capture/` | 기기 기록: `mod.rs`(기록기·재연결 상태 흐름·저장·버리기·새 파일로 비우기(`Cut`)), `gate.rs`(`threadtime` 시각과 시작 경계·중복 제거), `link.rs`(연결 계층 trait·기기 종류·`adb devices -l` 파서·공개 오류 문구), `cli.rs`(adb 명령 실행 연결), `adb.rs`(adb 탐지·`adb version` 검증), `process.rs`(adb·Xcode 도구 명령을 표준 입력과 Windows 콘솔 창 없이 만들고, 시간 제한 안에 끝까지 실행), `ios.rs`(Apple 기기 서비스(usbmuxd)로 iPhone·iPad 목록과 `os_trace_relay` 로그를 받아 iOS 로그 줄로 쓰는 연결), `apps.rs`(기록 중인 iPhone·iPad의 개발용 서명 앱 목록과 Xcode `devicectl`로 `OS_ACTIVITY_DT_MODE=1` 실행), `store.rs`(임시 기록 파일과 잠금·남은 기록), `fake.rs`(테스트·QA용 가짜 연결과 합성 로그) |
 | `core/src/lib.rs` | `Engine`: 파일 열기·검증·롤백 복원, 기기 기록 로그 열기(`open_capture`)·비운 기록을 새 데이터셋으로 바꾸기(`clear_capture`)와 수명 관리, IPC 요청 처리, 진행 상태 이벤트 발행 |
@@ -34,7 +34,7 @@
 | `tests/fixtures/covesa/` | COVESA 공개 DLT 테스트 샘플(MPL-2.0, 테스트 전용, [상세 설명](../tests/fixtures/covesa/README.md)) |
 | `tests/e2e/` | QA 빌드의 내장 WebDriver로 실제 macOS WKWebView를 검증하고 라이트·다크 화면을 캡처하는 E2E 테스트([tests/e2e/README.md](../tests/e2e/README.md)) |
 | `bench/` | 합성 로그 생성기 및 코어 엔진 성능 측정 바이너리([bench/README.md](../bench/README.md)) |
-| `docs/` | 사용 설명서(`USER_GUIDE.md`), 개발 문서(`DEVELOPMENT.md`), 대용량 로그 검증 기록(`LARGE_LOG_VALIDATION.md`) |
+| `docs/` | 사용 설명서(`USER_GUIDE.md`), 개발 문서(`DEVELOPMENT.md`), 대용량 로그 검증 기록(`LARGE_LOG_VALIDATION.md`), 확장 기능(`EXTRAS.md`) |
 | `extras/` | 릴리스에 포함되지 않는 확장 기능(`--features extras`): 확장 호스트(`src/lib.rs`), 좌표 궤적(`src/track.rs`), 확장 창의 페이지 파일(`web/`)과 내장 Leaflet([EXTRAS.md](EXTRAS.md) 참고) |
 | `artifacts/` | Git에서 제외되는 로컬 빌드(`desktop/`) 및 E2E 테스트(`e2e/`) 출력 폴더 |
 
