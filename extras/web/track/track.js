@@ -2,9 +2,10 @@
 // read, linked with the main window both ways. Clicking the track, or [ and
 // ] for the previous and next point, selects that point's row there;
 // selecting a row there marks where the log's source was when it wrote that
-// row (the last point at or before it), and the track after it fades.
+// row (the last point at or before it), and the track after it turns
+// lighter, so the whole route stays in view.
 import {api, locate, watchMain} from './common/host.js';
-import {Points, describeTrack, describeSelected, describePass, describeTiles} from './track-model.js';
+import {Points, describeTrack, describeSelected, describePass, describeTiles, placeArrows} from './track-model.js';
 
 const L = window.L;
 const $ = id => document.getElementById(id);
@@ -13,12 +14,17 @@ const CHUNK = 20000;
 // How near a click must be to the track to pick a point, in pixels.
 const PICK_RADIUS = 14;
 const FINAL = new Set(['complete', 'full', 'failed', 'stopped']);
-const COLOR = '#c2185b';
-// The track up to the selected row, on a white casing so it stays apart
-// from roads drawn in similar colors, and the track after it, faded.
+// Blue, which the map's own roads and boundaries (pink, red, orange) do
+// not use, so the track does not sink into them.
+const COLOR = '#1a56db';
+// Lighter blue after the selected row: opaque for >=3:1 contrast on map
+// land and solid so it stays distinct from dashed map boundaries.
+const LATER_COLOR = '#5b84e6';
+// The whole track lies on a white casing so it stays apart from roads drawn
+// in similar colors.
 const PAST = {color:COLOR, weight:3.5, opacity:0.95, interactive:false};
 const CASING = {color:'#ffffff', weight:7, opacity:0.85, interactive:false};
-const LATER = {color:COLOR, weight:3, opacity:0.3, interactive:false};
+const LATER = {color:LATER_COLOR, weight:3, opacity:1, interactive:false};
 // A tile that failed shows hatched, apart from the map's empty background.
 const MISSING = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256"><defs><pattern id="h" width="12" height="12" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="12" height="12" fill="#e4e8ed"/><rect width="4" height="12" fill="#d3d9e0"/></pattern></defs><rect width="256" height="256" fill="url(#h)"/></svg>');
 
@@ -26,15 +32,20 @@ const ui = {status:$('status'), selection:$('selection'), empty:$('empty'), aler
 const points = new Points();
 let settings = {markers:[], tiles:'', attribution:'', title:''};
 let datasetId = null, generation = 0, selected = null, picked = null, status = null;
-let moved = false, fitting = false, lastFit = 0, drawnKey = '', cycle = null;
-let notice = '', noticeTimer = null, announced = '', failedTiles = 0;
+let moved = false, fitting = false, lastFit = 0, drawnRevision = -1, drawnCount = 0, cycle = null;
+let notice = null, noticeTimer = null, announced = '', failedTiles = 0, split = -1;
 
+// With less motion asked for, zooms and pans jump instead of gliding.
+const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
 // Tiles show as they arrive, without a fade: it waits for animation frames,
 // which a covered window does not get.
-const map = L.map('map', {preferCanvas:true, worldCopyJump:true, fadeAnimation:false, zoomSnap:0.5, zoomControl:false}).setView([20, 0], 2);
+const map = L.map('map', {preferCanvas:true, worldCopyJump:true, fadeAnimation:false, zoomAnimation:!still, markerZoomAnimation:!still, zoomSnap:0.5, zoomControl:false}).setView([20, 0], 2);
 L.control.zoom({zoomInTitle:'확대', zoomOutTitle:'축소'}).addTo(map);
 map.attributionControl.setPrefix('Leaflet');
 L.control.scale({imperial:false}).addTo(map);
+// The track's colors for the marks and the legend drawn as HTML.
+document.documentElement.style.setProperty('--track', COLOR);
+document.documentElement.style.setProperty('--track-later', LATER_COLOR);
 // Moving the map by hand ends fitting the track to it.
 map.on('dragstart', () => {moved = true;});
 map.on('zoomstart', () => {if (!fitting) moved = true;});
@@ -89,18 +100,99 @@ const restack = () => {
 };
 
 // The few marks draw as SVG or HTML, which update at once: canvas redraws
-// wait for an animation frame, which a covered window does not get.
-const marks = L.svg();
-const start = L.circleMarker([0, 0], {renderer:marks, radius:5, color:COLOR, weight:2, fillColor:'#fff', fillOpacity:1, interactive:false});
-const end = L.circleMarker([0, 0], {renderer:marks, radius:5, color:'#fff', weight:2, fillColor:COLOR, fillOpacity:1, interactive:false});
+// wait for an animation frame, which a covered window does not get. Panes
+// from the bottom: the track, its arrows, its ends, the hovered point, then
+// Leaflet's marker pane with the selected row's place.
+map.createPane('arrows').style.zIndex = 410;
+map.createPane('ends').style.zIndex = 415;
+map.createPane('marks').style.zIndex = 420;
+const marks = L.svg({pane:'marks'});
+// Place "시작"/"끝" labels on opposite sides so a closed loop shows both;
+// hidden from screen readers because the hover tip already announces them.
+const ending = (kind, word) => L.marker([0, 0], {pane:'ends', interactive:false, keyboard:false, icon:L.divIcon({
+  className:`track-end ${kind}`, iconSize:[0, 0],
+  html:`<span class="dot" aria-hidden="true"></span><span class="word" aria-hidden="true">${word}</span>`,
+})});
+const start = ending('start', '시작'), end = ending('end', '끝');
 const hovered = L.circleMarker([0, 0], {renderer:marks, radius:6, color:'#fff', weight:2, fillColor:COLOR, fillOpacity:1, interactive:false});
 const here = L.marker([0, 0], {interactive:false, keyboard:false, zIndexOffset:1000, icon:L.divIcon({
   className:'here', iconSize:[24, 24],
-  html:'<svg viewBox="-12 -12 24 24" width="24" height="24" aria-hidden="true"><path d="M0 -12v5M0 7v5M-12 0h5M7 0h5"/><circle r="6.5"/></svg>',
+  // The ring and ticks drawn twice: a dark halo under the orange keeps them
+  // apart from the blue track, water and buildings.
+  html:'<svg viewBox="-12 -12 24 24" width="24" height="24" aria-hidden="true"><g class="halo"><path d="M0 -12v5M0 7v5M-12 0h5M7 0h5"/><circle r="6.5"/></g><path d="M0 -12v5M0 7v5M-12 0h5M7 0h5"/><circle r="6.5"/></svg>',
 })});
 
+// Arrows along the track in its direction (placeArrows), drawn for the view
+// when a move or zoom ends, straight from the points: Leaflet draws no
+// arrows, and the track's own canvas waits for animation frames.
+// Hidden during zoom animation because the canvas still holds the previous
+// zoom's arrows until moveend redraws them.
+const arrows = L.DomUtil.create('canvas', 'track-arrows', map.getPane('arrows'));
+let arrowsTimer = null, zooming = false, arrowsCost = 0;
+function drawArrows() {
+  if (arrowsTimer !== null) {clearTimeout(arrowsTimer);arrowsTimer = null;}
+  // The move that ends the zoom draws them.
+  if (zooming) return;
+  const size = map.getSize(), ratio = window.devicePixelRatio || 1;
+  // A margin of a tenth of the view, as Leaflet's own canvas has, shows
+  // arrows already drawn at the edges while the map is dragged.
+  const pad = size.multiplyBy(0.1).round(), width = size.x + 2 * pad.x, height = size.y + 2 * pad.y;
+  const topLeft = map.containerPointToLayerPoint([-pad.x, -pad.y]).round();
+  L.DomUtil.setPosition(arrows, topLeft);
+  // The canvas is allocated again only when its size changes.
+  const pixelsX = Math.round(width * ratio), pixelsY = Math.round(height * ratio);
+  if (arrows.width !== pixelsX || arrows.height !== pixelsY) {
+    arrows.width = pixelsX;
+    arrows.height = pixelsY;
+    arrows.style.width = `${width}px`;
+    arrows.style.height = `${height}px`;
+  }
+  const context = arrows.getContext('2d');
+  context.setTransform(1, 0, 0, 1, 0, 0);
+  context.clearRect(0, 0, pixelsX, pixelsY);
+  context.setTransform(ratio, 0, 0, ratio, 0, 0);
+  arrows.hidden = false;
+  const began = performance.now(), origin = map.getPixelOrigin();
+  const bounds = L.latLngBounds(map.containerPointToLatLng([-pad.x, size.y + pad.y]), map.containerPointToLatLng([size.x + pad.x, -pad.y]));
+  const found = placeArrows(points, {
+    scale:256 * 2 ** map.getZoom(), offX:-origin.x - topLeft.x, offY:-origin.y - topLeft.y,
+    south:bounds.getSouth(), north:bounds.getNorth(), west:bounds.getWest(), east:bounds.getEast(),
+    width, height, split,
+  });
+  // A small triangle pointing along the track, on a white rim so it shows
+  // on the line and off it, in the color of the track under it.
+  context.lineJoin = 'round';
+  context.lineWidth = 3;
+  context.strokeStyle = '#ffffff';
+  for (const arrow of found) {
+    context.save();
+    context.translate(arrow.x, arrow.y);
+    context.rotate(arrow.angle);
+    context.beginPath();
+    context.moveTo(5, 0);
+    context.lineTo(-4, -4.5);
+    context.lineTo(-4, 4.5);
+    context.closePath();
+    context.fillStyle = arrow.later ? LATER_COLOR : COLOR;
+    context.stroke();
+    context.fill();
+    context.restore();
+  }
+  arrowsCost = performance.now() - began;
+}
+// A reading log redraws its arrows at most every half second, and less
+// often when a redraw takes long (a log of millions of points), so they
+// take no more than a twentieth of the time.
+function scheduleArrows() {
+  if (arrowsTimer === null) arrowsTimer = setTimeout(drawArrows, Math.max(500, 20 * arrowsCost));
+}
+map.on('zoomstart', () => {zooming = true;arrows.hidden = true;});
+map.on('zoomend', () => {zooming = false;});
+// A resize ends with a move as well, once it settles.
+map.on('moveend', drawArrows);
+
 const selectedView = () => describeSelected(points, selected, status);
-// Points after the selected row's point draw faded; without a selection,
+// Points after the selected row's point draw lighter; without a selection,
 // or for a row past the points read, the whole track is past.
 function splitAt() {
   const view = selectedView();
@@ -108,11 +200,16 @@ function splitAt() {
 }
 
 function draw() {
-  const split = points.count ? splitAt() : -1;
-  const key = `${points.revision}:${split}`;
-  if (key === drawnKey) return;
-  drawnKey = key;
-  const added = [casing.set(0, split + 1), later.set(Math.max(0, split), points.count), past.set(0, split + 1)];
+  const at = points.count ? splitAt() : -1;
+  if (points.revision === drawnRevision && at === split) return;
+  const grew = points.revision !== drawnRevision && points.count >= drawnCount;
+  drawnRevision = points.revision;
+  drawnCount = points.count;
+  split = at;
+  // New points redraw the arrows a little later; a new selection, or points
+  // dropped for another log or source, at once.
+  if (grew) scheduleArrows(); else drawArrows();
+  const added = [casing.set(0, points.count), later.set(Math.max(0, split), points.count), past.set(0, split + 1)];
   if (added.some(Boolean)) restack();
   for (const [marker, i] of [[start, 0], [end, points.count - 1]]) {
     if (points.count) marker.setLatLng([points.lat[i], points.lon[i]]).addTo(map);
@@ -143,6 +240,8 @@ function showSelected(pan) {
   ui.selection.hidden = !view.text;
   ui.selection.textContent = view.text;
   ui.selection.classList.toggle('pending', view.mark === 'pending');
+  // The chip's ring stands for the map's; a row before every point has none.
+  ui.selection.classList.toggle('placed', view.mark !== 'none');
   if (view.mark === 'none') here.remove();
   else {
     const i = points.at(selected), at = [points.lat[i], points.lon[i]];
@@ -151,7 +250,7 @@ function showSelected(pan) {
     if (pan && !map.getBounds().pad(-0.1).contains(at)) {
       // A view chosen for the selection is the user's; fitting stops.
       moved = true;
-      map.panTo(at);
+      map.panTo(at, {animate:!still});
     }
   }
   draw();
@@ -165,9 +264,10 @@ function render() {
   const note = datasetId === null ? '메인 창에 열린 로그가 없습니다.' : words.note;
   ui.empty.hidden = !note;
   ui.empty.textContent = note ?? '';
-  const alert = notice || describeTiles(failedTiles, settings.tiles);
+  const alert = notice?.text || describeTiles(failedTiles, settings.tiles);
   ui.alert.hidden = !alert;
   ui.alert.textContent = alert;
+  ui.alert.classList.toggle('info', !!notice?.info);
 }
 
 // Screen readers hear when reading ends or fails and what a choice
@@ -175,11 +275,12 @@ function render() {
 function announce(text) {
   if (text && text !== announced) ui.announce.textContent = announced = text;
 }
-// A short-lived note over the map, such as a pick the main window refused.
-function tell(text) {
-  notice = text;
+// A short-lived note over the map: a problem, such as a pick the main
+// window refused, or with `info` a plain fact, such as the track's end.
+function tell(text, info = false) {
+  notice = {text, info};
   if (noticeTimer !== null) clearTimeout(noticeTimer);
-  noticeTimer = setTimeout(() => {notice = '';noticeTimer = null;render();}, 5000);
+  noticeTimer = setTimeout(() => {notice = null;noticeTimer = null;render();}, 5000);
   render();
   announce(text);
 }
@@ -311,7 +412,7 @@ function step(forward) {
     const at = points.at(selected), exact = at >= 0 && points.lines[at] === selected;
     i = forward ? at + 1 : exact ? at - 1 : at;
   }
-  if (i < 0 || i >= points.count) return tell(forward ? '마지막 지점입니다.' : '첫 지점입니다.');
+  if (i < 0 || i >= points.count) return tell(forward ? '마지막 지점입니다.' : '첫 지점입니다.', true);
   choose(i, true);
 }
 document.addEventListener('keydown', event => {
@@ -321,6 +422,12 @@ document.addEventListener('keydown', event => {
   step(event.key === ']');
 });
 ui.fit.addEventListener('click', () => {moved = false;fit();});
+// The legend stays as it was last left, open or folded, in this window.
+const legend = $('legend');
+try {if (localStorage.getItem('track-legend') === 'closed') legend.open = false;} catch {}
+legend.addEventListener('toggle', () => {
+  try {localStorage.setItem('track-legend', legend.open ? 'open' : 'closed');} catch {}
+});
 ui.follow.addEventListener('change', () => showSelected(ui.follow.checked));
 
 async function main() {

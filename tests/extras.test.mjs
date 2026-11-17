@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mountExtras} from '../dist/extras.js';
-import {Points, describeTrack, describeSelected, describePass, describeTiles} from '../extras/web/track/track-model.js';
+import {Points, describeTrack, describeSelected, describePass, describeTiles, placeArrows} from '../extras/web/track/track-model.js';
 
 // A native bridge whose `extras` command answers from `answers` and records
 // every request; `emit` sends an event the page listens to.
@@ -223,4 +223,59 @@ test('missing tiles name the server to check', () => {
   assert.equal(describeTiles(0, 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'), '');
   assert.equal(describeTiles(13, 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'), '지도 타일 13개를 받지 못했습니다 · 네트워크 연결을 확인해 주세요');
   assert.equal(describeTiles(2, 'http://127.0.0.1:8080/{z}/{x}/{y}.png'), '지도 타일 2개를 받지 못했습니다 · 이 컴퓨터의 타일 서버를 확인해 주세요');
+});
+
+// A view where longitude 0 on the equator is canvas pixel (0, 100), so a
+// point `x` pixels east of it is at longitude x * 360 / SCALE.
+const SCALE = 256 * 2 ** 10;
+const VIEW = {scale:SCALE, offX:-SCALE / 2, offY:-SCALE / 2 + 100, south:-1, north:1, west:-1, east:1, width:800, height:200, split:Infinity};
+const east = x => x * 360 / SCALE;
+const along = xs => {
+  const points = new Points();
+  points.append(Float64Array.from(xs.flatMap((x, i) => [i, 0, east(x)])));
+  return points;
+};
+
+test('arrows sit every gap along the track, point its way, and mark those after split as later', () => {
+  // A track due east, a point every 2 pixels from 0 to 600; point 150 is at 300.
+  const points = along(Array.from({length:301}, (_, i) => 2 * i));
+  const found = placeArrows(points, {...VIEW, split:150});
+  assert.deepEqual(found.map(a => Math.round(a.x)), [45, 135, 225, 315, 405, 495, 585]);
+  assert.ok(found.every(a => Math.abs(a.y - 100) < 1e-6 && Math.abs(a.angle) < 1e-9));
+  assert.deepEqual(found.map(a => a.later), [false, false, false, true, true, true, true]);
+});
+
+test('a track that comes back over itself keeps the first arrows there', () => {
+  // East from 0 to 100, then back west over the same line.
+  const points = along([...Array.from({length:51}, (_, i) => 2 * i), ...Array.from({length:50}, (_, i) => 98 - 2 * i)]);
+  const found = placeArrows(points, {...VIEW, gap:30});
+  assert.deepEqual(found.map(a => Math.round(a.x)), [15, 45, 75]);
+  assert.ok(found.every(a => Math.abs(a.angle) < 1e-9));
+});
+
+test('a segment crossing the canvas gets arrows even when both ends lie off-canvas', () => {
+  const points = along([-5000, 5000]);
+  const found = placeArrows(points, {...VIEW, west:east(-80), east:east(880)});
+  assert.ok(found.length >= 8, found.length);
+  assert.ok(found.every(a => a.x >= 0 && a.x <= 800));
+  // A segment millions of pixels long visits only the places on the canvas.
+  const far = placeArrows(along([-1e7, 1e7]), {...VIEW, west:east(-1e7), east:east(1e7)});
+  assert.equal(far.length, 9);
+  // A track wholly off the canvas, or a single point, has none.
+  assert.deepEqual(placeArrows(along([2000, 2400]), {...VIEW, west:east(-80), east:east(880)}), []);
+  assert.deepEqual(placeArrows(along([10]), VIEW), []);
+});
+
+test("pointing at the track's start or end mark picks that point over a slightly nearer neighbor", () => {
+  const p = new Points();
+  p.append(Float64Array.from(Array.from({length:6}, (_, i) => [i, 0, 0]).flat()));
+  const box = {south:-1, north:1, west:-1, east:1};
+  const pick = distances => p.passes(box, i => distances[i], 14).map(pass => pass.index);
+  // The start's mark is 1 pixel farther than point 1: the start wins.
+  assert.deepEqual(pick([1.5, 0.5, 4, 20, 20, 20]), [0]);
+  // A point more than 2 pixels nearer wins over it.
+  assert.deepEqual(pick([3, 0.5, 4, 20, 20, 20]), [1]);
+  // The same at the end, and a pass between the ends keeps its nearest point.
+  assert.deepEqual(pick([20, 20, 20, 4, 0.5, 2]), [5]);
+  assert.deepEqual(pick([20, 3, 1, 2, 20, 20]), [2]);
 });

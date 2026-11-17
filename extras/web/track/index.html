@@ -16,7 +16,6 @@
     <span id="status" class="status"></span>
   </div>
   <div class="tools">
-    <span class="keys" aria-hidden="true"><kbd>[</kbd><kbd>]</kbd> 이전·다음 지점</span>
     <label class="check-line" title="메인 창에서 행을 선택하면 그 위치가 보이도록 지도를 옮깁니다"><input id="follow" type="checkbox" checked>선택한 행으로 지도 이동</label>
     <button id="fit" class="button" type="button" title="궤적 전체가 보이게 지도를 맞춥니다" disabled>전체 보기</button>
   </div>
@@ -24,6 +23,17 @@
 <main class="stage">
   <div id="map" class="map" role="application" aria-label="좌표 궤적 지도" aria-describedby="mapHelp"></div>
   <p id="mapHelp" class="visually-hidden">궤적을 클릭하거나 [ 키와 ] 키로 이전·다음 지점을 고르면 메인 창에서 그 행을 선택합니다. 같은 곳을 여러 번 지났다면 다시 클릭할 때마다 다음 통과로 넘어갑니다. 방향키로 지도를 옮기고 + 키와 - 키로 확대·축소합니다.</p>
+  <details id="legend" class="legend" open>
+    <summary>범례</summary>
+    <ul>
+      <li><svg class="sample" viewBox="0 0 28 12" aria-hidden="true"><path class="casing" d="M3 6h22"/><path class="past" d="M3 6h22"/></svg>선택한 행까지</li>
+      <li><svg class="sample" viewBox="0 0 28 12" aria-hidden="true"><path class="casing" d="M3 6h22"/><path class="later" d="M3 6h22"/></svg>선택한 행 이후</li>
+      <li><svg class="sample" viewBox="0 0 28 12" aria-hidden="true"><path class="casing" d="M3 6h22"/><path class="past" d="M3 6h22"/><path class="arrow" d="M19 6l-9-4.5v9z"/></svg>진행 방향</li>
+      <li><svg class="sample" viewBox="-14 -6 28 12" aria-hidden="true"><circle class="ring" r="4"/></svg>선택한 행의 위치</li>
+    </ul>
+    <p class="hint"><kbd>[</kbd><kbd>]</kbd> 이전·다음 지점</p>
+    <p class="hint">같은 자리를 다시 클릭하면 다음 통과로 이동</p>
+  </details>
   <div id="tip" class="tip" aria-hidden="true" hidden></div>
   <p id="alert" class="alert" hidden></p>
   <p id="empty" class="empty" hidden></p>
