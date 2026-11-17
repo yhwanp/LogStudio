@@ -1,10 +1,15 @@
 // What the track page works out apart from the map: its points as they
-// arrive, the point a row was logged at, the points near a click, and the
-// words for where reading and the selected row stand. Node tests use it
+// arrive, the point a row was logged at, the points near a click, where the
+// direction arrows go, and the words for where reading and the selected row
+// stand. Node tests use it
 // without Leaflet or a page.
 
 const formatNumber = n => Number(n).toLocaleString('ko-KR');
 const degrees = (lat, lon) => `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
+
+// How much nearer, in the units of a pass's distance (pixels), another point
+// of a pass must be to win over the track's first or last point.
+const END_SLACK = 2;
 
 // Points in row order: each with its physical row, latitude and longitude.
 export class Points {
@@ -65,8 +70,11 @@ export class Points {
       const d = distance(i);
       if (d >= radius) continue;
       if (i === last + 1 && found.length) {
-        const pass = found[found.length - 1];
-        if (d < pass.distance) {pass.index = i;pass.distance = d;}
+        // The track's first and last points, which their marks show, win
+        // over points of the same pass no more than END_SLACK nearer.
+        const pass = found[found.length - 1], end = k => k === 0 || k === this.count - 1;
+        const better = end(i) ? d <= pass.distance + END_SLACK : end(pass.index) ? d < pass.distance - END_SLACK : d < pass.distance;
+        if (better) {pass.index = i;pass.distance = d;}
       } else {
         found.push({index:i, distance:d});
       }
@@ -145,4 +153,54 @@ export function describeTiles(failed, template) {
   if (!failed) return '';
   const local = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//.test(template);
   return `지도 타일 ${formatNumber(failed)}개를 받지 못했습니다 · ${local ? '이 컴퓨터의 타일 서버를' : '네트워크 연결을'} 확인해 주세요`;
+}
+
+// Where the direction arrows go on a canvas `width` by `height` pixels.
+// `scale` is 256 * 2^zoom and `offX`, `offY` move Web Mercator pixels (as
+// Leaflet projects) to the canvas; `south`..`east` bound the canvas in
+// degrees. An arrow sits every `gap` pixels along the track, pointing the way
+// it goes, at most one in each `cell` square so a track winding in a small
+// space does not fill it. Points nearer than `step` pixels to the last one
+// taken are skipped, so an arrow's direction comes from a real step. Only
+// segments that may cross the canvas are projected; one whose ends both lie
+// off it still gets its arrows. Arrows past point `split` are `later`.
+export function placeArrows(points, {scale, offX, offY, south, north, west, east, width, height, split, gap = 90, cell = 36, step = 4}) {
+  const LIMIT = 85.0511287798, RAD = Math.PI / 180;
+  const projectY = lat => scale * (0.5 - Math.atanh(Math.sin(Math.max(-LIMIT, Math.min(LIMIT, lat)) * RAD)) / (2 * Math.PI)) + offY;
+  const projectX = lon => scale * (0.5 + lon / 360) + offX;
+  const found = [], taken = new Set();
+  if (points.count < 2) return found;
+  // The last point taken, in degrees, and in pixels once projected.
+  let lat0 = points.lat[0], lon0 = points.lon[0], x0 = 0, y0 = 0, projected = false;
+  let run = gap / 2;
+  for (let i = 1; i < points.count; i++) {
+    const lat = points.lat[i], lon = points.lon[i];
+    if (Math.max(lat, lat0) < south || Math.min(lat, lat0) > north || Math.max(lon, lon0) < west || Math.min(lon, lon0) > east) {
+      lat0 = lat;lon0 = lon;projected = false;
+      continue;
+    }
+    if (!projected) {x0 = projectX(lon0);y0 = projectY(lat0);projected = true;}
+    const x = projectX(lon), y = projectY(lat), dx = x - x0, dy = y - y0, length = Math.hypot(dx, dy);
+    if (length < step) continue;
+    // The arrows' places on this segment lie `gap` apart, counted on from
+    // the last place before it (`first`, measured along it); only those on
+    // the canvas are visited, so a long segment far zoomed in costs no more
+    // than a short one.
+    const first = -run;
+    run = (run + length) % gap;
+    let enter = 0, exit = 1;
+    for (const [p, q] of [[-dx, x0], [dx, width - x0], [-dy, y0], [dy, height - y0]]) {
+      if (p === 0) {if (q < 0) exit = -1;continue;}
+      if (p < 0) enter = Math.max(enter, q / p); else exit = Math.min(exit, q / p);
+    }
+    for (let k = Math.max(1, Math.ceil((enter * length - first) / gap)); first + k * gap <= exit * length; k++) {
+      const t = (first + k * gap) / length, ax = x0 + dx * t, ay = y0 + dy * t;
+      const key = `${Math.floor(ax / cell)},${Math.floor(ay / cell)}`;
+      if (taken.has(key)) continue;
+      taken.add(key);
+      found.push({x:ax, y:ay, angle:Math.atan2(dy, dx), later:i > split});
+    }
+    lat0 = lat;lon0 = lon;x0 = x;y0 = y;
+  }
+  return found;
 }

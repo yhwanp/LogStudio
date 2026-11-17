@@ -25,8 +25,10 @@ MAP = """const s=document.getElementById('status'),e=document.getElementById('em
 status:s.textContent,failed:s.classList.contains('failed'),selection:c.hidden?null:c.textContent,alert:a.hidden?null:a.textContent,
 note:e.hidden?null:e.textContent,fit:document.getElementById('fit').disabled,title:document.getElementById('title').textContent,page:document.title,
 tiles:document.querySelectorAll('.leaflet-tile-loaded').length,attribution:document.querySelector('.leaflet-control-attribution')?.textContent??null,
-zoom:[...document.querySelectorAll('.leaflet-control-zoom a')].map(b=>b.getAttribute('aria-label')),marks:document.querySelectorAll('.leaflet-overlay-pane svg path').length,
-here:!!document.querySelector('.leaflet-marker-pane .here')};"""
+zoom:[...document.querySelectorAll('.leaflet-control-zoom a')].map(b=>b.getAttribute('aria-label')),ends:[...document.querySelectorAll('.leaflet-ends-pane .track-end')].map(e=>e.textContent),
+arrows:(()=>{const c=document.querySelector('.track-arrows');if(!c||c.hidden||!c.width)return 0;const d=c.getContext('2d').getImageData(0,0,c.width,c.height).data;let n=0;for(let i=3;i<d.length;i+=4)if(d[i])n++;return n;})(),
+here:!!document.querySelector('.leaflet-marker-pane .here'),
+legend:(l=>l&&l.open&&[...l.querySelectorAll('li')].map(i=>i.textContent))(document.getElementById('legend'))};"""
 MENU = """const m=document.getElementById('rowMenu');return !m.hidden&&[...m.querySelectorAll('[role=menuitem]')].map(b=>({
 label:(b.querySelector('.menu-label')??b).textContent,note:b.querySelector('.menu-sub')?.textContent??null,disabled:b.getAttribute('aria-disabled')==='true'}));"""
 CHOOSE = "[...document.querySelectorAll('#rowMenu [role=menuitem]')].find(b=>b.textContent===arguments[0]).click();return true;"
@@ -34,12 +36,15 @@ SELECTED = "return document.querySelector('#logsRows .selected-log-row')?.datase
 # Picks a row as the track window does: the host shows it in the main window.
 PICK = """window.__picked=null;fetch('host/state').then(r=>r.json()).then(s=>fetch(`host/locate?dataset=${s.datasetId}&line=${arguments[0]}`))
 .then(r=>{window.__picked=r.status;});return true;"""
-# The mouse over the track's end mark (the second round mark), then a click
-# there when asked; returns the hover tip.
-END = """const p=document.querySelectorAll('.leaflet-overlay-pane svg path')[1].getBoundingClientRect(),m=document.getElementById('map');
+# The mouse over the track's end mark (the dot beside the word 끝), then a
+# click there when asked; returns the hover tip and whether the hovered
+# point shows above the end mark.
+END = """const p=document.querySelector('.leaflet-ends-pane .track-end.end .dot').getBoundingClientRect(),m=document.getElementById('map');
 const o={bubbles:true,cancelable:true,clientX:p.left+p.width/2,clientY:p.top+p.height/2,button:0};
 m.dispatchEvent(new MouseEvent('mousemove',o));if(arguments[0]){m.dispatchEvent(new MouseEvent('mousedown',o));m.dispatchEvent(new MouseEvent('mouseup',o));m.dispatchEvent(new MouseEvent('click',o));}
-const t=document.getElementById('tip');return {tip:t.hidden?null:t.textContent,pointer:m.classList.contains('near-track')};"""
+const t=document.getElementById('tip'),z=q=>+getComputedStyle(document.querySelector(q)).zIndex;
+return {tip:t.hidden?null:t.textContent,pointer:m.classList.contains('near-track'),
+dot:!!document.querySelector('.leaflet-marks-pane svg path')&&z('.leaflet-marks-pane')>z('.leaflet-ends-pane')};"""
 KEY = "document.dispatchEvent(new KeyboardEvent('keydown',{key:arguments[0],bubbles:true,cancelable:true}));return true;"
 
 
@@ -144,15 +149,18 @@ def run(ctx):
             s = until(lambda v: v['selection'] and '500행' in v['selection'], 'selected row on the map')
             check('a selected row without a point shows the last point before it, with its coordinates',
                   s['selection'] == f'500행 → 499행 지점 · {where(499)}' and s['here'], s)
-            check("the map draws the start, the end and the selected row's place", s['marks'] == 2 and s['here'], s)
+            check("the map draws start/end labels, direction arrows, and the selected row's place",
+                  s['ends'] == ['시작', '끝'] and s['arrows'] > 0 and s['here'], s)
+            check('an open legend names the two lines, the direction and the selected place',
+                  s['legend'] == ['선택한 행까지', '선택한 행 이후', '진행 방향', '선택한 행의 위치'], s['legend'])
             # A covered window draws its canvas only when the view moves.
             js("document.getElementById('fit').click();return true;")
             app.capture('03-selected-row')
 
             # Hovering the track's end names it; clicking selects its row.
             hovered = js(END, False)
-            check('hovering the track names the nearest pass first, with a pointer',
-                  hovered == {'tip': '끝 · 1,198행 · 이곳을 2번 지남 (2/2)', 'pointer': True}, hovered)
+            check('hovering the end mark names its pass first, shows a pointer, and draws the hover dot above the end mark',
+                  hovered == {'tip': '끝 · 1,198행 · 이곳을 2번 지남 (2/2)', 'pointer': True, 'dot': True}, hovered)
             app.capture('04-hover-end')
             js(END, True)
             switch('main')
@@ -196,9 +204,9 @@ def run(ctx):
             # A covered window does not refit its map to the new size; only
             # the bar's layout is checked.
             narrow = js("""const c=document.getElementById('selection').getBoundingClientRect(),t=document.querySelector('.tools').getBoundingClientRect();
-return {chip:document.getElementById('selection').textContent,apart:t.top>=c.bottom||t.left>=c.right,keys:getComputedStyle(document.querySelector('.keys')).display}""")
-            check('a narrow window keeps the selected row whole, the tools apart from it, and drops the key hint',
-                  narrow['chip'].startswith('697행') and narrow['apart'] and narrow['keys'] == 'none', narrow)
+return {chip:document.getElementById('selection').textContent,apart:t.top>=c.bottom||t.left>=c.right,legend:(r=>r.left>=0&&r.right<=innerWidth&&r.top>=document.querySelector('.stage').getBoundingClientRect().top)(document.getElementById('legend').getBoundingClientRect())}""")
+            check('a narrow window keeps the selected row whole, the tools apart from it, and the legend inside the map',
+                  narrow['chip'].startswith('697행') and narrow['apart'] and narrow['legend'], narrow)
             app.capture('07-narrow')
 
             # The window opens where it was last.
