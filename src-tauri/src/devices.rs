@@ -1,5 +1,6 @@
 //! Device captures for the window: the adb that runs, the Android devices
-//! it lists and the iPhones Apple's device service lists, the developer
+//! it lists, the iPhones Apple's device service lists and the running iOS
+//! simulators Xcode's simulator tool lists, the developer
 //! builds an iPhone being recorded has, and the temporary capture files.
 //! The page names a device by a serial of the last listing, an iPhone's
 //! UDID, an app by a bundle of the last app listing, and a leftover file by
@@ -11,6 +12,7 @@ use logstudio_core::{
         cli::AdbCli,
         ios::IosLink,
         link::{Device, Link, Platform},
+        sim::SimLink,
         store::Store,
         Capture, Cut, Options,
     },
@@ -36,6 +38,7 @@ pub struct Devices {
     /// What QA builds use instead of adb, and instead of Apple's service.
     replaced: Mutex<Option<Replaced>>,
     replaced_ios: Mutex<Option<Replaced>>,
+    replaced_sim: Mutex<Option<Replaced>>,
     replaced_apps: Mutex<Option<Arc<dyn Apps>>>,
     /// The serial and apps of the last app listing: only these start.
     listed_apps: Mutex<Option<(String, Vec<App>)>>,
@@ -133,6 +136,11 @@ impl Devices {
     pub fn replace_ios(&self, with: Option<Replaced>) {
         *self.replaced_ios.lock().unwrap() = with;
     }
+    /// Uses a scripted link, or none, instead of Xcode's simulator tool.
+    #[cfg_attr(not(feature = "qa"), allow(dead_code))]
+    pub fn replace_sim(&self, with: Option<Replaced>) {
+        *self.replaced_sim.lock().unwrap() = with;
+    }
     /// Uses scripted developer builds instead of the device's (QA builds).
     #[cfg_attr(not(feature = "qa"), allow(dead_code))]
     pub fn replace_apps(&self, with: Option<Arc<dyn Apps>>) {
@@ -176,6 +184,15 @@ impl Devices {
             None => Ok(Arc::new(IosLink::default())),
         }
     }
+    /// Xcode's simulator tool; None on a computer without it, where no
+    /// simulator is listed and no simulator error is reported.
+    fn sim_link(&self) -> Option<Arc<dyn Link>> {
+        match self.replaced_sim.lock().unwrap().clone() {
+            Some(Replaced::Missing) => None,
+            Some(Replaced::Link(link)) => Some(link),
+            None => SimLink::locate().map(|l| Arc::new(l) as Arc<dyn Link>),
+        }
+    }
     fn link(&self) -> Result<Arc<dyn Link>, String> {
         match self.replaced.lock().unwrap().clone() {
             Some(Replaced::Missing) => return Err(NO_ADB.into()),
@@ -206,12 +223,26 @@ impl Devices {
             )
         })
     }
-    /// The devices both connections list now; captures may start on them.
+    /// The iOS simulators running now. Shut down ones are left out: a Mac
+    /// has many, and LogStudio does not start them.
+    fn simulators(&self) -> Option<Result<Vec<Device>, String>> {
+        let found = self
+            .sim_link()?
+            .devices()
+            .map_err(|e| public_message(&e, logstudio_core::capture::sim::LIST_FAILED));
+        Some(found.map(|all| all.into_iter().filter(Device::ready).collect()))
+    }
+    /// The devices the connections list now; captures may start on them.
     /// Each connection that cannot list says why.
     pub fn list(&self) -> Value {
-        let (android, ios) = std::thread::scope(|s| {
+        let (android, ios, simulators) = std::thread::scope(|s| {
             let ios = s.spawn(|| self.ios());
-            (self.android(), ios.join().unwrap_or_else(|_| Ok(vec![])))
+            let simulators = s.spawn(|| self.simulators());
+            (
+                self.android(),
+                ios.join().unwrap_or_else(|_| Ok(vec![])),
+                simulators.join().unwrap_or(None),
+            )
         });
         let mut devices = vec![];
         let mut why = |found: Result<Vec<Device>, String>| match found {
@@ -222,9 +253,11 @@ impl Devices {
             Err(e) => json!(e),
         };
         let (android_error, ios_error) = (why(android), why(ios));
+        let simulator_error = why(simulators.unwrap_or_else(|| Ok(vec![])));
         let page: Vec<Value> = devices.iter().map(Device::json).collect();
         *self.listed.lock().unwrap() = devices;
-        json!({"devices":page,"androidError":android_error,"iosError":ios_error})
+        json!({"devices":page,"androidError":android_error,"iosError":ios_error,
+            "simulatorError":simulator_error})
     }
     /// Starts capturing a listed device into a new temporary file.
     pub fn start(&self, serial: &str) -> Result<Arc<Capture>, String> {
@@ -238,6 +271,7 @@ impl Devices {
             .ok_or(NOT_LISTED)?;
         let link = match device.platform {
             Platform::Android => self.link()?,
+            Platform::Ios if device.simulator => self.sim_link().ok_or(NOT_LISTED)?,
             Platform::Ios => self.ios_link()?,
         };
         let slot = self
@@ -316,9 +350,11 @@ fn write_atomically(file: &Path, value: &Value) -> std::io::Result<()> {
 mod tests {
     use super::*;
 
+    /// Devices without this computer's simulators, which tests must not see.
     fn devices(dir: &Path) -> Devices {
         let d = Devices::default();
         d.load(&dir.join("data"), &dir.join("cache"));
+        d.replace_sim(Some(Replaced::Missing));
         d
     }
 
@@ -389,6 +425,44 @@ mod tests {
             d.start("QA0UDID0000000000000001").err().as_deref(),
             Some(NOT_LISTED)
         );
+    }
+
+    #[test]
+    fn running_simulators_are_listed_and_recorded_through_their_tool() {
+        use logstudio_core::capture::{fake::FakeLink, sim::LIST_FAILED};
+        const SIMULATOR: &str = "00000000-0000-0000-0000-00000000000A";
+        let dir = tempfile::tempdir().unwrap();
+        let d = devices(dir.path());
+        d.replace(Some(Replaced::Missing));
+        d.replace_ios(Some(Replaced::Link(FakeLink::live())));
+        let sim = FakeLink::live();
+        sim.add_simulator(SIMULATOR, "iPhone 17", "27.0");
+        sim.add_simulator("00000000-0000-0000-0000-00000000000B", "iPad Air", "27.0");
+        sim.set_state("00000000-0000-0000-0000-00000000000B", "shutdown");
+        d.replace_sim(Some(Replaced::Link(sim.clone())));
+        let list = d.list();
+        let serials: Vec<&str> = list["devices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|d| d["serial"].as_str().unwrap())
+            .collect();
+        assert_eq!(serials, [SIMULATOR], "shut down simulators are left out");
+        assert_eq!(list["devices"][0]["simulator"], true);
+        assert_eq!(list["simulatorError"], Value::Null);
+        let capture = d.start(SIMULATOR).unwrap();
+        assert!(capture.simulator && capture.platform == Platform::Ios);
+        assert_eq!(capture.json()["simulator"], true);
+        capture.close();
+        // Without the tool, simulators are not mentioned at all.
+        d.replace_sim(Some(Replaced::Missing));
+        assert_eq!(d.list()["simulatorError"], Value::Null);
+        assert_eq!(d.start(SIMULATOR).err().as_deref(), Some(NOT_LISTED));
+        // A tool that fails says so.
+        let failing = FakeLink::live();
+        failing.list_error(Some(LIST_FAILED));
+        d.replace_sim(Some(Replaced::Link(failing)));
+        assert_eq!(d.list()["simulatorError"], LIST_FAILED);
     }
 
     #[test]

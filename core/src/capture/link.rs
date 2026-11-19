@@ -1,6 +1,7 @@
 //! What a capture needs of a device connection: adb for Android devices,
-//! Apple's device service for iPhones and iPads. Each request is a fixed
-//! device query, so no connection runs commands the page chose.
+//! Apple's device service for iPhones and iPads, and Xcode's simulator tool
+//! for iOS simulators. Each request is a fixed device query, so no
+//! connection runs commands the page chose.
 use super::gate::Stamp;
 use serde_json::{json, Value};
 use std::{io, sync::Arc};
@@ -18,6 +19,10 @@ pub const CONFLICT: &str =
 pub const UNTRUSTED: &str = "Trust this computer on the device, then retry";
 /// An iPhone or iPad that has stayed locked since it started.
 pub const LOCKED: &str = "Unlock the device, then retry";
+/// An iOS simulator that is not running.
+pub const SHUTDOWN: &str = "Start the simulator, then retry";
+/// An iOS simulator that is starting or changing state.
+pub const BOOTING: &str = "The simulator is starting; wait for it, then retry";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Platform {
@@ -40,7 +45,8 @@ impl Platform {
 pub struct Device {
     pub serial: String,
     /// `device` when ready; also `unauthorized`, `offline`, `no permissions`
-    /// and others from adb, and `untrusted` or `locked` for iPhones.
+    /// and others from adb, `untrusted` or `locked` for iPhones, and
+    /// `shutdown` or `booting` for simulators.
     pub state: String,
     /// adb's model, such as `Pixel_8`, or the name an iPhone's owner gave it.
     pub model: String,
@@ -50,6 +56,8 @@ pub struct Device {
     pub platform: Platform,
     /// The iOS version; empty for Android devices.
     pub version: String,
+    /// An iOS simulator on this computer, whose rows are an iPhone's.
+    pub simulator: bool,
 }
 impl Device {
     /// What names the device as adb writes it: its model, else its serial.
@@ -82,6 +90,8 @@ impl Device {
             "offline" | "connecting" => Some(OFFLINE),
             "untrusted" => Some(UNTRUSTED),
             "locked" => Some(LOCKED),
+            "shutdown" => Some(SHUTDOWN),
+            "booting" => Some(BOOTING),
             _ => Some(NOT_READY),
         }
     }
@@ -93,6 +103,7 @@ impl Device {
             "product": self.product,
             "platform": self.platform.as_str(),
             "version": self.version,
+            "simulator": self.simulator,
             "ready": self.ready(),
         })
     }

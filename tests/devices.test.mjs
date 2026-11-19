@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {setImmediate as nextTurn} from 'node:timers/promises';
+import {describeLogError} from '../dist/describe.js';
 import {describeAdb, deviceProblem, deviceName, deviceMenuItems, appMenuItems, describeCapture, captureBreaks, breakLabel, clockTime, shortDate, installCommand, mountDevices} from '../dist/devices.js';
 import {captureState} from '../dist/controller.js';
 
@@ -11,8 +12,11 @@ test('capture states from the engine are checked; other logs have none', () => {
   assert.equal(captureState(undefined), null);
   assert.equal(captureState({state:'unknown'}), null);
   const c = captureState({state:'waiting', device:'Pixel 8', serial:'emulator-5554', bytes:2048, rows:31, error:7, lost:at(14, 2, 11), unsaved:true, recovered:'yes', breaks:[{row:3, lost:1, resumed:2, reboot:true}, {row:0}, {row:'x'}, null]});
-  assert.deepEqual(c, {state:'waiting', device:'Pixel 8', serial:'emulator-5554', bytes:2048, rows:31, error:'', breaks:[{row:3, lost:1, resumed:2, reboot:true, gap:false, stopped:false}], launches:[], lost:at(14, 2, 11), stopped:null, cleared:null, reason:'', unsaved:true, recovered:false, platform:'android'});
+  assert.deepEqual(c, {state:'waiting', device:'Pixel 8', serial:'emulator-5554', bytes:2048, rows:31, error:'', breaks:[{row:3, lost:1, resumed:2, reboot:true, gap:false, stopped:false, shutdown:false}], launches:[], lost:at(14, 2, 11), stopped:null, cleared:null, reason:'', unsaved:true, recovered:false, platform:'android', simulator:false});
+  assert.equal(captureState({state:'recording', platform:'ios', simulator:true}).simulator, true);
+  assert.equal(captureState({state:'recording', platform:'ios', simulator:'yes'}).simulator, false);
   assert.equal(captureState({state:'recording', breaks:[{row:9, stopped:true, gap:true}]}).breaks[0].stopped, true);
+  assert.equal(captureState({state:'recording', breaks:[{row:9, shutdown:true}]}).breaks[0].shutdown, true);
   // The clear notice names the rows that went.
   assert.equal(captureState({state:'recording', rows:-1}).rows, 0);
   assert.equal(captureState({state:'recording', cleared:at(14, 5, 0)}).cleared, at(14, 5, 0));
@@ -81,6 +85,88 @@ test('the device menu lists what adb and Apple\'s device service see, or why the
   assert.equal(deviceProblem({state:'no permissions'}), 'USB 권한이 없습니다');
   assert.equal(deviceProblem({state:'recovery'}), '준비되지 않음 (recovery)');
   assert.equal(deviceName({serial:'S', model:''}), 'S');
+});
+
+test('running iOS simulators follow iPhones and say they are simulators', () => {
+  const calls = [], actions = {refresh() {}, pick() {}, help() {}, appleHelp() {}, start:serial => calls.push(serial)};
+  const read = item => item && [item[0], item[3]?.detail].filter(Boolean).join(' · ') + (item[3]?.note ? ` / ${item[3].note}` : '');
+  const labels = items => items.map(read);
+  const adb = {found:true, origin:'studio', version:'37.0.1'};
+  const simulator = {serial:'00000000-0000-0000-0000-00000000000A', state:'device', model:'iPhone 17', product:'iPhone-17', platform:'ios', version:'27.0', simulator:true};
+  const alone = deviceMenuItems({adb, list:[simulator]}, actions);
+  assert.deepEqual(labels(alone), ['기록할 기기를 선택해 주세요 · 지금부터 들어오는 로그를 기록합니다', 'iPhone 17 · iOS 27.0 · 시뮬레이터', null, '새로 고침']);
+  assert.equal(alone[1][2], 'iPhone 17 시뮬레이터의 로그를 지금부터 기록합니다');
+  alone[1][1](); assert.deepEqual(calls, [simulator.serial]);
+  // Simulators follow iPhones, with no heading of their own; simulators named alike
+  // on one iOS version show the end of their UDIDs, apart from an iPhone of
+  // the same name.
+  const iphone = {serial:'QA0UDID0000000000000001', state:'device', model:'iPhone 17', product:'iPhone0,0', platform:'ios', version:'27.0'};
+  const ipad = {...simulator, serial:'00000000-0000-0000-0000-00000000000B', model:'iPad Air', product:'iPad-Air-13-inch-M4'};
+  const twin = {...simulator, serial:'00000000-0000-0000-0000-0000000000C3'};
+  const older = {...simulator, serial:'00000000-0000-0000-0000-0000000000D4', version:'26.4'};
+  const both = deviceMenuItems({adb, list:[simulator, iphone, ipad, twin, older]}, actions);
+  assert.deepEqual(labels(both).slice(1, 6), ['iPhone 17 · iOS 27.0', 'iPhone 17 · iOS 27.0 · 시뮬레이터 · …000A', 'iPad Air · iPadOS 27.0 · 시뮬레이터', 'iPhone 17 · iOS 27.0 · 시뮬레이터 · …00C3', 'iPhone 17 · iOS 26.4 · 시뮬레이터']);
+  // Beside Android devices, two headings.
+  const android = {serial:'emulator-5554', state:'device', model:'Pixel_8'};
+  assert.deepEqual(labels(deviceMenuItems({adb, list:[simulator, android]}, actions)).slice(1, 5), ['Android', 'Pixel 8 · emulator-5554', 'iPhone·iPad', 'iPhone 17 · iOS 27.0 · 시뮬레이터']);
+  // With none running, the menu does not mention them.
+  assert.ok(!labels(deviceMenuItems({adb, list:[iphone]}, actions)).some(l => /시뮬레이터/.test(l ?? '')));
+  assert.ok(!labels(deviceMenuItems({adb, list:[]}, actions)).some(l => /시뮬레이터/.test(l ?? '')));
+  const failed = deviceMenuItems({adb, list:[], simulatorError:'Could not list iOS simulators; check Xcode and retry'}, actions);
+  assert.deepEqual(labels(failed).slice(-3), ['iOS 시뮬레이터 목록을 가져오지 못했습니다. Xcode를 연 뒤 새로 고침해 주세요.', null, '새로 고침']);
+  // Native simulator errors read in Korean.
+  assert.equal(describeLogError("Could not read the simulator's log; check the simulator and retry"), '시뮬레이터 로그를 읽지 못했습니다. 시뮬레이터 상태를 확인하고 다시 시도해 주세요.');
+  assert.equal(describeLogError('Start the simulator, then retry'), '시뮬레이터를 켠 뒤 다시 시도해 주세요.');
+  assert.equal(describeLogError('The simulator is starting; wait for it, then retry'), '시뮬레이터가 켜지는 중입니다. 다 켜진 뒤 다시 시도해 주세요.');
+});
+
+test('a simulator\'s capture says it is one, and waits for it once shut down', () => {
+  const base = {device:'iPhone 17', platform:'ios', simulator:true, bytes:1048576, unsaved:true, breaks:[]};
+  assert.equal(describeCapture({...base, state:'recording'}).text, '기록 중 · 저장 안 됨 · iPhone 17 시뮬레이터');
+  const shutdown = describeCapture({...base, state:'waiting', lost:at(14, 2, 11), reason:'Start the simulator, then retry'});
+  assert.deepEqual(shutdown, {tone:'waiting', text:'시뮬레이터 꺼짐 · iPhone 17',
+    title:'14:02:11에 시뮬레이터가 꺼졌습니다. 다시 켜면 이어서 기록합니다.'});
+  const booting = describeCapture({...base, state:'waiting', lost:at(14, 2, 11), reason:'The simulator is starting; wait for it, then retry'});
+  assert.deepEqual(booting, {tone:'waiting', text:'시뮬레이터 켜지는 중 · iPhone 17',
+    title:'14:02:11에 시뮬레이터가 꺼졌습니다. 다 켜지면 이어서 기록합니다.'});
+  const resumed = describeCapture({...base, state:'waiting', lost:at(14, 5, 0), stopped:at(14, 4, 0), reason:'Start the simulator, then retry'});
+  assert.equal(resumed.text, '시뮬레이터 꺼짐 · iPhone 17');
+  assert.equal(resumed.title, '시뮬레이터를 다시 켜 주세요. 준비되면 이어서 기록합니다. 멈춘 동안의 로그는 기록되지 않습니다.');
+  assert.equal(describeCapture({...base, state:'stopped'}).text, '기록 중지됨 · 저장 안 됨 · iPhone 17 시뮬레이터');
+  // A simulator shut down and started again is marked where it came back.
+  const off = (row, lost, resumed) => ({row, lost, resumed, reboot:false, gap:true, stopped:false, shutdown:true});
+  const label = breaks => breakLabel(captureBreaks({breaks}), 0, 99);
+  assert.equal(label([off(4, at(14, 2, 11), at(14, 2, 40))]), '14:02:11 시뮬레이터 꺼짐 → 14:02:40 다시 켜짐');
+  assert.equal(label([off(4, at(14, 2, 11), at(14, 2, 40)), off(9, at(14, 3, 0), at(14, 3, 30))]), '14:02:11–14:03:30 시뮬레이터 꺼짐 2번');
+  assert.equal(label([off(4, at(14, 2, 11), at(14, 2, 40)), {...off(9, at(14, 3, 0), at(14, 3, 30)), shutdown:false}]), '14:02:11–14:03:30 연결 끊김 2번 · 끊긴 동안 로그 기록 안 됨');
+});
+
+test('a simulator\'s capture is named as one where its log may close', async () => {
+  const simulator = {...unsaved, device:'iPhone 17', platform:'ios', simulator:true};
+  const r = rig({state:{capture:simulator}});
+  r.devices.render();
+  assert.equal(r.ui.captureText.textContent, '기록 중 · 저장 안 됨 · iPhone 17 시뮬레이터');
+  assert.equal(r.ui.captureText.dataset.keep, String('기록 중 · 저장 안 됨'.length));
+  assert.equal(r.ui.captureApp.hidden, true, 'no app starts on a simulator');
+  r.logs.state.capture = {...simulator, state:'waiting', lost:at(14, 2, 11), reason:'Start the simulator, then retry'};
+  r.devices.render();
+  assert.equal(r.ui.captureText.textContent, '시뮬레이터 꺼짐 · iPhone 17');
+  assert.equal(r.ui.captureText.dataset.keep, String('시뮬레이터 꺼짐'.length));
+  const answer = r.devices.guard(); await settle();
+  assert.match(r.$('captureDialogNote').textContent, /^iPhone 17 시뮬레이터에서 기록한 로그\(4\.0 KiB\)가 아직 저장되지 않았습니다/);
+  r.$('captureDiscard').fire('click');
+  assert.equal(await answer, 'asked');
+});
+
+test('the device menu lists simulators as native code reports them', async () => {
+  const simulator = {serial:'00000000-0000-0000-0000-00000000000A', state:'device', model:'iPhone 17', product:'iPhone-17', platform:'ios', version:'27.0', simulator:true, ready:true};
+  const open = async listed => {
+    const r = rig({answers:{adb_status:{found:true, origin:'studio', version:'37.0.1'}, list_devices:listed}});
+    await r.devices.openMenu(r.ui.deviceButton);
+    return r.menus.at(-1).items.map(item => item?.[0] ?? null);
+  };
+  assert.ok((await open({devices:[], androidError:null, iosError:null, simulatorError:'Could not list iOS simulators; check Xcode and retry'})).includes('iOS 시뮬레이터 목록을 가져오지 못했습니다. Xcode를 연 뒤 새로 고침해 주세요.'));
+  assert.ok((await open({devices:[simulator], androidError:null, iosError:null, simulatorError:null})).includes('iPhone 17'));
 });
 
 test('the capture bar names each state; breaks name where the device left and came back', () => {
@@ -741,8 +827,8 @@ test('an iPhone being recorded on a Mac offers to start an app, which runs once 
   closed.logs.state = {...closed.logs.state, datasetId:8};
   late('Unlock the device, then retry'); await settle();
   assert.deepEqual([closed.reports, closed.notes], [[], []]);
-  // Only while an iPhone records, and only on a Mac.
-  for (const [capture, platform] of [[unsaved, 'MacIntel'], [{...iphone, state:'waiting'}, 'MacIntel'], [{...iphone, state:'stopped'}, 'MacIntel'], [iphone, 'Win32']]) {
+  // Only while an iPhone records, and only on a Mac; not on a simulator.
+  for (const [capture, platform] of [[unsaved, 'MacIntel'], [{...iphone, simulator:true}, 'MacIntel'], [{...iphone, state:'waiting'}, 'MacIntel'], [{...iphone, state:'stopped'}, 'MacIntel'], [iphone, 'Win32']]) {
     const other = rig({state:{capture}, platform});
     other.devices.render();
     assert.equal(other.ui.captureApp.hidden, true, `${capture.platform} ${capture.state} ${platform}`);

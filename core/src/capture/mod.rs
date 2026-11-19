@@ -1,6 +1,6 @@
 //! Records a device's log into a capture file that a followed dataset
-//! reads: an Android device's logcat, or an iPhone's or iPad's log. Rows
-//! from before the capture started are left out. A device that leaves is
+//! reads: an Android device's logcat, or an iPhone's, iPad's or iOS
+//! simulator's log. Rows from before the capture started are left out. A device that leaves is
 //! waited for; an Android device is continued after the last row recorded,
 //! without repeating it, or from its first row when it booted meanwhile,
 //! and rows it dropped from its buffer while away cannot come back. An
@@ -17,6 +17,7 @@ pub mod gate;
 pub mod ios;
 pub mod link;
 mod process;
+pub mod sim;
 pub mod store;
 
 use crate::source::{error, MAX_FILE, MAX_LINE};
@@ -75,6 +76,8 @@ pub struct Break {
     pub gap: bool,
     /// The user stopped the capture at `lost` and resumed it.
     pub stopped: bool,
+    /// The device, a simulator, was seen shut down or starting while away.
+    pub shutdown: bool,
 }
 /// An app the capture's device started with its private values shown:
 /// `row` is the first physical row recorded after the start began, `at` its
@@ -130,6 +133,8 @@ struct Status {
     /// While waiting: why the device, listed again, cannot be used yet,
     /// such as USB debugging awaiting the user's approval.
     reason: String,
+    /// The device was seen shut down or starting since it was last back.
+    shutdown: bool,
     /// The rows a cut of the stopped capture set aside, to be restored
     /// until the capture records again, closes or lets them go.
     kept: Option<Kept>,
@@ -153,6 +158,8 @@ pub struct Capture {
     /// The device as people know it: its model, else its serial.
     pub model: String,
     pub platform: Platform,
+    /// An iOS simulator's capture.
+    pub simulator: bool,
     identity: String,
     options: Options,
     status: Mutex<Status>,
@@ -285,6 +292,7 @@ impl Capture {
             link,
             model: c.device.label(),
             platform: c.device.platform,
+            simulator: c.device.simulator,
             identity: c.identity,
             options,
             status: Mutex::new(Status {
@@ -303,6 +311,7 @@ impl Capture {
                 launches: vec![],
                 lost: None,
                 reason: String::new(),
+                shutdown: false,
                 kept: None,
             }),
             wake: Condvar::new(),
@@ -340,6 +349,7 @@ impl Capture {
             link: Arc::new(Unlinked),
             model: name,
             platform,
+            simulator: false,
             identity: String::new(),
             options: Options::default(),
             status: Mutex::new(Status {
@@ -358,6 +368,7 @@ impl Capture {
                 launches: vec![],
                 lost: None,
                 reason: String::new(),
+                shutdown: false,
                 kept: None,
             }),
             wake: Condvar::new(),
@@ -579,7 +590,7 @@ impl Capture {
             .breaks
             .iter()
             .map(|b| {
-                json!({"row":b.row,"lost":b.lost,"resumed":b.resumed,"reboot":b.reboot,"gap":b.gap,"stopped":b.stopped})
+                json!({"row":b.row,"lost":b.lost,"resumed":b.resumed,"reboot":b.reboot,"gap":b.gap,"stopped":b.stopped,"shutdown":b.shutdown})
             })
             .collect();
         let launches: Vec<Value> = s
@@ -592,6 +603,7 @@ impl Capture {
             "state": s.phase.as_str(),
             "device": self.model,
             "platform": self.platform.as_str(),
+            "simulator": self.simulator,
             "serial": s.serial,
             "bytes": s.bytes,
             "rows": s.rows,
@@ -701,7 +713,12 @@ impl Capture {
                 if self.stopping() {
                     break Ok(());
                 }
-                self.away(now());
+                // The reason the device left, such as a simulator shut
+                // down, shows as soon as the capture waits, not a poll later.
+                let lost = now();
+                let devices = self.link.devices().unwrap_or_default();
+                self.away(lost);
+                self.explain(&devices);
                 self.notify();
             }
             match self.reconnect() {
@@ -748,12 +765,14 @@ impl Capture {
             reboot: back.boot != s.boot,
             gap: back.gap,
             stopped: stopped.is_some(),
+            shutdown: s.shutdown,
         };
         s.breaks.push(gone);
         s.boot = back.boot;
         s.phase = Phase::Recording;
         s.lost = None;
         s.reason.clear();
+        s.shutdown = false;
         if back.fresh {
             s.fresh = false;
         }
@@ -860,6 +879,7 @@ impl Capture {
                 .and_then(Device::problem)
                 .unwrap_or("");
             let changed = s.reason != reason;
+            s.shutdown |= matches!(reason, link::SHUTDOWN | link::BOOTING);
             s.reason = reason.into();
             changed
         };

@@ -15,7 +15,7 @@
 | `core/src/search.rs` | 고정 버전 `grep-regex` / `grep-searcher` 기반 문자열·정규식 검색 및 하이라이트 범위 계산, 필터 조건(레벨·태그·PID·TID·시간·메시지) 컴파일과 블록·행 판정 |
 | `core/src/encoding.rs` | 표시 텍스트 디코딩: 손상된 UTF-8 바이트의 표시용 대체(`U+FFFD`)와 손상 위치 마스크, Mac OS Roman으로 잘못 읽혀 깨진 UTF-8 문자 복원(`repair`), UTF-16(UTF-32 BOM 포함)·압축 파일 판별 |
 | `core/src/launch.rs` | CLI 경로 인자(복수 지정 시 병합 열기) 및 `--large-log`(반복 가능) 옵션 해석 |
-| `core/src/capture/` | 기기 기록: `mod.rs`(기록기·재연결 상태 흐름·저장·버리기·새 파일로 비우기(`Cut`)), `gate.rs`(`threadtime` 시각과 시작 경계·중복 제거), `link.rs`(연결 계층 trait·기기 종류·`adb devices -l` 파서·공개 오류 문구), `cli.rs`(adb 명령 실행 연결), `adb.rs`(adb 탐지·`adb version` 검증), `process.rs`(adb·Xcode 도구 명령을 표준 입력과 Windows 콘솔 창 없이 만들고, 시간 제한 안에 끝까지 실행), `ios.rs`(Apple 기기 서비스(usbmuxd)로 iPhone·iPad 목록과 `os_trace_relay` 로그를 받아 iOS 로그 줄로 쓰는 연결), `apps.rs`(기록 중인 iPhone·iPad의 개발용 서명 앱 목록과 Xcode `devicectl`로 `OS_ACTIVITY_DT_MODE=1` 실행), `store.rs`(임시 기록 파일과 잠금·남은 기록), `fake.rs`(테스트·QA용 가짜 연결과 합성 로그) |
+| `core/src/capture/` | 기기 기록: `mod.rs`(기록기·재연결 상태 흐름·저장·버리기·새 파일로 비우기(`Cut`)), `gate.rs`(`threadtime` 시각과 시작 경계·중복 제거), `link.rs`(연결 계층 trait·기기 종류·`adb devices -l` 파서·공개 오류 문구), `cli.rs`(adb 명령 실행 연결), `adb.rs`(adb 탐지·`adb version` 검증), `process.rs`(adb·Xcode 도구 명령을 표준 입력과 Windows 콘솔 창 없이 만들고, 시간 제한 안에 끝까지 실행), `ios.rs`(Apple 기기 서비스(usbmuxd)로 iPhone·iPad 목록과 `os_trace_relay` 로그를 받아 iOS 로그 줄로 쓰는 연결), `sim.rs`(CoreSimulator의 `simctl`로 실행 중인 iOS 시뮬레이터 목록과 `log stream --style ndjson`을 받아 같은 iOS 로그 줄로 쓰는 연결. 출력은 소켓으로 받아, 기록을 멈추면 시뮬레이터 안의 `log`도 바로 끝남), `apps.rs`(기록 중인 iPhone·iPad의 개발용 서명 앱 목록과 Xcode `devicectl`로 `OS_ACTIVITY_DT_MODE=1` 실행), `store.rs`(임시 기록 파일과 잠금·남은 기록), `fake.rs`(테스트·QA용 가짜 연결과 합성 로그) |
 | `core/src/lib.rs` | `Engine`: 파일 열기·검증·롤백 복원, 기기 기록 로그 열기(`open_capture`)·비운 기록을 새 데이터셋으로 바꾸기(`clear_capture`)와 수명 관리, IPC 요청 처리, 진행 상태 이벤트 발행 |
 | `src-tauri/src/main.rs` | Tauri 커맨드 핸들러, 동시 요청 수 제한, 파일 선택·드롭 처리(다중 파일은 `order::arrange` 정렬), 시작 인자 오류 보관(`take_startup_error`) |
 | `src-tauri/src/clipboard.rs` | macOS Finder 파일 및 UTF-8 BOM 붙여넣기용 일회성 권한(grant) 발급·연장·폐기 |
@@ -267,6 +267,15 @@ python3 tests/e2e/run.py target/qa/release/logstudio-desktop
 cargo test -p logstudio-core --test ios_device -- --ignored --test-threads 1 --nocapture
 LOGSTUDIO_IOS_APP=<bundle ID> cargo test -p logstudio-core --test ios_device a_developer_build -- --ignored --nocapture
 ```
+
+`core/tests/sim_device.rs`는 이 Mac에서 실행 중인 iOS 시뮬레이터로 시뮬레이터 연결을 검증하며, 평소 테스트에서는 건너뜁니다. 시작한 뒤의 줄만 iOS 로그로 기록되는지, 기록을 멈추면 시뮬레이터 안의 `log stream`도 바로 끝나는지, 같은 시간에 파일로 받은 별도의 `log stream`과 초마다 항목 수를 비교해 빠진 항목이 없는지를 확인하고, 첫 줄까지 걸린 시간과 앱 실행 직후처럼 로그가 몰릴 때의 초당 줄 수·CPU 사용량을 출력합니다. 여러 대가 실행 중이면 `LOGSTUDIO_SIM_UDID`로 고르고, `LOGSTUDIO_SIM_RESTART=1`이면 기록 중에 시뮬레이터를 껐다 켜서 다시 이어 기록하는지 확인합니다(이 변수가 없으면 그 테스트는 건너뛰었다고 출력합니다). 테스트 중에 시뮬레이터의 설정 앱을 다시 실행합니다.
+
+```sh
+cargo test -p logstudio-core --test sim_device -- --ignored --test-threads 1 --nocapture
+LOGSTUDIO_SIM_RESTART=1 cargo test -p logstudio-core --test sim_device a_simulator_shut_down -- --ignored --nocapture
+```
+
+QA 빌드는 이 Mac의 시뮬레이터를 목록에 넣지 않습니다. e2e는 `qa_devices`의 `sim` 동작으로 가짜 시뮬레이터를 쓰고, `sim-real`이면 실제 시뮬레이터를 씁니다.
 
 `core/tests/capture_device.rs`는 연결한 기기나 에뮬레이터로 제품의 adb 연결을 검증하며, 평소 테스트에서는 건너뜁니다(`#[ignore]`). 시작 경계, adb 서버 재시작 후 이어 붙이기, 재부팅 후 기록, 설치된 adb 탐지를 확인하며, 기기 쪽 로그는 테스트가 실행 중에 직접 찍은 확인용 줄로만 판정합니다.
 

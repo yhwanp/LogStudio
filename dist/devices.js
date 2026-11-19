@@ -1,5 +1,6 @@
-// Device captures, of Android devices through adb and of iPhones and iPads
-// through Apple's device service: the device menu, the capture bar, how to
+// Device captures, of Android devices through adb, of iPhones and iPads
+// through Apple's device service and of running iOS simulators through
+// Xcode's simulator tool: the device menu, the capture bar, how to
 // get adb, the question before a capture's unsaved rows go, starting a
 // developer build on the iPhone being recorded, and the capture files an
 // earlier run left. Native code owns adb, the devices, the apps and the
@@ -52,10 +53,17 @@ export function deviceName(device) {
 // What tells a device apart after its name: an Android device's serial, an
 // iPhone's system version (its UDID means nothing to people), with the end
 // of its UDID when another iPhone has its name (new ones are all "iPhone").
+// A simulator, named like the device it simulates, always says it is one.
 function deviceDetail(device, alike = false) {
   if (device?.platform !== 'ios') return String(device?.serial ?? '');
   const system = device.version ? `${/^iPad/.test(device.product ?? '') ? 'iPadOS' : 'iOS'} ${device.version}` : '';
-  return [system, alike ? `…${String(device.serial ?? '').slice(-4)}` : ''].filter(Boolean).join(' · ');
+  return [system, device.simulator === true ? '시뮬레이터' : '', alike ? `…${String(device.serial ?? '').slice(-4)}` : ''].filter(Boolean).join(' · ');
+}
+// A capture's device as the bar and questions name it; a simulator's name
+// gets 시뮬레이터 after it.
+export function captureDevice(capture) {
+  const device = capture?.device || '기기';
+  return capture?.simulator === true ? `${device} 시뮬레이터` : device;
 }
 // How an iPhone comes to trust this computer, shown under it in the menu.
 const TRUST_STEPS = '기기 화면의 "이 컴퓨터를 신뢰하겠습니까?"에서 신뢰를 누르고 암호를 입력해 주세요';
@@ -73,13 +81,15 @@ function deviceItem(device, alike, actions) {
     const untrusted = device.state === 'untrusted';
     return [name, null, untrusted ? TRUST_HINT : undefined, {disabled:true, detail, note:untrusted ? TRUST_STEPS : problem, key}];
   }
-  const title = `${name}${device.platform === 'ios' ? '' : `(${device.serial})`}의 로그를 지금부터 기록합니다`;
+  const title = `${name}${device.simulator === true ? ' 시뮬레이터' : device.platform === 'ios' ? '' : `(${device.serial})`}의 로그를 지금부터 기록합니다`;
   return [name, () => actions.start(device.serial), title, {detail, key}];
 }
-// The device menu's items (menu.js): the Android devices adb lists and the
-// iPhones Apple's device service lists, under their kind when both are
-// there, and what a missing kind needs. Without adb, iPhones are listed.
-export function deviceMenuItems({adb, list, error, androidError, iosError, loading}, actions) {
+// The device menu's items (menu.js): the Android devices adb lists, the
+// iPhones Apple's device service lists with the running iOS simulators after
+// them, under their kind when there are two kinds, and what a missing kind
+// needs.
+// Without adb, iPhones are listed.
+export function deviceMenuItems({adb, list, error, androidError, iosError, simulatorError, loading}, actions) {
   if (loading) return [['기기를 찾는 중…']];
   const footer = [null, ['새로 고침', actions.refresh]];
   // Offering to pick an adb that was found on its own reads as a step left
@@ -98,13 +108,17 @@ export function deviceMenuItems({adb, list, error, androidError, iosError, loadi
     else if (!noAdb) items.push(['USB 디버깅을 켠 기기를 연결하거나 에뮬레이터를 실행해 주세요']);
     else if (!iosError) items.push(['iPhone·iPad를 케이블이나 Wi-Fi로 연결해 주세요']);
   }
-  const ios = devices.filter(d => d?.platform === 'ios'), android = devices.filter(d => d?.platform !== 'ios');
-  const names = ios.map(deviceName);
-  for (const [heading, group] of [['Android', android], ['iPhone·iPad', ios]]) {
-    if (!group.length) continue;
-    if (android.length && ios.length) items.push([heading, null, undefined, {group:true}]);
+  const simulated = devices.filter(d => d?.platform === 'ios' && d.simulator === true);
+  const ios = devices.filter(d => d?.platform === 'ios' && d.simulator !== true), android = devices.filter(d => d?.platform !== 'ios');
+  // Simulators follow iPhones under the same heading.
+  const groups = [['Android', android], ['iPhone·iPad', [...ios, ...simulated]]].filter(([, group]) => group.length);
+  for (const [heading, group] of groups) {
+    if (groups.length > 1) items.push([heading, null, undefined, {group:true}]);
     for (const device of group) {
-      const alike = group === ios && names.filter(n => n === deviceName(device)).length > 1;
+      // Simulators are told apart from iPhones of the same name, and from
+      // simulators of the same name on another iOS version.
+      const same = d => deviceName(d) === deviceName(device) && (d.simulator === true) === (device.simulator === true) && (device.simulator !== true || d.version === device.version);
+      const alike = group !== android && group.filter(same).length > 1;
       items.push(deviceItem(device, alike, actions));
     }
   }
@@ -114,6 +128,7 @@ export function deviceMenuItems({adb, list, error, androidError, iosError, loadi
   else if (androidError) missing.push([describeLogError(androidError)]);
   if (iosError === NO_APPLE_SERVICE) missing.push(['iPhone·iPad 로그를 기록하려면 Apple Devices 앱을 설치해 주세요…', actions.appleHelp, 'Apple Devices 앱이나 iTunes 설치를 안내합니다']);
   else if (iosError) missing.push([describeLogError(iosError)]);
+  if (simulatorError) missing.push([describeLogError(simulatorError)]);
   if (missing.length) items.push(null, ...missing);
   return items.concat(footer);
 }
@@ -149,6 +164,8 @@ const WAITING_FOR = {
   'Device is offline; reconnect it and retry':{need:'기기가 오프라인입니다', hint:'케이블이나 기기 연결을 확인해 주세요.'},
   'Trust this computer on the device, then retry':{need:'이 컴퓨터를 신뢰해 주세요', hint:TRUST_HINT, back:true},
   'Unlock the device, then retry':{need:'기기 잠금을 풀어 주세요', hint:'기기 잠금을 풀어 주세요.', back:true},
+  'Start the simulator, then retry':{need:'시뮬레이터 꺼짐', hint:'시뮬레이터를 다시 켜 주세요.', resume:'다시 켜면', shutdown:true},
+  'The simulator is starting; wait for it, then retry':{need:'시뮬레이터 켜지는 중', hint:'시뮬레이터가 다 켜질 때까지 기다려 주세요.', resume:'다 켜지면', shutdown:true},
 };
 const NOT_READY = {need:'기기가 준비되기를 기다리는 중', hint:'기기가 아직 로그를 보낼 준비가 되지 않았습니다.'};
 // Recording on brings back no rows the device logged while stopped.
@@ -158,7 +175,7 @@ const STOPPED_ROWS = '멈춘 동안의 로그는 기록되지 않습니다.';
 // device name first.
 export function describeCapture(capture) {
   if (!capture) return null;
-  const size = formatSize(capture.bytes ?? 0), device = capture.device || '기기';
+  const size = formatSize(capture.bytes ?? 0), device = captureDevice(capture);
   const kept = capture.bytes > 0 ? (capture.unsaved ? ' · 저장 안 됨' : ' · 저장함') : '';
   switch (capture.state) {
     case 'recording':
@@ -171,12 +188,14 @@ export function describeCapture(capture) {
       // A device listed again may still need the user, such as approving
       // USB debugging after a reboot.
       const wait = capture.reason ? WAITING_FOR[capture.reason] ?? NOT_READY : null;
+      // Words that already say simulator leave it out of the name.
+      const named = wait?.shutdown ? capture.device || '기기' : device;
       // A capture resumed after a stop waits for its device without saying
       // the connection was lost: it never was while recording.
       if (Number.isSafeInteger(capture.stopped)) {
         return {
           tone:'waiting',
-          text:`${wait ? wait.need : '기기 연결을 기다리는 중'} · ${device}`,
+          text:`${wait ? wait.need : '기기 연결을 기다리는 중'} · ${named}`,
           title:`${wait ? `${wait.hint} 준비되면` : '기기가 연결되면'} 이어서 기록합니다. ${STOPPED_ROWS}`,
         };
       }
@@ -185,6 +204,15 @@ export function describeCapture(capture) {
       // the bar says so while nothing more is needed of the person.
       const ios = capture.platform === 'ios', gap = ios ? ' 끊긴 동안의 로그는 기록되지 않습니다.' : '';
       let text = `연결 끊김 · ${ios ? '끊긴 동안 로그 기록 안 됨' : '다시 연결을 기다리는 중'} · ${device}`;
+      // A simulator that was shut down was not disconnected: the bar says it
+      // is off and waits for it to start again.
+      if (wait?.shutdown) {
+        return {
+          tone:'waiting',
+          text:`${wait.need} · ${named}`,
+          title:`${clockTime(capture.lost)}에 시뮬레이터가 꺼졌습니다. ${wait.resume} 이어서 기록합니다.`,
+        };
+      }
       if (wait) text = `${wait.back ? '다시 연결됨' : '연결 끊김'} · ${wait.need} · ${device}`;
       return {
         tone:'waiting',
@@ -251,11 +279,15 @@ export function breakLabel(breaks, after, row) {
   }
   if (away.length) {
     const first = away[0], last = away[away.length - 1], reboot = away.some(b => b.reboot), gap = away.some(b => b.gap);
+    // A simulator shut down and started again was not disconnected.
+    const off = away.every(b => b.shutdown === true);
+    const [left, back] = off ? ['시뮬레이터 꺼짐', '다시 켜짐'] : ['연결 끊김', '다시 연결'];
     const span = away.length === 1
-      ? `${clockTime(first.lost)} 연결 끊김 → ${clockTime(first.resumed)} 다시 연결`
-      : `${clockTime(first.lost)}–${clockTime(last.resumed)} 연결 끊김 ${away.length}번`;
-    // An iPhone's rows from while it was away were never recorded.
-    parts.push({row:first.row, text:`${span}${reboot ? ' · 기기 재부팅' : ''}${gap ? ' · 끊긴 동안 로그 기록 안 됨' : ''}`});
+      ? `${clockTime(first.lost)} ${left} → ${clockTime(first.resumed)} ${back}`
+      : `${clockTime(first.lost)}–${clockTime(last.resumed)} ${left} ${away.length}번`;
+    // An iPhone's rows from while it was away were never recorded; a shut
+    // down simulator logged none.
+    parts.push({row:first.row, text:`${span}${reboot ? ' · 기기 재부팅' : ''}${gap && !off ? ' · 끊긴 동안 로그 기록 안 됨' : ''}`});
   }
   if (started.length) {
     // The app's rows say its process, which may not be its name.
@@ -384,7 +416,7 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
     const actions = {refresh:() => void openMenu(menuAt.anchor), pick, help:openHelp, appleHelp:openAppleHelp, start};
     shownMenu = menu.show(deviceMenuItems({adb, ...content}, actions), menuAt.x, menuAt.y, '기기 로그', {opener:menuAt.anchor});
   }
-  const listing = listed => ({list:listed?.devices, androidError:listed?.androidError, iosError:listed?.iosError});
+  const listing = listed => ({list:listed?.devices, androidError:listed?.androidError, iosError:listed?.iosError, simulatorError:listed?.simulatorError});
   // A device that waits on the person (USB debugging, trust, unlocking) is
   // listed again while the menu is open, so it can be chosen once ready.
   const waitsOnPerson = listed => (listed?.devices ?? []).some(device => deviceProblem(device));
@@ -569,7 +601,7 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
     // A file with no unsaved rows goes when its log closes (native code).
     if (!capture.unsaved) return 'none';
     try {
-      const device = capture.device || '기기', size = formatSize(capture.bytes);
+      const device = captureDevice(capture), size = formatSize(capture.bytes);
       // No-break spaces keep the button's name on one line.
       const answer = await dialog.ask(`${device}에서 기록한 로그(${size})가 아직 저장되지 않았습니다. 저장\u00a0안\u00a0함을 누르면 지워집니다.`);
       if (answer === 'cancel' || isGone()) return 'cancel';
@@ -725,7 +757,7 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
     // app menu goes with its button, or with the bar: its focus goes back
     // to the button first, to be handed on from there.
     const handOff = (from, to) => {if (from.contains(document.activeElement)) [...to, ui.deviceButton, ui.openFile].find(button => !button.hidden && !button.disabled)?.focus({preventScroll:true});};
-    const appHidden = !words || !xcode || capture.platform !== 'ios' || capture.state !== 'recording';
+    const appHidden = !words || !xcode || capture.platform !== 'ios' || capture.simulator || capture.state !== 'recording';
     if (appHidden && menu.version() === appMenu) menu.close(true);
     if (!words) handOff(ui.captureBar, []);
     ui.captureBar.hidden = !words;
@@ -738,8 +770,9 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
     if (ui.captureText.textContent !== words.text) {
       // How much of the text comes before the device name, which may shorten
       // first (topbar.js); a leftover log's text names no device.
-      const named = ` · ${capture.device || '기기'}`;
-      ui.captureText.dataset.keep = String(words.text.endsWith(named) ? words.text.length - named.length : words.text.length);
+      // A shut down simulator's words name it without saying simulator.
+      const named = [captureDevice(capture), capture.device].map(name => ` · ${name}`).find(name => words.text.endsWith(name)) ?? '';
+      ui.captureText.dataset.keep = String(words.text.length - named.length);
       ui.captureText.textContent = words.text;
       ui.captureHint.textContent = words.title;
     }
