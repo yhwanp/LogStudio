@@ -38,6 +38,8 @@ struct World {
     apps_error: Option<&'static str>,
     /// How long starting an app takes, as on a device Xcode waits for.
     launch_delay: Duration,
+    /// Why no device can be listed, as when the connection's tool fails.
+    list_error: Option<&'static str>,
 }
 struct FakeDevice {
     info: Device,
@@ -157,6 +159,11 @@ impl FakeLink {
         .into();
         info.version = version.into();
     }
+    /// Starts a new iOS simulator, listed by its UDID.
+    pub fn add_simulator(&self, udid: &str, name: &str, version: &str) {
+        self.add_ios(udid, name, version);
+        self.world.lock().unwrap().any(udid).info.simulator = true;
+    }
     /// Installs a developer build on the device.
     pub fn add_app(&self, serial: &str, bundle: &str, name: &str, version: &str) {
         let executable = name.split_whitespace().collect::<String>();
@@ -166,6 +173,10 @@ impl FakeLink {
             version: version.into(),
             executable,
         });
+    }
+    /// Makes listing devices fail with `e`, or work again.
+    pub fn list_error(&self, e: Option<&'static str>) {
+        self.world.lock().unwrap().list_error = e;
     }
     /// Makes listing and starting apps fail with `e`, or work again.
     pub fn apps_error(&self, e: Option<&'static str>) {
@@ -214,6 +225,16 @@ impl FakeLink {
         let mut w = self.world.lock().unwrap();
         let d = w.any(serial);
         d.plugged = false;
+        for s in d.streams.drain(..) {
+            s.close();
+        }
+    }
+    /// A simulator shuts down: its streams end, and it stays listed as not
+    /// running.
+    pub fn shut_down(&self, serial: &str) {
+        let mut w = self.world.lock().unwrap();
+        let d = w.any(serial);
+        d.info.state = "shutdown".into();
         for s in d.streams.drain(..) {
             s.close();
         }
@@ -376,9 +397,11 @@ impl Link for FakeLink {
         !self.live
     }
     fn devices(&self) -> io::Result<Vec<Device>> {
-        Ok(self
-            .check()?
-            .devices
+        let w = self.check()?;
+        if let Some(e) = w.list_error {
+            return Err(error(e));
+        }
+        Ok(w.devices
             .iter()
             .filter(|d| d.plugged)
             .map(|d| d.info.clone())

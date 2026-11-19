@@ -684,7 +684,7 @@ fn forget_cleared_capture(
     Ok(())
 }
 /// Why no app can be started for a dataset: it shows no iPhone or iPad
-/// being recorded.
+/// being recorded. Apps are not started on iOS simulators.
 const NOT_RECORDING_IOS: &str = "Apps start only while an iPhone or iPad is recording";
 /// The capture of the iPhone or iPad that dataset `id` records now.
 fn recorded_iphone(
@@ -693,7 +693,8 @@ fn recorded_iphone(
 ) -> Result<Arc<logstudio_core::capture::Capture>, String> {
     use logstudio_core::capture::{link::Platform, Phase};
     let capture = engine.capture(id).ok_or("No device capture is open")?;
-    if capture.platform != Platform::Ios || capture.phase() != Phase::Recording {
+    if capture.platform != Platform::Ios || capture.simulator || capture.phase() != Phase::Recording
+    {
         return Err(NOT_RECORDING_IOS.into());
     }
     Ok(capture)
@@ -996,7 +997,10 @@ fn qa_quit(app: tauri::AppHandle) -> Vec<String> {
 /// The iPhone has two developer builds; starting SampleApp shows its
 /// private values. `ios-no-xcode` acts as if Xcode were not installed, and
 /// `ios-xcode` as if it were again; `ios-slow-launch` makes starting an app
-/// take 6 s.
+/// take 6 s. `sim` lists a running iOS simulator that logs synthetic rows;
+/// `sim-shutdown` and `sim-boot` stop and start it; `sim-error` makes the
+/// simulator list fail; `sim-real` uses this Mac's simulators, which QA
+/// builds otherwise do not list.
 #[cfg(feature = "qa")]
 #[tauri::command]
 fn qa_devices(app: tauri::AppHandle, action: String) -> Result<(), String> {
@@ -1004,6 +1008,7 @@ fn qa_devices(app: tauri::AppHandle, action: String) -> Result<(), String> {
     type Fake = Option<(Arc<FakeLink>, Arc<AtomicBool>)>;
     static FAKE: Mutex<Fake> = Mutex::new(None);
     static FAKE_IOS: Mutex<Fake> = Mutex::new(None);
+    static FAKE_SIM: Mutex<Fake> = Mutex::new(None);
     // A new script replaces the old one, whose rows stop.
     fn stop(fake: &mut Fake) {
         if let Some((_, feeding)) = fake.take() {
@@ -1013,7 +1018,39 @@ fn qa_devices(app: tauri::AppHandle, action: String) -> Result<(), String> {
     const READY: &str = "emulator-5554";
     const IPHONE: &str = "QA0UDID0000000000000001";
     const IPAD: &str = "QA0UDID0000000000000002";
+    const SIMULATOR: &str = "00000000-0000-0000-0000-00000000000A";
     let devices = app.state::<devices::Devices>();
+    if let Some(action) = action.strip_prefix("sim") {
+        let mut fake = FAKE_SIM.lock().unwrap();
+        match action {
+            "" => {
+                stop(&mut fake);
+                let link = FakeLink::live();
+                link.add_simulator(SIMULATOR, "iPhone 17", "27.0");
+                let feeding = link.feed(SIMULATOR, std::time::Duration::from_millis(150));
+                devices.replace_sim(Some(devices::Replaced::Link(link.clone())));
+                *fake = Some((link, feeding));
+            }
+            "-shutdown" | "-boot" => {
+                let (link, _) = fake.as_ref().ok_or("No fake simulator")?;
+                if action == "-shutdown" {
+                    link.shut_down(SIMULATOR);
+                } else {
+                    link.set_state(SIMULATOR, "device");
+                }
+            }
+            "-error" => {
+                let (link, _) = fake.as_ref().ok_or("No fake simulator")?;
+                link.list_error(Some(logstudio_core::capture::sim::LIST_FAILED));
+            }
+            "-real" => {
+                stop(&mut fake);
+                devices.replace_sim(None);
+            }
+            _ => return Err("Unknown QA device action".into()),
+        }
+        return Ok(());
+    }
     if let Some(action) = action.strip_prefix("ios") {
         let mut fake = FAKE_IOS.lock().unwrap();
         match action {
@@ -1177,7 +1214,13 @@ fn main() {
         .manage(geometry::Geometry::default())
         .manage(work::WorkStates::default())
         .manage(filters::SavedFilters::default())
-        .manage(devices::Devices::default())
+        .manage({
+            let devices = devices::Devices::default();
+            // QA builds list this Mac's simulators only when asked to.
+            #[cfg(feature = "qa")]
+            devices.replace_sim(Some(devices::Replaced::Missing));
+            devices
+        })
         .manage(Held::default())
         .manage(Startup(Mutex::new(launch_error)))
         .setup(move |app| {

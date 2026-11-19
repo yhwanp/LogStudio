@@ -13,7 +13,7 @@ use logstudio_core::{
 use serde_json::json;
 use std::{
     cmp::Ordering,
-    sync::Arc,
+    sync::{Arc, Mutex},
     thread,
     time::{Duration, Instant},
 };
@@ -1181,6 +1181,78 @@ fn an_iphone_capture_records_only_rows_logged_while_connected() {
     assert_eq!(link.opened().len(), 2);
     assert!(link.opened().iter().all(|(_, since)| since.is_none()));
     c.stop();
+}
+
+#[test]
+fn a_simulator_shut_down_while_recording_is_waited_for_until_it_runs_again() {
+    const SIMULATOR: &str = "00000000-0000-0000-0000-00000000000A";
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::new(dir.path().join("captures"));
+    let link = FakeLink::live();
+    link.add_simulator(SIMULATOR, "iPhone 17", "27.0");
+    let slot = store.create(Platform::Ios, "iPhone 17").unwrap();
+    let c = Capture::start(link.clone(), SIMULATOR, slot, options()).unwrap();
+    assert!(c.simulator);
+    assert_eq!(
+        (&c.json()["simulator"], &c.json()["platform"]),
+        (&json!(true), &json!("ios"))
+    );
+    let first = "2026-10-24 14:00:01.000001 SampleApp[812:4410] [INFO] [Sync] first\n";
+    link.log(SIMULATOR, first);
+    written(&c, first);
+    link.shut_down(SIMULATOR);
+    wait("the shutdown reason", || {
+        c.phase() == Phase::Waiting && c.json()["reason"] == link::SHUTDOWN
+    });
+    link.set_state(SIMULATOR, "device");
+    wait("recording again", || c.phase() == Phase::Recording);
+    let back = "2026-10-24 14:00:03.000001 SampleApp[812:4410] [INFO] [Sync] back\n";
+    link.log(SIMULATOR, back);
+    written(&c, &format!("{first}{back}"));
+    let breaks = c.breaks();
+    assert_eq!(
+        (
+            breaks.len(),
+            breaks[0].row,
+            breaks[0].gap,
+            breaks[0].shutdown
+        ),
+        (1, 2, true, true)
+    );
+    assert_eq!(c.json()["breaks"][0]["shutdown"], json!(true));
+    c.stop();
+}
+
+#[test]
+fn why_a_device_left_shows_as_it_leaves_not_a_poll_later() {
+    const SIMULATOR: &str = "00000000-0000-0000-0000-00000000000A";
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::new(dir.path().join("captures"));
+    let link = FakeLink::live();
+    link.add_simulator(SIMULATOR, "iPhone 17", "27.0");
+    let slot = store.create(Platform::Ios, "iPhone 17").unwrap();
+    let slow = Options {
+        poll: Duration::from_secs(60),
+        ..options()
+    };
+    let c = Capture::start(link.clone(), SIMULATOR, slot, slow).unwrap();
+    let seen = Arc::new(Mutex::new(vec![]));
+    let s = seen.clone();
+    c.observe(move |c| {
+        let j = c.json();
+        s.lock()
+            .unwrap()
+            .push((j["state"].clone(), j["reason"].clone()));
+    });
+    link.shut_down(SIMULATOR);
+    wait("the shutdown reason", || {
+        c.phase() == Phase::Waiting && c.json()["reason"] == link::SHUTDOWN
+    });
+    c.stop();
+    // No waiting state without its reason reached the page first.
+    let seen = seen.lock().unwrap();
+    let first = seen.iter().find(|(state, _)| state == "waiting").unwrap();
+    assert_eq!(first.1, json!(link::SHUTDOWN), "{seen:?}");
 }
 
 #[test]
