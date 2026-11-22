@@ -989,6 +989,200 @@ fn a_stopped_capture_log_is_cleared_and_records_from_its_resume() {
     assert!(!aside.exists());
 }
 
+/// A stopped capture whose rows were cleared: its engine and capture, the
+/// cleared log's dataset, and the file of the rows set aside.
+fn cleared(s: &Setup, rows: &str) -> (Arc<Engine>, Arc<Capture>, u64, std::path::PathBuf) {
+    let e = Arc::new(Engine::default());
+    let id = e.begin_open();
+    let c = s.start("SER1");
+    e.open_capture(id, c.clone()).unwrap();
+    s.link.log("SER1", rows);
+    wait("rows", || c.bytes() == rows.len() as u64);
+    e.stop_capture(id).unwrap();
+    let aside = c.path();
+    let cut = Cut::open(s.store.create(Platform::Android, "Pixel 8").unwrap()).unwrap();
+    let next = e.begin_open();
+    e.clear_capture(id, next, cut).unwrap();
+    wait("cleared", || {
+        c.kept_path().is_some() && e.capture(id).is_none()
+    });
+    (e, c, next, aside)
+}
+/// Rows that take a while to read: 32 MiB.
+fn many_rows() -> String {
+    row(1, 0, &"x".repeat(970)).repeat(32 * 1024)
+}
+
+#[test]
+fn rows_being_taken_back_are_not_let_go() {
+    let s = setup();
+    let rows = [row(1, 0, "one"), row(2, 0, "two")].concat();
+    let (e, c, cleared, aside) = cleared(&s, &rows);
+    // The undo's time ends as its log opens, before its rows are read.
+    let late = c.clone();
+    e.observe(move |v| {
+        if v["status"] == "opened" {
+            late.forget_kept();
+        }
+    });
+    let back = e.begin_open();
+    e.restore_capture(cleared, back).unwrap();
+    wait("restored", || {
+        let s = e.request(json!({"action":"status"})).unwrap();
+        s["datasetId"] == back && s["total"] == 2 && s["capture"]["rows"] == 2
+    });
+    assert_eq!(c.path(), aside);
+    assert_eq!(std::fs::read(&aside).unwrap(), rows.as_bytes());
+    // Back in the capture, they are no longer set aside.
+    c.forget_kept();
+    assert!(aside.exists());
+    e.close();
+    assert!(aside.exists());
+}
+
+#[test]
+fn rows_that_could_not_be_taken_back_may_be_let_go() {
+    let s = setup();
+    let (e, c, cleared, aside) = cleared(&s, &row(1, 0, "one"));
+    let shown = || e.request(json!({"action":"status"})).unwrap()["datasetId"].clone();
+    // Without its file nothing opens, and the clear stays.
+    let away = aside.with_extension("away");
+    std::fs::rename(&aside, &away).unwrap();
+    assert!(e.restore_capture(cleared, e.begin_open()).is_err());
+    assert_eq!(shown(), cleared);
+    std::fs::rename(&away, &aside).unwrap();
+    // A file cut short as it opens fails once it is read.
+    let file = aside.clone();
+    e.observe(move |v| {
+        if v["status"] == "opened" {
+            std::fs::write(&file, "").unwrap();
+        }
+    });
+    let back = e.begin_open();
+    e.restore_capture(cleared, back).unwrap();
+    // The rows are set aside again once the log that failed is gone.
+    wait("cleared log again", || {
+        shown() == cleared && c.kept_path() == Some(aside.clone())
+    });
+    e.observe(|_| {});
+    c.forget_kept();
+    assert!(c.kept_path().is_none());
+    assert!(!aside.exists());
+    // The capture records on into the cleared file.
+    e.resume_capture(cleared).unwrap();
+    s.link.log("SER1", &row(3, 0, "three"));
+    written(&c, &row(3, 0, "three"));
+    e.close();
+}
+
+#[test]
+fn rows_whose_taking_back_was_cancelled_may_be_let_go() {
+    let s = setup();
+    let rows = many_rows();
+    let (e, c, mut shown, aside) = cleared(&s, &rows);
+    // Cancelling races the reading; a restore that won is cleared again.
+    for _ in 0..50 {
+        let back = e.begin_open();
+        e.restore_capture(shown, back).unwrap();
+        e.cancel_open(back);
+        wait("settled", || e.cleared_from(back).is_none());
+        let status = e.request(json!({"action":"status"})).unwrap();
+        if status["datasetId"] == shown {
+            c.forget_kept();
+            assert!(c.kept_path().is_none());
+            assert!(!aside.exists());
+            e.close();
+            return;
+        }
+        wait("restored", || c.kept_path().is_none());
+        let cut = Cut::open(s.store.create(Platform::Android, "Pixel 8").unwrap()).unwrap();
+        shown = e.begin_open();
+        e.clear_capture(back, shown, cut).unwrap();
+        wait("cleared again", || {
+            c.kept_path().is_some() && e.capture(back).is_none()
+        });
+    }
+    panic!("no restore was cancelled");
+}
+
+#[test]
+fn a_log_closed_or_replaced_as_rows_are_taken_back_leaves_them_for_later() {
+    let rows = many_rows();
+    for replaced in [false, true] {
+        let s = setup();
+        let (e, c, cleared, aside) = cleared(&s, &rows);
+        let empty = c.path();
+        e.restore_capture(cleared, e.begin_open()).unwrap();
+        if replaced {
+            let other = e.begin_open();
+            e.open_text(other, &row(1, 0, "other"), "other").unwrap();
+            wait("replaced", || e.shown_capture().is_none());
+            wait("closed", || e.capture(cleared).is_none());
+        } else {
+            e.close();
+        }
+        wait("cleared file removed", || !empty.exists());
+        assert_eq!(std::fs::metadata(&aside).unwrap().len(), rows.len() as u64);
+        drop((e, c));
+        wait("left", || s.store.leftovers().len() == 1);
+        assert_eq!(s.store.leftovers()[0].path, aside);
+    }
+}
+
+#[test]
+fn clearing_again_as_rows_are_taken_back_sets_them_aside_again() {
+    let s = setup();
+    let rows = many_rows();
+    let (e, c, cleared, aside) = cleared(&s, &rows);
+    let empty = c.path();
+    let back = e.begin_open();
+    e.restore_capture(cleared, back).unwrap();
+    let cut = Cut::open(s.store.create(Platform::Android, "Pixel 8").unwrap()).unwrap();
+    let again = e.begin_open();
+    e.clear_capture(back, again, cut).unwrap();
+    wait("cleared again", || {
+        c.kept_path() == Some(aside.clone()) && e.capture(back).is_none()
+    });
+    wait("first cleared file removed", || !empty.exists());
+    assert_eq!(c.bytes(), 0);
+    let back = e.begin_open();
+    e.restore_capture(again, back).unwrap();
+    wait("restored", || {
+        e.cleared_from(back).is_none() && e.capture(again).is_none()
+    });
+    assert_eq!((c.path(), c.bytes()), (aside, rows.len() as u64));
+    e.close();
+}
+
+#[test]
+fn rows_taken_back_after_a_replacing_log_failed_to_open() {
+    let s = setup();
+    let rows = many_rows();
+    let (e, c, cleared, aside) = cleared(&s, &rows);
+    let bad = s._dir.path().join("bad.log");
+    std::fs::write(&bad, b"a\0b\n").unwrap();
+    e.restore_capture(cleared, e.begin_open()).unwrap();
+    let next = e.begin_open();
+    e.open_file(next, &bad).unwrap();
+    let status = || e.request(json!({"action":"status"})).unwrap();
+    wait("rolled back", || {
+        status()["datasetId"] != next && status()["capture"].is_object()
+    });
+    // Unless the rows were back before the other log opened, the cleared
+    // log shows again, and its rows can still be taken back or let go.
+    if status()["datasetId"] == cleared {
+        wait("set aside again", || c.kept_path().is_some());
+        let back = e.begin_open();
+        e.restore_capture(cleared, back).unwrap();
+        wait("restored", || {
+            status()["datasetId"] == back && c.kept_path().is_none()
+        });
+    }
+    assert_eq!(c.path(), aside);
+    assert_eq!(c.bytes(), rows.len() as u64);
+    e.close();
+}
+
 #[test]
 fn recording_on_as_a_clear_opens_waits_for_the_clear() {
     let s = setup();
