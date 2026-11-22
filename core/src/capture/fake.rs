@@ -40,6 +40,13 @@ struct World {
     launch_delay: Duration,
     /// Why no device can be listed, as when the connection's tool fails.
     list_error: Option<&'static str>,
+    /// Why no stream opens, as while a device is still coming up.
+    stream_error: Option<&'static str>,
+    /// Devices whose boot cannot be read.
+    unanswered: Vec<String>,
+    /// A device that takes another's serial as its next stream opens, with
+    /// the rows it holds.
+    taken: Option<(String, Vec<u8>)>,
 }
 struct FakeDevice {
     info: Device,
@@ -177,6 +184,28 @@ impl FakeLink {
     /// Makes listing devices fail with `e`, or work again.
     pub fn list_error(&self, e: Option<&'static str>) {
         self.world.lock().unwrap().list_error = e;
+    }
+    /// Makes opening streams fail with `e`, or work again.
+    pub fn stream_error(&self, e: Option<&'static str>) {
+        self.world.lock().unwrap().stream_error = e;
+    }
+    /// Makes reading the boot of the device listed as `serial` fail, or
+    /// work again.
+    pub fn unanswered(&self, serial: &str, on: bool) {
+        let mut w = self.world.lock().unwrap();
+        w.unanswered.retain(|s| s != serial);
+        if on {
+            w.unanswered.push(serial.into());
+        }
+    }
+    /// Another device, with its own boot and these rows, takes `serial` as
+    /// its next stream opens.
+    pub fn taken_at_next_stream(&self, serial: &str, rows: &str) {
+        self.world.lock().unwrap().taken = Some((serial.into(), rows.into()));
+    }
+    /// The device listed as `serial` is another one by now.
+    pub fn set_identity(&self, serial: &str, identity: &str) {
+        self.world.lock().unwrap().any(serial).identity = identity.into();
     }
     /// Makes listing and starting apps fail with `e`, or work again.
     pub fn apps_error(&self, e: Option<&'static str>) {
@@ -408,7 +437,11 @@ impl Link for FakeLink {
             .collect())
     }
     fn boot_id(&self, serial: &str) -> io::Result<String> {
-        Ok(format!("boot-{}", self.check()?.device(serial)?.boot))
+        let mut w = self.check()?;
+        if w.unanswered.iter().any(|s| s == serial) {
+            return Err(error(link::OFFLINE));
+        }
+        Ok(format!("boot-{}", w.device(serial)?.boot))
     }
     fn identity(&self, serial: &str) -> io::Result<String> {
         Ok(self.check()?.device(serial)?.identity.clone())
@@ -420,6 +453,14 @@ impl Link for FakeLink {
     }
     fn stream(&self, serial: &str, since: Option<Stamp>) -> io::Result<Box<dyn Stream>> {
         let mut w = self.check()?;
+        if let Some(e) = w.stream_error {
+            return Err(error(e));
+        }
+        if let Some((_, rows)) = w.taken.take_if(|(s, _)| s == serial) {
+            let d = w.device(serial)?;
+            d.boot += 100;
+            d.log = vec![rows];
+        }
         w.opened.push((serial.into(), since.map(|s| s.arg())));
         let d = w.device(serial)?;
         let pipe = Arc::new(Pipe::default());

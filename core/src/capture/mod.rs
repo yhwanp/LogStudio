@@ -123,6 +123,8 @@ struct Status {
     stopped: Option<i64>,
     /// The device's boot when its stream last opened.
     boot: String,
+    /// Another device with the same identity was seen.
+    shared: bool,
     serial: String,
     bytes: u64,
     rows: u64,
@@ -182,6 +184,10 @@ pub struct Capture {
     /// An iOS simulator's capture.
     pub simulator: bool,
     identity: String,
+    /// An emulator: only its own serial, the port it runs on, is it.
+    pinned: bool,
+    /// The device as it was listed when the capture started.
+    device: Device,
     options: Options,
     status: Mutex<Status>,
     wake: Condvar,
@@ -320,6 +326,8 @@ impl Capture {
             model: c.device.label(),
             platform: c.device.platform,
             simulator: c.device.simulator,
+            pinned: c.pinned,
+            device: c.device,
             identity: c.identity,
             options,
             status: Mutex::new(Status {
@@ -330,6 +338,7 @@ impl Capture {
                 fresh: false,
                 stopped: None,
                 boot: c.boot,
+                shared: c.shared,
                 serial: serial.into(),
                 bytes: 0,
                 rows: 0,
@@ -379,6 +388,8 @@ impl Capture {
             platform,
             simulator: false,
             identity: String::new(),
+            pinned: false,
+            device: Device::default(),
             options: Options::default(),
             status: Mutex::new(Status {
                 phase: Phase::Stopped,
@@ -388,6 +399,7 @@ impl Capture {
                 fresh: false,
                 stopped: None,
                 boot: String::new(),
+                shared: false,
                 serial: String::new(),
                 bytes,
                 rows: 0,
@@ -911,7 +923,7 @@ impl Capture {
     /// Waits until the device is back and continues: after the rows the
     /// capture has, or from its first row after a boot. None once stopped.
     fn reconnect(&self) -> io::Result<Option<Back>> {
-        let mut known: HashMap<String, String> = HashMap::new();
+        let mut others = HashMap::new();
         loop {
             {
                 let s = self.status.lock().unwrap();
@@ -922,14 +934,14 @@ impl Capture {
             if self.stopping() {
                 return Ok(None);
             }
-            if let Some(back) = self.attempt(&mut known)? {
+            if let Some(back) = self.attempt(&mut others)? {
                 return Ok(Some(back));
             }
         }
     }
     /// Looks once for the device to continue with; None while it is not
     /// ready. Fails only when another adb server holds the devices.
-    fn attempt(&self, known: &mut HashMap<String, String>) -> io::Result<Option<Back>> {
+    fn attempt(&self, others: &mut HashMap<String, String>) -> io::Result<Option<Back>> {
         let conflict = |e: &io::Error| crate::source::public_message(e, "") == link::CONFLICT;
         let devices = match self.link.devices() {
             Ok(d) => d,
@@ -937,10 +949,10 @@ impl Capture {
             Err(_) => return Ok(None),
         };
         self.explain(&devices);
-        let Some(serial) = self.find(&devices, known) else {
+        let Some((serial, boot)) = self.find(&devices, others) else {
             return Ok(None);
         };
-        match self.reopen(&serial) {
+        match self.reopen(&serial, boot) {
             Ok(back) => {
                 self.status.lock().unwrap().serial = serial;
                 Ok(Some(back))
@@ -952,9 +964,13 @@ impl Capture {
     /// Opens the device's stream again: after the rows written when it
     /// still has the same boot, else from the first row of its new boot.
     /// A capture cut while away, or resumed after a stop, starts after the
-    /// rows the device holds now.
-    fn reopen(&self, serial: &str) -> io::Result<Back> {
-        let now_boot = self.link.boot_id(serial)?;
+    /// rows the device holds now. `found` is the boot the device was chosen
+    /// for, if it was asked.
+    fn reopen(&self, serial: &str, found: Option<String>) -> io::Result<Back> {
+        let now_boot = match found {
+            Some(boot) => boot,
+            None => self.link.boot_id(serial)?,
+        };
         let (fresh, boot) = {
             let s = self.status.lock().unwrap();
             (s.fresh, s.boot.clone())
@@ -969,6 +985,16 @@ impl Capture {
             Gate::open()
         };
         let stream = self.link.stream(serial, gate.since())?;
+        // Another device may have taken the serial since it was found. One
+        // of the same identity and another boot shares it: no device boots
+        // within an attempt.
+        if !self.identity.is_empty() && self.link.identity(serial)? != self.identity {
+            return Err(error(link::GONE));
+        }
+        if self.link.boot_id(serial)? != now_boot {
+            self.status.lock().unwrap().shared = true;
+            return Err(error(link::GONE));
+        }
         Ok(Back {
             stream,
             gate,
@@ -995,31 +1021,81 @@ impl Capture {
             self.notify();
         }
     }
-    /// The serial the device is ready under: the one it had if it is the
-    /// same device, else whichever names it (wireless serials change).
-    fn find(&self, devices: &[Device], known: &mut HashMap<String, String>) -> Option<String> {
-        let current = self.status.lock().unwrap().serial.clone();
-        let ready: Vec<&Device> = devices.iter().filter(|d| d.ready()).collect();
+    /// Returns the serial the device is ready under, with the boot it was
+    /// chosen for when that was asked; None to wait. Identities are asked
+    /// again at every attempt, except of the serials in `others`, which
+    /// named another device: those are asked again only before a match is
+    /// taken. An emulator keeps its serial. When several serials have the
+    /// identity, the one with the recorded boot is the device. With none, the
+    /// device rebooted: it is the serial it had, or else the only match,
+    /// unless devices were seen to share the identity. While a match does
+    /// not answer, none is taken.
+    fn find(
+        &self,
+        devices: &[Device],
+        others: &mut HashMap<String, String>,
+    ) -> Option<(String, Option<String>)> {
+        let (current, boot, shared) = {
+            let s = self.status.lock().unwrap();
+            (s.serial.clone(), s.boot.clone(), s.shared)
+        };
+        let ready: Vec<&str> = devices
+            .iter()
+            .filter(|d| d.ready())
+            .filter(|d| d.serial == current || (!self.pinned && self.device.alike(d)))
+            .map(|d| d.serial.as_str())
+            .collect();
         if self.identity.is_empty() {
-            return ready.iter().any(|d| d.serial == current).then_some(current);
+            let here = ready.contains(&current.as_str());
+            return here.then_some((current, None));
         }
-        known.retain(|serial, _| ready.iter().any(|d| d.serial == *serial));
-        for d in &ready {
-            if !known.contains_key(&d.serial) {
-                if let Ok(id) = self.link.identity(&d.serial) {
-                    known.insert(d.serial.clone(), id);
+        others.retain(|s, _| *s != current && ready.contains(&s.as_str()));
+        let (skipped, asked): (Vec<&str>, Vec<&str>) =
+            ready.into_iter().partition(|s| others.contains_key(*s));
+        let (mut same, mut silent) = (vec![], false);
+        for serials in [asked, skipped] {
+            for serial in serials {
+                match self.link.identity(serial) {
+                    Ok(id) if id == self.identity => {
+                        others.remove(serial);
+                        same.push(serial);
+                    }
+                    Ok(id) => {
+                        others.insert(serial.into(), id);
+                    }
+                    Err(_) => silent = true,
                 }
             }
+            if same.is_empty() {
+                return None;
+            }
         }
-        let same: Vec<&String> = known
+        same.sort();
+        let here = same.contains(&current.as_str());
+        if here && same.len() == 1 && !shared {
+            return Some((current, None));
+        }
+        let boots: Vec<(&str, String)> = same
             .iter()
-            .filter(|(_, id)| **id == self.identity)
-            .map(|(serial, _)| serial)
+            .filter_map(|s| Some((*s, self.link.boot_id(s).ok()?)))
             .collect();
-        same.iter()
-            .find(|s| ***s == current)
-            .or_else(|| same.iter().min())
-            .map(|s| s.to_string())
+        let shared = {
+            let mut s = self.status.lock().unwrap();
+            s.shared |= boots.windows(2).any(|b| b[0].1 != b[1].1);
+            s.shared
+        };
+        let recorded = || boots.iter().filter(|(_, b)| *b == boot);
+        let mut chosen = recorded().find(|(s, _)| *s == current);
+        chosen = chosen.or_else(|| recorded().next());
+        if chosen.is_none() && (boots.len() < same.len() || (silent && shared)) {
+            return None;
+        }
+        if chosen.is_none() && here {
+            chosen = boots.iter().find(|(s, _)| *s == current);
+        }
+        chosen
+            .or_else(|| boots.first().filter(|_| !shared))
+            .map(|(s, b)| (s.to_string(), Some(b.clone())))
     }
 }
 /// The link of an adopted capture, which never connects.
@@ -1046,6 +1122,9 @@ struct Connected {
     device: Device,
     identity: String,
     boot: String,
+    pinned: bool,
+    /// Another device connected now has the same identity.
+    shared: bool,
     gate: Gate,
     file: File,
     stream: Box<dyn Stream>,
@@ -1053,16 +1132,26 @@ struct Connected {
 /// Checks the device, finds where its rows start from now on, and opens
 /// its stream and the capture file.
 fn connect(link: &dyn Link, serial: &str, path: &Path, options: &Options) -> io::Result<Connected> {
-    let device = link
-        .devices()?
-        .into_iter()
+    let devices = link.devices()?;
+    let device = devices
+        .iter()
         .find(|d| d.serial == serial)
-        .ok_or_else(|| error(link::GONE))?;
+        .ok_or_else(|| error(link::GONE))?
+        .clone();
     if let Some(problem) = device.problem() {
         return Err(error(problem));
     }
     let identity = link.identity(serial)?;
     let boot = link.boot_id(serial)?;
+    let pinned = serial.starts_with("emulator-") || identity.starts_with(link::EMULATOR);
+    // Only devices alike are asked, as each takes a moment.
+    let shared = !pinned
+        && !identity.is_empty()
+        && devices
+            .iter()
+            .filter(|d| d.serial != serial && d.ready() && device.alike(d))
+            .filter(|d| link.identity(&d.serial).is_ok_and(|id| id == identity))
+            .any(|d| link.boot_id(&d.serial).is_ok_and(|b| b != boot));
     let gate = if link.replays() {
         Gate::after(&link.recent(serial, options.recent)?)
     } else {
@@ -1074,6 +1163,8 @@ fn connect(link: &dyn Link, serial: &str, path: &Path, options: &Options) -> io:
         device,
         identity,
         boot,
+        pinned,
+        shared,
         gate,
         file,
         stream,
