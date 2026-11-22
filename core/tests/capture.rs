@@ -304,6 +304,263 @@ fn a_device_listed_under_a_new_serial_is_found_by_its_identity() {
     c.stop();
 }
 
+/// The device is away while only another one answers: the capture waits,
+/// then records on once its own is back.
+fn waits_for_its_own(s: &Setup, c: &Capture, serial: &str, other: &str, so_far: &str) {
+    wait("waiting", || c.phase() == Phase::Waiting);
+    let streams = s.link.opened().len();
+    s.link.log(other, &row(40, 0, "another device"));
+    thread::sleep(Duration::from_millis(50));
+    assert_eq!(c.phase(), Phase::Waiting);
+    assert_eq!(s.link.opened().len(), streams);
+    s.link.log(serial, &row(50, 0, "back"));
+    s.link.plug(serial);
+    written(c, &[so_far, &row(50, 0, "back")].concat());
+    assert_eq!(c.json()["serial"], serial);
+}
+
+#[test]
+fn another_emulator_is_not_the_one_recorded() {
+    // Emulators of one version report one `ro.serialno`, however they are
+    // connected.
+    for serial in ["emulator-5554", "localhost:5555"] {
+        let s = setup();
+        s.link.add(serial, "sdk_gphone64", "EMULATOR37X1X11X0");
+        s.link
+            .add("emulator-5556", "sdk_gphone64", "EMULATOR37X1X11X0");
+        s.link.reboot("emulator-5556");
+        let c = s.start(serial);
+        s.link.log(serial, &row(1, 0, "one"));
+        written(&c, &row(1, 0, "one"));
+        s.link.unplug(serial);
+        waits_for_its_own(&s, &c, serial, "emulator-5556", &row(1, 0, "one"));
+        // One that stays listed but is not ready is not left either.
+        s.link.set_state(serial, "offline");
+        s.link.unplug(serial);
+        s.link.plug(serial);
+        wait("offline", || c.json()["reason"] == link::OFFLINE);
+        thread::sleep(Duration::from_millis(30));
+        assert_eq!(c.phase(), Phase::Waiting);
+        assert_eq!(c.json()["serial"], serial);
+        c.stop();
+    }
+}
+
+#[test]
+fn another_virtual_device_on_the_same_port_is_not_the_one_recorded() {
+    let s = setup();
+    let serial = "emulator-5554";
+    s.link.add(serial, "sdk_gphone64", "EMULATOR:Pixel_8");
+    let c = s.start(serial);
+    s.link.log(serial, &row(1, 0, "one"));
+    written(&c, &row(1, 0, "one"));
+    s.link.unplug(serial);
+    wait("waiting", || c.phase() == Phase::Waiting);
+    let streams = s.link.opened().len();
+    s.link.add(serial, "sdk_gphone64", "EMULATOR:Tablet");
+    thread::sleep(Duration::from_millis(50));
+    assert_eq!(c.phase(), Phase::Waiting);
+    assert_eq!(s.link.opened().len(), streams);
+    c.stop();
+}
+
+#[test]
+fn what_a_port_holds_is_asked_again_at_each_attempt() {
+    let s = setup();
+    let serial = "emulator-5554";
+    s.link.add(serial, "sdk_gphone64", "EMULATOR:Pixel_8");
+    let c = s.start(serial);
+    s.link.log(serial, &row(1, 0, "one"));
+    written(&c, &row(1, 0, "one"));
+    // Back, it is known again, but its stream does not open yet.
+    s.link.stream_error(Some(link::OFFLINE));
+    s.link.unplug(serial);
+    s.link.plug(serial);
+    thread::sleep(Duration::from_millis(50));
+    assert_eq!(c.phase(), Phase::Waiting);
+    // By the next attempt, or within one, another virtual device has the
+    // port.
+    s.link.set_identity(serial, "EMULATOR:Tablet");
+    s.link.stream_error(None);
+    s.link.log(serial, &row(40, 0, "another device"));
+    thread::sleep(Duration::from_millis(50));
+    assert_eq!(c.phase(), Phase::Waiting);
+    assert_eq!(content(&c), row(1, 0, "one").as_bytes());
+    // The recorded one is back without the port having been seen free.
+    s.link.reboot(serial);
+    s.link.set_identity(serial, "EMULATOR:Pixel_8");
+    s.link.log(serial, &row(2, 0, "two"));
+    written(&c, &[row(1, 0, "one"), row(2, 0, "two")].concat());
+    c.stop();
+}
+
+#[test]
+fn the_recorded_boot_is_followed_rather_than_the_address_another_board_took() {
+    for silent in [false, true] {
+        let s = setup();
+        let (mine, other, moved) = ("10.0.0.1:5555", "10.0.0.2:5555", "10.0.0.3:5555");
+        for serial in [mine, other] {
+            s.link.add(serial, "devboard", "0123456789ABCDEF");
+        }
+        s.link.reboot(other);
+        let c = s.start(mine);
+        s.link.log(mine, &row(1, 0, "one"));
+        written(&c, &row(1, 0, "one"));
+        s.link.list_error(Some(link::GONE));
+        s.link.unplug(mine);
+        wait("waiting", || c.phase() == Phase::Waiting);
+        s.link.rename(mine, moved);
+        s.link.rename(other, mine);
+        s.link.plug(moved);
+        s.link.log(mine, &row(40, 0, "another board"));
+        // While one of the two does not answer, neither is taken.
+        s.link.unanswered(moved, silent);
+        s.link.list_error(None);
+        if silent {
+            let streams = s.link.opened().len();
+            thread::sleep(Duration::from_millis(50));
+            assert_eq!(s.link.opened().len(), streams);
+            s.link.unanswered(moved, false);
+        }
+        s.link.log(moved, &row(2, 0, "two"));
+        written(&c, &[row(1, 0, "one"), row(2, 0, "two")].concat());
+        assert_eq!(c.json()["serial"], moved);
+        assert!(!c.breaks()[0].reboot);
+        c.stop();
+    }
+}
+
+#[test]
+fn a_board_that_takes_the_chosen_address_as_its_stream_opens_is_not_recorded() {
+    // One board over USB and wirelessly; its USB connection does not tell
+    // its boot, or is gone, as it comes back.
+    for listed in [true, false] {
+        let s = setup();
+        let wireless = "192.168.0.5:5555";
+        s.link.add(wireless, "Pixel_8", "SER1");
+        let c = s.start("SER1");
+        s.link.log("SER1", &row(1, 0, "one"));
+        written(&c, &row(1, 0, "one"));
+        s.link
+            .taken_at_next_stream(wireless, &row(40, 0, "another board"));
+        s.link.unanswered("SER1", true);
+        s.link.unplug("SER1");
+        if listed {
+            s.link.plug("SER1");
+        }
+        // The wireless connection was chosen for its boot, and is tried.
+        wait("tried", || s.link.opened().len() == 2);
+        thread::sleep(Duration::from_millis(50));
+        assert_eq!(c.phase(), Phase::Waiting);
+        assert_eq!(content(&c), row(1, 0, "one").as_bytes());
+        s.link.unanswered("SER1", false);
+        s.link.log("SER1", &row(2, 0, "two"));
+        s.link.plug("SER1");
+        written(&c, &[row(1, 0, "one"), row(2, 0, "two")].concat());
+        assert_eq!(c.json()["serial"], "SER1");
+        c.stop();
+    }
+}
+
+#[test]
+fn an_address_known_for_another_device_is_asked_again_before_one_is_taken() {
+    let s = setup();
+    let (mine, other, moved) = ("10.0.0.1:5555", "10.0.0.2:5555", "10.0.0.3:5555");
+    for (serial, identity) in [(mine, "BOARD"), (other, "BOARD"), (moved, "PHONE")] {
+        s.link.add(serial, "devboard", identity);
+    }
+    s.link.reboot(other);
+    let c = s.start(mine);
+    s.link.log(mine, &row(1, 0, "one"));
+    written(&c, &row(1, 0, "one"));
+    s.link.unplug(mine);
+    wait("waiting", || c.phase() == Phase::Waiting);
+    thread::sleep(Duration::from_millis(30));
+    // The recorded board now has the address of the phone, and the other
+    // board its old one.
+    s.link.list_error(Some(link::GONE));
+    s.link.rename(mine, "gone");
+    s.link.rename(other, mine);
+    s.link.set_identity(moved, "BOARD");
+    s.link.list_error(None);
+    s.link.log(moved, &row(2, 0, "two"));
+    written(&c, &[row(1, 0, "one"), row(2, 0, "two")].concat());
+    assert_eq!(c.json()["serial"], moved);
+    c.stop();
+}
+
+#[test]
+fn boards_that_share_a_serial_number_are_told_apart_by_their_boot() {
+    let s = setup();
+    for serial in ["BOARD1", "BOARD2"] {
+        s.link.add(serial, "devboard", "0123456789ABCDEF");
+    }
+    s.link.reboot("BOARD2");
+    let c = s.start("BOARD1");
+    s.link.log("BOARD1", &row(1, 0, "one"));
+    written(&c, &row(1, 0, "one"));
+    s.link.unplug("BOARD1");
+    waits_for_its_own(&s, &c, "BOARD1", "BOARD2", &row(1, 0, "one"));
+    // Rebooted, the recorded board is known by its own serial only.
+    s.link.unplug("BOARD1");
+    wait("waiting again", || c.phase() == Phase::Waiting);
+    s.link.reboot("BOARD1");
+    thread::sleep(Duration::from_millis(30));
+    assert_eq!(c.phase(), Phase::Waiting);
+    s.link.log("BOARD1", &row(2, 0, "booted"));
+    s.link.plug("BOARD1");
+    let expected = [row(1, 0, "one"), row(50, 0, "back"), row(2, 0, "booted")].concat();
+    written(&c, &expected);
+    assert!(c.breaks().last().unwrap().reboot);
+    c.stop();
+    // Boards first seen together while the recorded one is away are not
+    // told apart either, nor is one of another model the recorded one.
+    let c = s.start("SER1");
+    s.link.log("SER1", &row(3, 0, "three"));
+    written(&c, &row(3, 0, "three"));
+    s.link.unplug("SER1");
+    wait("waiting for SER1", || c.phase() == Phase::Waiting);
+    let streams = s.link.opened().len();
+    s.link.add("OTHER", "Pixel_9", "SER1");
+    thread::sleep(Duration::from_millis(30));
+    s.link.list_error(Some(link::GONE));
+    for (serial, boots) in [("TWIN1", 1), ("TWIN2", 2)] {
+        s.link.add(serial, "Pixel_8", "SER1");
+        (0..boots).for_each(|_| s.link.reboot(serial));
+    }
+    s.link.list_error(None);
+    thread::sleep(Duration::from_millis(30));
+    assert_eq!(c.phase(), Phase::Waiting);
+    assert_eq!(s.link.opened().len(), streams);
+    c.stop();
+}
+
+#[test]
+fn a_device_connected_twice_is_recorded_on_under_its_other_serial() {
+    let s = setup();
+    // One phone over USB and wirelessly: one serial number and one boot.
+    s.link.add("192.168.0.5:5555", "Pixel_8", "SER1");
+    let c = s.start("SER1");
+    s.link.log("SER1", &row(1, 0, "one"));
+    written(&c, &row(1, 0, "one"));
+    s.link.log("192.168.0.5:5555", &row(2, 0, "two"));
+    s.link.unplug("SER1");
+    written(&c, &[row(1, 0, "one"), row(2, 0, "two")].concat());
+    assert_eq!(c.json()["serial"], "192.168.0.5:5555");
+    assert!(!c.breaks()[0].reboot);
+    // Rebooted, and listed under a new address only.
+    s.link.unplug("192.168.0.5:5555");
+    wait("waiting", || c.phase() == Phase::Waiting);
+    s.link.reboot("192.168.0.5:5555");
+    s.link.rename("192.168.0.5:5555", "192.168.0.5:40123");
+    s.link.log("192.168.0.5:40123", &row(3, 0, "three"));
+    s.link.plug("192.168.0.5:40123");
+    wait("back", || c.phase() == Phase::Recording);
+    assert_eq!(c.json()["serial"], "192.168.0.5:40123");
+    assert!(c.breaks()[1].reboot);
+    c.stop();
+}
+
 #[test]
 fn an_adb_server_of_another_version_ends_the_capture() {
     let s = setup();

@@ -120,8 +120,20 @@ impl Link for AdbCli {
     fn boot_id(&self, serial: &str) -> io::Result<String> {
         self.text(serial, &["shell", "cat /proc/sys/kernel/random/boot_id"])
     }
+    /// Emulators of one version report one `ro.serialno`, so the name of
+    /// the virtual device stands in for it.
     fn identity(&self, serial: &str) -> io::Result<String> {
-        self.text(serial, &["shell", "getprop ro.serialno"])
+        let get = "getprop ro.serialno; getprop ro.boot.qemu.avd_name";
+        let out = self.device(serial, &["shell", get], QUERY_TIMEOUT)?;
+        let text = String::from_utf8_lossy(&out);
+        let mut lines = text.lines().map(str::trim);
+        let mut next = || lines.next().unwrap_or("").to_string();
+        let (serial, avd) = (next(), next());
+        Ok(if avd.is_empty() {
+            serial
+        } else {
+            format!("{}:{avd}", link::EMULATOR)
+        })
     }
     fn recent(&self, serial: &str, count: usize) -> io::Result<Vec<u8>> {
         let count = count.to_string();

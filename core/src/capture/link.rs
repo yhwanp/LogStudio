@@ -29,6 +29,8 @@ pub const LOCKED: &str = "Unlock the device, then retry";
 pub const SHUTDOWN: &str = "Start the simulator, then retry";
 /// An iOS simulator that is starting or changing state.
 pub const BOOTING: &str = "The simulator is starting; wait for it, then retry";
+/// What an emulator's `ro.serialno` starts with, and its `identity`.
+pub const EMULATOR: &str = "EMULATOR";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Platform {
@@ -84,6 +86,11 @@ impl Device {
         } else {
             self.model.replace('_', " ")
         }
+    }
+    /// Whether both are of one model, as far as they say it.
+    pub fn alike(&self, other: &Device) -> bool {
+        let same = |a: &str, b: &str| a == b || a.is_empty() || b.is_empty();
+        same(&self.model, &other.model) && same(&self.product, &other.product)
     }
     pub fn ready(&self) -> bool {
         self.state == "device"
@@ -202,7 +209,9 @@ pub trait Link: Send + Sync {
     fn devices(&self) -> io::Result<Vec<Device>>;
     /// `/proc/sys/kernel/random/boot_id`, which changes when it boots.
     fn boot_id(&self, serial: &str) -> io::Result<String>;
-    /// `ro.serialno`, which names the device however it is connected.
+    /// `ro.serialno`, which names the device however it is connected, or
+    /// `EMULATOR:` and the name of an emulator's virtual device. Development
+    /// boards may share one.
     fn identity(&self, serial: &str) -> io::Result<String>;
     /// `logcat -d -v threadtime -t <count>`: the last rows it holds now.
     fn recent(&self, serial: &str, count: usize) -> io::Result<Vec<u8>>;

@@ -177,7 +177,12 @@ case "$1" in
     esac
     case "$1 $2" in
       "shell cat /proc/sys/kernel/random/boot_id") echo boot-1;;
-      "shell getprop ro.serialno") echo SER1;;
+      "shell getprop ro.serialno; getprop ro.boot.qemu.avd_name")
+        case "$serial" in
+          emulator-*) echo EMULATOR37X1X11X0; echo Pixel_8_API_37;;
+          emptied) echo; echo;;
+          *) echo SER1; echo;;
+        esac;;
       "logcat -d")
         echo "${ANDROID_LOG_TAGS-unset}" > "$dir/log-tags"
         echo "--------- beginning of main"
@@ -242,6 +247,12 @@ fn the_adb_command_line_answers_device_queries_and_names_failures() {
     );
     assert_eq!(adb.boot_id("SER1").unwrap(), "boot-1");
     assert_eq!(adb.identity("SER1").unwrap(), "SER1");
+    assert_eq!(adb.identity("emptied").unwrap(), "");
+    // Emulators share a serial number; their virtual device tells them apart.
+    assert_eq!(
+        adb.identity("emulator-5554").unwrap(),
+        "EMULATOR:Pixel_8_API_37"
+    );
     let failure = |e: std::io::Error| public_message(&e, "other");
     assert_eq!(failure(adb.boot_id("GONE").unwrap_err()), link::GONE);
     assert_eq!(
