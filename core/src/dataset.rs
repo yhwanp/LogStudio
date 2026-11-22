@@ -1,7 +1,7 @@
 use crate::{
     dlt, encoding,
     fields_index::{self, FieldIndex},
-    parser,
+    order, parser,
     search::{Cond, Condition, Filter, Mask},
     source::{error, public_message, ByteLines, Format, Part, Source, BLOCK, MAX_FILE, MAX_LINE},
 };
@@ -107,6 +107,9 @@ pub struct Index {
     pub analyzed: usize,
     /// Units of DLT files indexed so far that are no message.
     pub dlt_issues: DltIssues,
+    /// The times of the first and the last row that has one, as the rows
+    /// have them, for a page that asks whether the log crosses a year end.
+    pub span: Option<[String; 2]>,
 }
 /// What `Dataset::export_as` writes for each result row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -524,9 +527,11 @@ impl Dataset {
             };
         }
         self.source.verify()?;
+        let span = self.row_times(None, self.source.size);
         let mut index = self.index.lock().unwrap();
         index.done = true;
         index.bytes = self.source.size;
+        index.span = span;
         drop(index);
         self.changed.notify_all();
         Ok(())
@@ -1730,6 +1735,7 @@ impl Dataset {
         let mut status = json!({"datasetId":self.id,"revision":revision,"name":self.source.name,"files":files,"size":self.source.current_size(),"status":if self.stop.load(Ordering::Acquire){"closed"}else if !i.error.is_empty(){"error"}else if i.done{"ready"}else{"indexing"},"indexedBytes":i.bytes,"total":i.total,"textComplete":i.done,"summaryComplete":summarized,"complete":i.done&&summarized,"summary":summary,"analysis":{"status":if summarized{"complete"}else{"running"}},"followable":self.source.followable(),"following":i.live,"grown":grown&&!i.live,"followError":i.follow_error,"tailRevision":i.replaced,"error":i.error,"query":q,"format":self.format.as_str()});
         // Every file is an iOS log: iOS level names apply.
         let parts = self.source.parts();
+        status["span"] = json!(i.span);
         status["ios"] = json!(!parts.is_empty() && parts.iter().all(|p| p.ios));
         if self.format == Format::Dlt {
             let d = i.dlt_issues;
@@ -2593,7 +2599,56 @@ impl Dataset {
         }
         let row = self.index.lock().unwrap().total + 1;
         self.index_file(0, start, len, row, close)?;
+        let (known, end) = {
+            let index = self.index.lock().unwrap();
+            (index.span.clone(), index.bytes)
+        };
+        let span = self.row_times(known, end);
+        self.index.lock().unwrap().span = span;
         Ok(())
+    }
+    /// The times of the first and the last row before `end` that has one,
+    /// looked for in the `order::HEAD` bytes at each end of a file; None when
+    /// either has none. DLT rows have their years, so none is looked for.
+    /// `known` keeps its first time.
+    fn row_times(&self, known: Option<[String; 2]>, end: u64) -> Option<[String; 2]> {
+        if self.format == Format::Dlt {
+            return None;
+        }
+        let time = |line: &[u8]| {
+            let raw = encoding::decode(line);
+            let p = parser::parse_line(&raw, 0, true).parsed?;
+            (!p.date.is_empty()).then(|| format!("{} {}", p.date, p.time))
+        };
+        let read = |from: u64, to: u64| {
+            let bytes = self.source.read(from, (to - from) as usize);
+            bytes.unwrap_or_default()
+        };
+        let parts = self.source.parts();
+        // Only a file opened alone grows past its size.
+        let files: Vec<(u64, u64)> = match parts {
+            [_] => vec![(0, end)],
+            _ => parts
+                .iter()
+                .map(|p| (p.offset, p.offset + p.size))
+                .collect(),
+        };
+        let first = match known {
+            Some([first, _]) => first,
+            None => files.iter().find_map(|&(from, to)| {
+                let bytes = read(from, to.min(from + order::HEAD as u64));
+                ByteLines::new(&bytes).find_map(|(_, line)| time(line))
+            })?,
+        };
+        let last = files.iter().rev().find_map(|&(from, to)| {
+            let start = to.saturating_sub(order::HEAD as u64).max(from);
+            let bytes = read(start, to);
+            let lines: Vec<&[u8]> = ByteLines::new(&bytes).map(|(_, line)| line).collect();
+            // A row cut at its start is not judged.
+            let whole = lines.get((start > from) as usize..)?;
+            whole.iter().rev().find_map(|line| time(line))
+        })?;
+        Some([first, last])
     }
     /// Whether bytes `from..to` end the row that starts at `row`: an LF, or
     /// a CR that more bytes follow.

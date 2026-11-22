@@ -49,6 +49,22 @@ def days(root: Path):
     (root / 'days.log').write_text('\n'.join(out) + '\n', encoding='utf-8')
 
 
+def year_end(root: Path):
+    """year-end.log: one row every 30 minutes from 12-30 12:00 to 01-02 12:00,
+    without years; year-end-ios.log: the same times with theirs; half-year.log:
+    ends 183 days apart, without years; whole-year.log: five rows of a year and
+    the days around it, without years."""
+    days = [('2026', '12-30'), ('2026', '12-31'), ('2027', '01-01'), ('2027', '01-02')]
+    at = [(*days[i // 48], f'{i % 48 // 2:02d}:{i % 2 * 30:02d}:00') for i in range(24, 169)]
+    (root / 'year-end.log').write_text(''.join(
+        f'{date} {clock}.000  1000 1001 {"IWE"[i % 3]} YearTag             : row {i}\n' for i, (_, date, clock) in enumerate(at)), encoding='utf-8')
+    (root / 'year-end-ios.log').write_text(''.join(
+        f'{year}-{date} {clock}.134000 Runner[3870:481516] [Year] row {i}\n' for i, (year, date, clock) in enumerate(at)), encoding='utf-8')
+    for name, stamps in (('half-year.log', ('07-02 10:00', '07-02 11:00', '01-01 08:30', '01-01 09:00')),
+                         ('whole-year.log', ('12-31 23:59', '01-01 00:00', '06-18 12:00', '12-31 00:00', '01-01 10:00'))):
+        (root / name).write_text(''.join(f'{stamp}:00.000  1000 1001 I YearTag             : row {i}\n' for i, stamp in enumerate(stamps)), encoding='utf-8')
+
+
 def lists(root: Path):
     """lists.log: Android rows rotate 3 PIDs and 4 tags; every fifth row is iOS
     with several component tags."""

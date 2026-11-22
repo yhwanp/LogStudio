@@ -39,7 +39,7 @@ class Element {
   dispatch(key,event={}){return Promise.all((this.listeners[key]??[]).map(fn=>fn(event)));}
   querySelector(selector){const line=selector.match(/^\[data-line-number="(\d+)"\]$/)?.[1];return this.children.find(child=>line?child.dataset.lineNumber===line:child.className===selector.slice(1));}
 }
-async function rig({rows=[],detail=null,query=null,page=null,startupError=null,files=null,total=6,format=null,exported=null,extrasList=null,capture=null,answers={}}={}){
+async function rig({rows=[],detail=null,query=null,page=null,startupError=null,files=null,total=6,format=null,exported=null,extrasList=null,capture=null,status={},answers={}}={}){
   let ownerDocument;const elements=new Map(),get=id=>{if(!elements.has(id))elements.set(id,Object.assign(new Element(),{ownerDocument}));return elements.get(id);};
   // Column layout has its own mounted tests; this rig exercises view lifecycle.
   delete get('workspace').style;
@@ -65,7 +65,7 @@ async function rig({rows=[],detail=null,query=null,page=null,startupError=null,f
     if(action!=='log_request')return {};
     const b=args.request,id={datasetId:dataset};
     if(b.action==='close')return {closed:true};
-    if(b.action==='status')return {...id,name:files?`${files[0].name} 외 ${files.length-1}개`:'synthetic',...(files?{files}:{}),...(format?{format}:{}),...(capture?{capture}:{}),size:100,total,textComplete:complete,summaryComplete:true,complete,status:complete?'ready':'indexing',summary:{counts:{I:3,W:1}},query:null};
+    if(b.action==='status')return {...id,name:files?`${files[0].name} 외 ${files.length-1}개`:'synthetic',...(files?{files}:{}),...(format?{format}:{}),...(capture?{capture}:{}),...status,size:100,total,textComplete:complete,summaryComplete:true,complete,status:complete?'ready':'indexing',summary:{counts:{I:3,W:1}},query:null};
     if(b.action==='query'&&query)return {...id,queryId:b.queryId,query:{id:b.queryId,...await query(b)}};
     if(b.action==='query'||b.action==='cancel')return {...id,queryId:b.queryId,query:{id:b.queryId,status:'complete',count:rows.length||6,complete:true}};
     if(b.action==='page')return {...id,queryId:b.queryId,start:b.start,count:rows.length||6,rows:page?await page(b):rows.slice(b.start,b.start+b.count)};
@@ -1071,6 +1071,159 @@ test('row menu times narrow the rows shown, so a start and an end make one range
   assert.deepEqual(shown(),[['','06-18 19:24:00.100','06-18 19:24:00.300']]);
 });
 
+// Logs without years that cross a year end.
+const dated=(line,date,time,year=null)=>({lineNumber:line,kind:'parsed',raw:`${date} ${time}  1 2 I T: m${line}`,date,time,...(year?{year}:{}),pid:'1',tid:'2',level:'I',tag:'T',message:`m${line}`});
+function yearEndRig(t,rows,status){
+  return rig({rows,status,detail:{text:'x',startByte:0,nextByte:1,totalBytes:1,complete:true,highlights:[]}}).then(async r=>{
+    t.after(()=>r.controller.close());await r.get('closeEditor').dispatch('click');await settle();
+    const row=line=>r.get('logsRows').children.find(n=>n.dataset.lineNumber===String(line));
+    const item=label=>r.get('rowMenu').children.find(n=>n.tagName==='BUTTON'&&(n.textContent===label||n.textContent.startsWith(`${label} `)));
+    const open=async line=>{await row(line).dispatch('contextmenu',{clientX:10,clientY:20,preventDefault(){}});await settle();};
+    const last=()=>r.calls.filter(c=>c.args.request?.action==='query'&&c.args.request.pane==='logs').at(-1).args.request.filters.include;
+    return {r,row,item,open,noteOf:label=>item(label).textContent.slice(label.length+1),shown:()=>last().map(c=>[c.timeFrom,c.timeTo]),
+      toast:()=>r.get('toast').children[0].textContent,
+      choose:async(line,label)=>{await open(line);await item(label).dispatch('click');await settle();},
+      select:async(a,b)=>{await row(a).dispatch('click',{detail:1});await settle();await row(b).dispatch('click',{detail:1,shiftKey:true});await settle();}};
+  });
+}
+const YEAR_END=[dated(1,'12-30','08:00:00.000'),dated(2,'12-31','23:59:56.000'),dated(3,'12-31','23:59:59.000'),dated(4,'01-01','00:00:03.000'),dated(5,'01-01','00:10:00.000'),dated(6,'01-02','09:00:00.000')];
+const CROSSED={span:['12-30 08:00:00.000','01-02 09:00:00.000']};
+
+test('a selection across a year end narrows to the time between its ends',async t=>{
+  for(const status of [CROSSED,{}]){
+    const v=await yearEndRig(t,YEAR_END,status);
+    await v.select(2,4);await v.open(4);
+    assert.equal(v.noteOf('선택한 3행의 시간 범위만 보기'),'시간: 12-31 23:59:56.000 ~ 01-01 00:00:03.000','also before the log\'s ends are known');
+    await v.item('선택한 3행의 시간 범위만 보기').dispatch('click');for(let i=0;i<4;i++)await settle();
+    assert.deepEqual(v.shown(),[['12-31 23:59:56.000','01-01 00:00:03.000']]);
+  }
+  // Rows out of order are put in order, within a year and at its end.
+  const mixed=[dated(1,'06-18','19:24:05.000'),dated(2,'06-18','19:24:01.000'),dated(3,'06-19','00:00:00.000')];
+  const v=await yearEndRig(t,mixed,{span:['06-18 19:24:05.000','06-19 00:00:00.000']});
+  await v.select(1,2);await v.open(2);
+  assert.equal(v.noteOf('선택한 2행의 시간 범위만 보기'),'시간: 06-18 19:24:01.000 ~ 19:24:05.000');
+  const late=[YEAR_END[0],dated(2,'01-01','00:00:00.002'),dated(3,'12-31','23:59:59.998'),YEAR_END[5]];
+  const w=await yearEndRig(t,late,CROSSED);
+  await w.select(2,3);await w.open(3);
+  assert.equal(w.noteOf('선택한 2행의 시간 범위만 보기'),'시간: 12-31 23:59:59.998 ~ 01-01 00:00:00.002');
+});
+
+test('rows with a year keep theirs in a selection across its end',async t=>{
+  const rows=[dated(1,'2025-12-31','23:59:59.000'),dated(2,'2026-01-01','00:00:01.000')];
+  const v=await yearEndRig(t,rows,{span:['2025-12-31 23:59:59.000','2026-01-01 00:00:01.000']});
+  await v.select(1,2);await v.open(2);
+  assert.equal(v.noteOf('선택한 2행의 시간 범위만 보기'),'시간: 2025-12-31 23:59:59.000 ~ 2026-01-01 00:00:01.000');
+  await v.r.get('rowMenu').dispatch('keydown',{key:'Escape',preventDefault(){},stopPropagation(){}});
+  await v.choose(1,'2025-12-31 23:59:59.000부터만 보기');
+  assert.deepEqual(v.shown(),[['2025-12-31 23:59:59.000','']],'a year needs no other end');
+});
+
+test('one end of a log that crosses a year end is completed with the log\'s own',async t=>{
+  const v=await yearEndRig(t,YEAR_END,CROSSED);
+  await v.open(3);
+  assert.equal(v.noteOf('12-31 23:59:59.000부터만 보기'),'시간: 12-31 23:59:59.000 ~ 01-02');
+  assert.equal(v.noteOf('12-31 23:59:59.000까지만 보기'),'시간: 12-30 ~ 12-31 23:59:59.000');
+  await v.item('12-31 23:59:59.000부터만 보기').dispatch('click');await settle();
+  assert.deepEqual(v.shown(),[['12-31 23:59:59.000','01-02']]);
+  assert.equal(v.toast(),'보기 조건을 추가했습니다 · 시간: 12-31 23:59:59.000 ~ 01-02');
+  // The other end then narrows that range, over the year end.
+  await v.choose(5,'01-01 00:10:00.000까지만 보기');
+  assert.deepEqual(v.shown(),[['12-31 23:59:59.000','01-01 00:10:00.000']]);
+  // A start after the end in the log clears it, though its date is earlier.
+  await v.open(6);
+  assert.equal(v.noteOf('01-02 09:00:00.000부터만 보기'),'시간: 01-02 09:00:00.000 ~ 01-02');
+  await v.r.get('rowMenu').dispatch('keydown',{key:'Escape',preventDefault(){},stopPropagation(){}});
+  await v.choose(1,'12-30 08:00:00.000까지만 보기');
+  assert.deepEqual(v.shown(),[['12-30','12-30 08:00:00.000']]);
+  await v.r.get('resetFilters').dispatch('click');await settle();
+  await v.choose(4,'01-01 00:00:03.000까지만 보기');
+  assert.deepEqual(v.shown(),[['12-30','01-01 00:00:03.000']],'not the rest of the new year, nor only it');
+  // A row out of order before the first or after the last is kept.
+  const w=await yearEndRig(t,[...YEAR_END,dated(7,'12-29','10:00:00.000'),dated(8,'01-03','10:00:00.000')],CROSSED);
+  await w.choose(7,'12-29 10:00:00.000까지만 보기');
+  assert.deepEqual(w.shown(),[['12-29','12-29 10:00:00.000']]);
+  await w.r.get('resetFilters').dispatch('click');await settle();
+  await w.choose(8,'01-03 10:00:00.000부터만 보기');
+  assert.deepEqual(w.shown(),[['01-03 10:00:00.000','01-03']]);
+});
+
+test('a log whose ends are 183 days apart is completed with their whole times',async t=>{
+  // Their dates alone are not more than half a year the wrong way round.
+  const rows=[dated(1,'07-02','10:00:00.000'),dated(2,'07-02','11:00:00.000'),dated(3,'01-01','08:30:00.000'),dated(4,'01-01','09:00:00.000')];
+  const v=await yearEndRig(t,rows,{span:['07-02 10:00:00.000','01-01 09:00:00.000']});
+  await v.open(2);
+  assert.equal(v.noteOf('07-02 11:00:00.000부터만 보기'),'시간: 07-02 11:00:00.000 ~ 01-01 09:00:00.000');
+  assert.equal(v.noteOf('07-02 11:00:00.000까지만 보기'),'시간: 07-02 ~ 07-02 11:00:00.000','a date is enough within a year');
+  await v.item('07-02 11:00:00.000부터만 보기').dispatch('click');await settle();
+  assert.deepEqual(v.shown(),[['07-02 11:00:00.000','01-01 09:00:00.000']]);
+  await v.r.get('resetFilters').dispatch('click');await settle();
+  for(const [line,label,range] of [[1,'07-02 10:00:00.000부터만 보기',['07-02 10:00:00.000','01-01 09:00:00.000']],[3,'01-01 08:30:00.000까지만 보기',['07-02 10:00:00.000','01-01 08:30:00.000']],
+    [4,'01-01 09:00:00.000까지만 보기',['07-02 10:00:00.000','01-01 09:00:00.000']],[3,'01-01 08:30:00.000부터만 보기',['01-01 08:30:00.000','01-01']]]){
+    await v.choose(line,label);assert.deepEqual(v.shown(),[range],label);
+    assert.equal(v.r.get('timeFilterError').hidden,true,label);
+    await v.r.get('resetFilters').dispatch('click');await settle();
+  }
+  // A day more, and the dates are enough.
+  const w=await yearEndRig(t,[dated(1,'07-03','10:00:00.000'),dated(2,'01-01','09:00:00.000')],{span:['07-03 10:00:00.000','01-01 09:00:00.000']});
+  await w.choose(2,'01-01 09:00:00.000까지만 보기');assert.deepEqual(w.shown(),[['07-03','01-01 09:00:00.000']]);
+});
+
+test('rows a moment out of order at the ends of a log stay in one end\'s range',async t=>{
+  const rows=[dated(1,'12-30','08:00:00.000'),dated(2,'12-30','07:59:59.998'),dated(3,'12-31','23:59:59.000'),dated(4,'01-01','00:00:01.000'),dated(5,'01-02','09:00:00.004'),dated(6,'01-02','09:00:00.000')];
+  const v=await yearEndRig(t,rows,{span:['12-30 08:00:00.000','01-02 09:00:00.000']});
+  await v.choose(3,'12-31 23:59:59.000까지만 보기');assert.deepEqual(v.shown(),[['12-30','12-31 23:59:59.000']]);
+  await v.r.get('resetFilters').dispatch('click');await settle();
+  await v.choose(3,'12-31 23:59:59.000부터만 보기');assert.deepEqual(v.shown(),[['12-31 23:59:59.000','01-02']]);
+});
+
+test('a log that grows past a year end has no last time to show up to',async t=>{
+  const v=await yearEndRig(t,YEAR_END,{...CROSSED,followable:true,following:true});
+  await v.open(3);
+  const from=v.item('12-31 23:59:59.000부터만 보기');
+  assert.equal(from.attributes['aria-disabled'],'true');
+  assert.equal(v.noteOf('12-31 23:59:59.000부터만 보기'),'해를 넘긴 로그를 따라가는 중에는 끝 시각도 필요합니다');
+  assert.notEqual(v.item('12-31 23:59:59.000까지만 보기').attributes['aria-disabled'],'true');
+  await v.item('12-31 23:59:59.000까지만 보기').dispatch('click');await settle();
+  assert.deepEqual(v.shown(),[['12-30','12-31 23:59:59.000']]);
+  // With an end of its own the start narrows that range.
+  await v.choose(2,'12-31 23:59:56.000부터만 보기');
+  assert.deepEqual(v.shown(),[['12-31 23:59:56.000','12-31 23:59:59.000']]);
+});
+
+test('logs that cross no year end keep one end as it is',async t=>{
+  for(const span of [['01-01 00:00:05.000','11-22 10:00:00.000'],['06-18 19:00:00.000','06-19 00:00:00.000'],undefined]){
+    const rows=[dated(1,'06-18','19:00:00.000'),dated(2,'11-22','10:00:00.000')];
+    const v=await yearEndRig(t,rows,span?{span}:{});
+    await v.choose(1,'06-18 19:00:00.000까지만 보기');
+    assert.deepEqual(v.shown(),[['','06-18 19:00:00.000']]);
+    // A range the wrong way round is not read as one past the year end.
+    await v.choose(2,'11-22 10:00:00.000부터만 보기');
+    assert.deepEqual(v.shown(),[['11-22 10:00:00.000','']]);
+    assert.equal(v.toast(),'보기 조건의 시간을 바꿨습니다 · 시간: 11-22 10:00:00.000 ~ 끝 · 끝 시각은 비웠습니다');
+  }
+  const v=await yearEndRig(t,[dated(1,'03-01','10:00:00.000'),dated(2,'12-31','10:00:00.000')],{span:['03-01 10:00:00.000','12-31 10:00:00.000']});
+  await v.choose(1,'03-01 10:00:00.000까지만 보기');await v.choose(2,'12-31 10:00:00.000부터만 보기');
+  assert.deepEqual(v.shown(),[['12-31 10:00:00.000','']],'more than half a year the wrong way round');
+});
+
+test('search results and bookmarks across a year end narrow to the time between their ends',async t=>{
+  const v=await yearEndRig(t,YEAR_END,CROSSED),{r}=v;
+  await searchFor(r,'m');
+  const lower=line=>r.get('largeRows').children.find(n=>n.dataset.lineNumber===String(line));
+  await lower(3).dispatch('click',{detail:1});await settle();await lower(5).dispatch('click',{detail:1,shiftKey:true});await settle();
+  await lower(5).dispatch('contextmenu',{clientX:10,clientY:20,preventDefault(){}});await settle();
+  assert.equal(v.noteOf('선택한 3행의 시간 범위만 보기'),'시간: 12-31 23:59:59.000 ~ 01-01 00:10:00.000');
+  await v.item('선택한 3행의 시간 범위만 보기').dispatch('click');for(let i=0;i<4;i++)await settle();
+  assert.deepEqual(v.shown(),[['12-31 23:59:59.000','01-01 00:10:00.000']]);
+  await r.get('resetFilters').dispatch('click');await settle();
+  await markRows(r,[2,4]);await r.get('bookmarkTab').dispatch('click');await settle();
+  const [first,second]=r.get('bookmarkList').children;
+  await first.dispatch('keydown',{key:'ArrowDown',shiftKey:true,target:first,preventDefault(){}});await settle();
+  await second.dispatch('contextmenu',{clientX:10,clientY:20,preventDefault(){}});await settle();
+  await v.item('선택한 2행의 시간 범위만 보기').dispatch('click');for(let i=0;i<4;i++)await settle();
+  assert.deepEqual(v.shown(),[['12-31 23:59:56.000','01-01 00:00:03.000']]);
+});
+
 test('a selection range reads rows the list has not loaded, and bookmarks narrow to theirs',async t=>{
   const time=i=>`19:24:00.${String(i).padStart(3,'0')}`;
   const rows=Array.from({length:450},(_,i)=>i>=445?{lineNumber:i+1,kind:'raw',raw:`plain ${i}`}:{lineNumber:i+1,kind:'parsed',raw:`06-18 ${time(i)}  1 2 I T: m`,date:'06-18',time:time(i),pid:'1',tid:'2',level:'I',tag:'T',message:'m'});
@@ -1377,13 +1530,32 @@ test('time bounds are validated beside the fields, applied upward and shown as o
 test('an inverted dated time range is applied and explained beside the fields',async t=>{
   const r=await rig();t.after(()=>r.controller.close());
   const enter=async(id,value)=>{r.get(id).value=value;await r.get(id).dispatch('input');await r.get(id).dispatch('keydown',{key:'Enter',preventDefault(){}});await settle();};
-  await enter('timeFrom','12-31 23:00');await enter('timeTo','01-01 01:00');
-  assert.equal(r.get('timeFilterError').hidden,false);assert.match(r.get('timeFilterError').textContent,/해를 넘기지/);
+  const query=()=>{const f=r.calls.filter(c=>c.args.request?.action==='query'&&c.args.request.pane==='logs').at(-1).args.request.filters;return [f.include[0].timeFrom,f.include[0].timeTo];};
+  await enter('timeFrom','06-19 23:00');await enter('timeTo','06-18 01:00');
+  assert.equal(r.get('timeFilterError').hidden,false);assert.equal(r.get('timeFilterError').textContent,'끝 시각이 시작 시각보다 앞서 일치하는 행이 없습니다. 연도 없는 날짜는 끝이 반년 넘게 앞설 때만 해를 넘기는 범위로 봅니다.');
   assert.equal(r.get('logsPending').hidden,true,'the conditions are applied, not pending');
-  const query=r.calls.filter(c=>c.args.request?.action==='query'&&c.args.request.pane==='logs').at(-1).args.request.filters;
-  assert.deepEqual([query.include[0].timeFrom,query.include[0].timeTo],['12-31 23:00','01-01 01:00']);
-  await enter('timeTo','12-31 23:30');
+  assert.deepEqual(query(),['06-19 23:00','06-18 01:00']);
+  await enter('timeTo','06-19 23:30');
+  assert.equal(r.get('timeFilterError').hidden,true);assert.equal(r.get('timeFilterNote').hidden,true);
+  // Years say it themselves.
+  await enter('timeFrom','2026-01-01');await enter('timeTo','2025-12-31');
+  assert.equal(r.get('timeFilterError').textContent,'끝 시각이 시작 시각보다 앞서 일치하는 행이 없습니다.');
+  // A range past the year end is no error, and a note says how it reads.
+  await enter('timeFrom','12-31 23:00');await enter('timeTo','01-01 01:00');
   assert.equal(r.get('timeFilterError').hidden,true);
+  assert.equal(r.get('timeFilterNote').hidden,false);assert.equal(r.get('timeFilterNote').textContent,'해를 넘기는 범위로 봅니다.');
+  assert.deepEqual(query(),['12-31 23:00','01-01 01:00']);
+  // With a year on either end it is the other end whose year is read.
+  for(const [from,to] of [['12-31 23:00','2027-01-01'],['2026-12-31 23:00','01-01']]){
+    await enter('timeFrom',from);await enter('timeTo',to);
+    assert.equal(r.get('timeFilterNote').textContent,'해를 넘기는 범위로 봅니다.');assert.equal(r.get('timeFilterNote').hidden,false);
+  }
+  await enter('timeFrom','2026-12-31');await enter('timeTo','2027-01-01');
+  assert.equal(r.get('timeFilterNote').hidden,true,'two years say it themselves');
+  await enter('timeFrom','12-31 23:00');await enter('timeTo','01-01 01:0');
+  assert.equal(r.get('timeFilterError').hidden,false);assert.equal(r.get('timeFilterNote').hidden,true);
+  await enter('timeTo','');
+  assert.equal(r.get('timeFilterNote').hidden,true);
 });
 
 test('a startup argument error is shown even when it precedes the listener',async t=>{
@@ -1393,8 +1565,11 @@ test('a startup argument error is shown even when it precedes the listener',asyn
 });
 
 test('empty time ranges follow the core comparison', async () => {
-  const {isEmptyTimeRange}=await import('../dist/filter-model.js');
-  for (const [from,to] of [['12-31 23:00','01-01 01:00'],['06-18 19:25','06-18 19:24:59.5'],['2026-01-01','2025-12-31'],['06-18 19:24:59.9991','06-18 19:24:59.9990']]) assert.equal(isEmptyTimeRange(from,to), true, `${from} ~ ${to}`);
+  const {isEmptyTimeRange,wrapsYear}=await import('../dist/filter-model.js');
+  for (const [from,to] of [['01-02','01-01'],['07-02 12:00','01-01 12:00'],['07-02','01-01'],['06-18 19:25','06-18 19:24:59.5'],['2026-01-01','2025-12-31'],['06-18 19:24:59.9991','06-18 19:24:59.9990']]) assert.equal(isEmptyTimeRange(from,to), true, `${from} ~ ${to}`);
+  // Two ends more than half a year the wrong way round cross a year end.
+  for (const [from,to] of [['12-31 23:00','01-01 01:00'],['12-31','01-01'],['07-02 12:00','01-01 11:59'],['07-03','01-01'],['2025-12-31','01-01'],['12-31','2026-01-01']]) {assert.equal(isEmptyTimeRange(from,to), false, `${from} ~ ${to}`);assert.equal(wrapsYear(from,to), true, `${from} ~ ${to}`);}
+  for (const [from,to] of [['07-02 12:00','01-01 12:00'],['01-01','12-31'],['2025-12-31','2026-01-01'],['2026-01-01','2025-12-31'],['12-31 23:00','01:00'],['','01-01'],['12-31','']]) assert.equal(wrapsYear(from,to), false, `${from} ~ ${to}`);
   // Same precision ends inclusively; clock-only or single-date bounds run forward; mixed years may match dated rows.
   for (const [from,to] of [['06-18','06-18'],['06-18 19:25','06-18 19:25'],['06-18 19:24:59.9991','06-18 19:24:59.999'],['23:00','01:00'],['06-18 23:00','01:00'],['2026-01-01','12-31'],['','06-18'],['bad','06-18']]) assert.equal(isEmptyTimeRange(from,to), false, `${from} ~ ${to}`);
 });

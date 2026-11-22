@@ -59,7 +59,7 @@ export function createLargeLogController({transport, onChange=()=>{}, onLocate=(
   let replaced = null;
   let querySequence = 0, desiredFilters = defaultFilters();
   const requests = new Map();
-  const initialState = {datasetId:null, name:'', files:[], size:0, status:'connecting', indexedBytes:0, total:0, summary:null, complete:false, textComplete:false, summaryComplete:false, analysis:null, queryComplete:false, fieldFiltering:false, queryId:0, queryAccepted:false, queryStatus:'idle', caughtUp:false, count:0, scannedBytes:0, viewportStart:0, scrollRevision:0, scrollAlign:'start', scrollOffset:0, selectedIndex:null, locationPending:null, detail:null, selectedLine:null, error:'', closed:false, followable:false, following:false, grown:false, followError:'', tailRevision:0, format:'text', ios:false, conditions:null, checkedConditions:null, capture:null, rejected:'', anchor:null, anchorOffset:null};
+  const initialState = {datasetId:null, name:'', files:[], size:0, status:'connecting', indexedBytes:0, total:0, summary:null, complete:false, textComplete:false, summaryComplete:false, analysis:null, queryComplete:false, fieldFiltering:false, queryId:0, queryAccepted:false, queryStatus:'idle', caughtUp:false, count:0, scannedBytes:0, viewportStart:0, scrollRevision:0, scrollAlign:'start', scrollOffset:0, selectedIndex:null, locationPending:null, detail:null, selectedLine:null, error:'', closed:false, followable:false, following:false, grown:false, followError:'', tailRevision:0, format:'text', ios:false, span:null, conditions:null, checkedConditions:null, capture:null, rejected:'', anchor:null, anchorOffset:null};
   const state = {...initialState};
   const snapshot = () => ({...state, detail:state.detail && {...state.detail}});
   const emit = () => { if (!disposed) onChange(snapshot()); };
@@ -136,6 +136,8 @@ export function createLargeLogController({transport, onChange=()=>{}, onLocate=(
     if (typeof data.format === 'string') state.format = data.format === 'dlt' ? 'dlt' : 'text';
     // Every file is an iOS log, whose levels go by Apple's names.
     if (typeof data.ios === 'boolean') state.ios = data.ios;
+    // The times of the first and last row that has one.
+    if (data.span !== undefined) state.span = Array.isArray(data.span) && data.span.length === 2 && data.span.every(at => typeof at === 'string' && at.length <= 64) ? [...data.span] : null;
     state.followable = data.followable === true; state.following = data.following === true; state.grown = data.grown === true; state.followError = safeMessage(data.followError);
     // Every status of a capture's log carries the capture.
     if (data.capture !== undefined) state.capture = captureState(data.capture);
