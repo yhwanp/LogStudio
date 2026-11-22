@@ -76,13 +76,13 @@ test('a newer paste replaces the offer in the open dialog and keeps the first op
 });
 
 // The flow with a scripted dialog and native side.
-function flow({replaces=true,inField=false,hold=async()=>{}}={}){
-  const calls=[],opened=[],errors=[],asks=[];let gone=false,shown=replaces,field=inField;
+function flow({replaces=true,inField=false,hold=async()=>{},finish=async()=>({}),guard}={}){
+  const calls=[],opened=[],errors=[],asks=[],kept=[];let gone=false,shown=replaces,field=inField;
   const dialog={ask(offer){const d=deferred();asks.forEach(a=>a.pending&&(a.pending=false,a.resolve('replaced')));asks.push({...offer,pending:true,resolve:d.resolve});return d.promise;}};
   const answer=result=>{const a=asks.findLast(a=>a.pending);a.pending=false;a.resolve(result);};
-  const invoke=async(command,args)=>{calls.push([command,args.grant,args.action]);if(command==='hold_file_paste')return hold(args);return {};};
-  const pastes=createPasteFlow({invoke,dialog,replaces:()=>shown,closing:()=>'closing',openText:item=>opened.push(item.text),report:error=>errors.push(String(error)),isGone:()=>gone,inField:()=>field});
-  return {pastes,calls,opened,errors,asks,answer,gone:()=>{gone=true;},show:value=>{shown=value;},field:value=>{field=value;}};
+  const invoke=async(command,args)=>{calls.push([command,args.grant,args.action]);if(command==='hold_file_paste')return hold(args);return finish(args);};
+  const pastes=createPasteFlow({invoke,dialog,replaces:()=>shown,closing:()=>'closing',openText:item=>opened.push(item.text),report:error=>errors.push(String(error)),isGone:()=>gone,inField:()=>field,guard,keep:id=>kept.push(id),shown:()=>7});
+  return {pastes,calls,opened,errors,asks,kept,answer,gone:()=>{gone=true;},show:value=>{shown=value;},field:value=>{field=value;}};
 }
 
 test('text opens at once with nothing open, and only on 열기 over an open log',async()=>{
@@ -142,6 +142,15 @@ test('a hold that fails reports once and drops the grant; a newer paste during t
   holds.at(-1).reject('Paste grant is unavailable');await stale;await settle();
   assert.deepEqual(f.errors,[]);assert.deepEqual(f.calls.at(-1),['finish_file_paste','stale','discard']);
   f.answer('cancel');await text;
+});
+
+test('a file that does not open keeps the shown capture file',async()=>{
+  let f=flow({guard:async()=>'asked',finish:async args=>{if(args.action==='open')throw 'Paste grant expired; paste again';}});
+  await f.pastes.file({grant:'late'});await settle();
+  assert.deepEqual(f.kept,[7]);assert.deepEqual(f.errors,['Paste grant expired; paste again']);
+  f=flow({guard:async()=>'asked'});
+  await f.pastes.file({grant:'fine'});await settle();
+  assert.deepEqual(f.kept,[]);assert.deepEqual(f.calls.at(-1),['finish_file_paste','fine','open']);
 });
 
 test('the page has one paste dialog with 취소 before the primary 열기',async()=>{

@@ -749,6 +749,22 @@ async fn launch_capture_app(
     .await
     .map_err(|_| "Request failed".to_string())?
 }
+/// Asks where to save a capture, offering `name`. A QA run, which cannot
+/// drive the panel, saves into its folder instead.
+fn capture_destination(
+    app: &tauri::AppHandle,
+    name: &str,
+) -> Option<tauri_plugin_dialog::FilePath> {
+    #[cfg(feature = "qa")]
+    if let Some(folder) = std::env::var_os("LOGSTUDIO_QA_SAVES") {
+        return Some(std::path::PathBuf::from(folder).join(name).into());
+    }
+    app.dialog()
+        .file()
+        .set_title("기기 로그 저장")
+        .set_file_name(name)
+        .blocking_save_file()
+}
 /// Saves a copy of the rows a capture recorded so far.
 #[tauri::command]
 async fn save_capture(
@@ -771,13 +787,7 @@ async fn save_capture(
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "device.log".into());
-        let chosen = app
-            .dialog()
-            .file()
-            .set_title("기기 로그 저장")
-            .set_file_name(&name)
-            .blocking_save_file();
-        let Some(path) = chosen else {
+        let Some(path) = capture_destination(&app, &name) else {
             return Ok(json!({"cancelled":true}));
         };
         let path = path

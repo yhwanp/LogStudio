@@ -229,7 +229,7 @@ export function describeCapture(capture) {
       };
     default:
       if (capture.recovered) {
-        return {tone:'stopped', text:`남은 기기 로그${kept}`, title:`이전 실행이 기록을 마치지 못하고 남긴 로그입니다(${size}).`};
+        return {tone:'stopped', text:`남은 기기 로그${kept}`, title:`저장하지 않은 부분이 있어 남겨 두었던 기기 로그입니다(${size}).`};
       }
       // Emptied while stopped, it waits for the moment the user records on.
       if (!(capture.bytes > 0) && Number.isSafeInteger(capture.cleared)) {
@@ -607,8 +607,10 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
       // No-break spaces keep the button's name on one line.
       const answer = await dialog.ask(`${device}에서 기록한 로그(${size})가 아직 저장되지 않았습니다. 저장\u00a0안\u00a0함을 누르면 지워집니다.`);
       if (answer === 'cancel' || isGone()) return 'cancel';
-      if (answer === 'save' && !await save(datasetId)) return 'cancel';
-      await invoke('discard_capture', {datasetId, discard:true});
+      if (answer === 'save' && !await save(datasetId, true)) return 'cancel';
+      // Rows may arrive after the save, until the log closes: native code
+      // then keeps the whole file, unless the save holds every row.
+      await invoke('discard_capture', {datasetId, discard:answer === 'discard'});
       return 'asked';
     } catch (error) {
       fail(error);
@@ -616,16 +618,19 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
     }
   }
   // Saves a copy of the rows so far; false when the user cancelled. While it
-  // copies, 저장 becomes 저장 취소: a capture can be gigabytes.
-  async function save(datasetId = logs.getState().datasetId) {
+  // copies, 저장 becomes 저장 취소: a capture can be gigabytes. `leaving`
+  // when its log closes next.
+  async function save(datasetId = logs.getState().datasetId, leaving = false) {
+    const capture = logs.getState().capture;
     // A log with no rows has nothing to save, such as one just cleared.
-    if (saving || clearing || !(logs.getState().capture?.bytes > 0)) return false;
+    if (saving || clearing || !(capture?.bytes > 0)) return false;
     saving = true;
     render();
     try {
       const result = await invoke('save_capture', {datasetId});
       if (result?.cancelled) return false;
-      notify(`기기 로그(${formatSize(result?.bytes ?? 0)})를 저장했습니다.`);
+      const more = leaving && (capture.state === 'recording' || capture.state === 'waiting') ? ' 그 뒤 들어온 줄이 있으면 저장하지 않은 기기 로그 목록에 전체 로그를 남겨 둡니다.' : '';
+      notify(`기기 로그(${formatSize(result?.bytes ?? 0)})를 저장했습니다.${more}`, null, more ? {ms:5000} : undefined);
       void logs.start();
       return true;
     } catch (error) {
@@ -905,7 +910,8 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
   }).catch(() => {});
   void native.event.listen('close-held', async () => {
     const answer = isGone() ? 'none' : await guard();
-    try {await invoke('answer_close', {close:answer !== 'cancel'});} catch {}
+    const datasetId = logs.getState().datasetId;
+    try {await invoke('answer_close', {close:answer !== 'cancel'});} catch {keep(datasetId);}
   }).catch(() => {});
   void native.event.listen('capture-changed', ({payload}) => {
     if (!isGone() && payload?.datasetId === logs.getState().datasetId) void logs.start();

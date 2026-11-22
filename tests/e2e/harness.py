@@ -96,7 +96,7 @@ class App:
         self.clear_after = clear_after
         self.port = free_port()
         env = os.environ.copy()
-        env.update(HOME=str(ctx.home), TAURI_WEBDRIVER_PORT=str(self.port), LOGSTUDIO_QA_FIXTURES=str(ctx.fixtures))
+        env.update(HOME=str(ctx.home), TAURI_WEBDRIVER_PORT=str(self.port), LOGSTUDIO_QA_FIXTURES=str(ctx.fixtures), LOGSTUDIO_QA_SAVES=str(ctx.saves))
         if getattr(ctx, 'background', True):
             env['LOGSTUDIO_QA_BACKGROUND'] = '1'
         self.proc = subprocess.Popen([str(ctx.binary), *map(str, args)], env=env,
