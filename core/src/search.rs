@@ -373,6 +373,12 @@ struct TimeRange {
     /// Whether the span wraps for rows without and with a year: it runs past
     /// a midnight or year end the compared fields cannot show.
     wraps: [bool; 2],
+    /// Both ends have a year and are the wrong way round, which rows without
+    /// a year do not show.
+    never: bool,
+    /// Both ends have a year and a whole year or more is between them, which
+    /// rows without a year do not show either: each of them is in it.
+    whole_year: bool,
 }
 const DAY_NANOS: u64 = 86_400_000_000_000;
 fn digits(s: &str, len: usize) -> Option<u64> {
@@ -518,9 +524,39 @@ fn previous_day(year: Option<u16>, month_day: u16) -> (Option<u16>, u16) {
         (year.map(|y| y.saturating_sub(1)), 1231)
     }
 }
+/// Days before each month, counting February 29.
+const BEFORE: [u64; 13] = [0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335, 366];
+/// Two dates whose years are not both known cross a year end when the end
+/// comes this much before the start: nothing else tells `12-31` to `01-01`
+/// from two ends the wrong way round. The page asks the same
+/// (`wrapsYear` in `filter-model.js`).
+const HALF_YEAR: u64 = 183 * DAY_NANOS;
+fn crosses_year(from: &Stamp, to: &Stamp) -> bool {
+    let at = |s: &Stamp| {
+        let md = s.month_day.unwrap_or(101) as u64;
+        (BEFORE[(md / 100 - 1) as usize] + md % 100 - 1) * DAY_NANOS + s.nanos
+    };
+    at(from) > at(to) + HALF_YEAR
+}
+/// Whether a range whose ends both have a year holds every month, day and
+/// time: what follows its end is at least a year after its start.
+fn spans_a_year(from: &Stamp, to: &Stamp) -> bool {
+    let (Some(start_year), Some(start), Some(end)) = (from.year, from.month_day, to.month_day)
+    else {
+        return false;
+    };
+    let (year, month_day, nanos) = match to.nanos + 1 {
+        DAY_NANOS => {
+            let (year, month_day) = next_day(to.year, end);
+            (year, month_day, 0)
+        }
+        nanos => (to.year, end, nanos),
+    };
+    (year, month_day, nanos) >= (Some(start_year + 1), start, from.nanos)
+}
 impl TimeRange {
     fn new(mut from: Option<Stamp>, mut to: Option<Stamp>) -> Option<Self> {
-        let mut contiguous = false;
+        let (mut contiguous, mut never, mut whole_year) = (false, false, false);
         if let (Some(f), Some(t)) = (&mut from, &mut to) {
             match (f.month_day, t.month_day) {
                 // Two clock-only bounds apply to every day and may run past
@@ -544,12 +580,28 @@ impl TimeRange {
                     }
                     contiguous = true;
                 }
-                // Two explicit dates are compared as given.
-                (Some(_), Some(_)) => {}
+                (Some(_), Some(_)) => match (f.year, t.year) {
+                    // Two years are compared as given; in order they span
+                    // the year ends that rows without a year cannot show.
+                    (Some(_), Some(_)) => {
+                        contiguous = compare(f, t).is_le();
+                        never = !contiguous;
+                        whole_year = spans_a_year(f, t);
+                    }
+                    (from_year, to_year) if crosses_year(f, t) => {
+                        // A year on one end gives the other its own.
+                        f.year = from_year.or(to_year.map(|y| y.saturating_sub(1)));
+                        t.year = to_year.or(from_year.map(|y| y + 1));
+                        contiguous = true;
+                    }
+                    // Other dates, if inverted, match nothing.
+                    _ => {}
+                },
             }
         }
-        // Rows without a year see a span across a year end inverted, as all
-        // rows see a clock-only span across midnight.
+        // Rows see a span inverted when it crosses a boundary they do not
+        // compare: a year end for rows without a year, and for all rows
+        // midnight in a clock-only span or a year end in one without years.
         let inverted = |with_year: bool| match (from, to) {
             (Some(f), Some(t)) if contiguous => {
                 let seen = Stamp {
@@ -561,12 +613,22 @@ impl TimeRange {
             _ => false,
         };
         let wraps = [inverted(false), inverted(true)];
-        (from.is_some() || to.is_some()).then_some(Self { from, to, wraps })
+        (from.is_some() || to.is_some()).then_some(Self {
+            from,
+            to,
+            wraps,
+            never,
+            whole_year,
+        })
     }
     fn contains(&self, row: &Stamp) -> bool {
         let after = self.from.is_none_or(|f| compare(row, &f).is_ge());
         let before = self.to.is_none_or(|t| compare(row, &t).is_le());
-        if self.wraps[row.year.is_some() as usize] {
+        if self.never {
+            false
+        } else if self.whole_year && row.year.is_none() {
+            true
+        } else if self.wraps[row.year.is_some() as usize] {
             after || before
         } else {
             after && before

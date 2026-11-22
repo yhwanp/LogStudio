@@ -21,6 +21,7 @@ import {createBookmarks, MAX_BOOKMARKS} from './bookmarks.js';
 import {createWorkSaver, readWork, defaultFilters, mergeReloadMarks, mergeSavedMarks, describeReloadMarks, describeRestore, describeMissingMarks, RELOADED, LINES_PER_REQUEST} from './work-state.js';
 import {continuationOwner, continuationClass, joinsNext, ownerCells} from './entries.js';
 import {DLT_IDS, dltCells, dltLevelTitle, levelNames, profileOf, useAppleLevels} from './columns.js';
+import {isInvertedRange, wrapsYear, isYearless, isAfterInLog} from './filter-model.js';
 
 const number = value => Number.isSafeInteger(value) && value >= 0;
 
@@ -80,7 +81,7 @@ function fieldSpan(document, entry, value, className) {
 export function mountLargeLogView(native, {transport, tips=null, help=null, document=globalThis.document, window=globalThis.window}) {
   const $ = id => document.getElementById(id);
   $('largeLogPanel').hidden=false;
-  const ids = ['largeName','largeStatus','largeStatusNote','largeError','largeCount','largeTotal','largeRows','largeViewport','largeFirst','largeLast','largeCancel','largeColumns','largeRaw','largeHeaders','largeRange','largeDetail','largeDetailTitle','largeDetailText','largeDetailPrevious','largeDetailNext','largeDetailClose','levelFilters','allLevels','errorLevels','resetFilters','searchInput','caseSensitive','includeRaw','recognizeLineNumbers','logsCount','logsRows','logsViewport','logsHeaders','logsFirst','logsLast','logsJump','logsJumpForm','logsRange','largeSearchPane','filterBadge','activeFilters','filtersSwitch','filtersOn','filtersOffNote','filtersOffHint','filterRow','logsSelection','largeSelection','toast','largeDetailCopy','largeDetailMore','largeDetailHint','toggleFilters','emptyState','logContent','loadProgress','loadProgressBar','paneSplitter','searchError','dropHint','filterPanel','largeRegex','rowMenu','largeSize','exportCancel','recentFiles','recentList','clearRecent','timeFrom','timeTo','timeFilterError','lowerTabs','searchTab','bookmarkTab','bookmarkPane','bookmarkCount','bookmarkList','copyBookmarks','clearBookmarks','searchPosition','logsPending','errorBar','errorReopen','followFile',];
+  const ids = ['largeName','largeStatus','largeStatusNote','largeError','largeCount','largeTotal','largeRows','largeViewport','largeFirst','largeLast','largeCancel','largeColumns','largeRaw','largeHeaders','largeRange','largeDetail','largeDetailTitle','largeDetailText','largeDetailPrevious','largeDetailNext','largeDetailClose','levelFilters','allLevels','errorLevels','resetFilters','searchInput','caseSensitive','includeRaw','recognizeLineNumbers','logsCount','logsRows','logsViewport','logsHeaders','logsFirst','logsLast','logsJump','logsJumpForm','logsRange','largeSearchPane','filterBadge','activeFilters','filtersSwitch','filtersOn','filtersOffNote','filtersOffHint','filterRow','logsSelection','largeSelection','toast','largeDetailCopy','largeDetailMore','largeDetailHint','toggleFilters','emptyState','logContent','loadProgress','loadProgressBar','paneSplitter','searchError','dropHint','filterPanel','largeRegex','rowMenu','largeSize','exportCancel','recentFiles','recentList','clearRecent','timeFrom','timeTo','timeFilterError','timeFilterNote','lowerTabs','searchTab','bookmarkTab','bookmarkPane','bookmarkCount','bookmarkList','copyBookmarks','clearBookmarks','searchPosition','logsPending','errorBar','errorReopen','followFile',];
   for (const id of ['moreButton','jumpHelp','jumpError','deviceButton','emptyDevice','captureBar','captureState','captureText','captureHint','captureClear','captureClearHint','captureApp','captureAppStatus','captureStop','captureStopName','captureStopOther','captureStopHint','captureSave','captureLeftovers','leftoverList','openFile']) ids.push(id);
   const ui = Object.fromEntries(ids.map(id => [id,$(id)]));
   // Device captures (devices.js) mount once the menu and toasts exist.
@@ -703,8 +704,11 @@ export function mountLargeLogView(native, {transport, tips=null, help=null, docu
     const lower=search.getState(),upper=logs.getState();
     const [pidMessage,tidMessage]=['pid','tid'].map(key=>validationError&&!fieldOf(key).regex.checked?numberError(fieldOf(key).input.value):'');
     const fromBad=validationError&&!isTimeBound(ui.timeFrom.value),toBad=validationError&&!isTimeBound(ui.timeTo.value);
-    // A well-formed but inverted dated range is applied; it just matches nothing.
-    const timeMessage=fromBad||toBad?'시간은 06-18 19:24:05.123처럼 로그와 같은 형식으로, 앞에서부터 입력해 주세요.':isEmptyTimeRange(ui.timeFrom.value,ui.timeTo.value)?'끝 시각이 시작 시각보다 앞서 일치하는 행이 없습니다. 연도 없는 날짜 범위는 해를 넘기지 않습니다.':'';
+    // A well-formed but inverted dated range is applied; it just matches
+    // nothing, unless it runs past a year end, which a note says.
+    const timeMessage=fromBad||toBad?'시간은 06-18 19:24:05.123처럼 로그와 같은 형식으로, 앞에서부터 입력해 주세요.':isEmptyTimeRange(ui.timeFrom.value,ui.timeTo.value)?`끝 시각이 시작 시각보다 앞서 일치하는 행이 없습니다.${isYearless(ui.timeFrom.value)?' 연도 없는 날짜는 끝이 반년 넘게 앞설 때만 해를 넘기는 범위로 봅니다.':''}`:'';
+    const timeNote=wrapsYear(ui.timeFrom.value,ui.timeTo.value)?'해를 넘기는 범위로 봅니다.':'';
+    if(ui.timeFilterNote.textContent!==timeNote)ui.timeFilterNote.textContent=timeNote;ui.timeFilterNote.hidden=!timeNote;
     // A pattern only the engine can check: the upper logs keep the last
     // conditions it accepted. The editor shows why while it edits a condition
     // with that pattern; otherwise the banner does.
@@ -980,8 +984,14 @@ export function mountLargeLogView(native, {transport, tips=null, help=null, docu
     const from=entry?.kind==='parsed'?entry:continuationOwner(entry),stamp=from?[from.date,from.time].filter(Boolean).join(' '):'';
     return stamp&&isTimeBound(stamp)?stamp:'';
   }
-  // Two times as [earlier, later], or null without both.
-  const orderedTimes=(a,b)=>a&&b?isEmptyTimeRange(a,b)?[b,a]:[a,b]:null;
+  // The first and last time of a log without years that crosses a year end,
+  // whose dates alone do not tell their order; else null.
+  function yearEnd(){const span=logs.getState().span;return span?.every(isYearless)&&wrapsYear(...span)?span:null;}
+  // Whether `a` comes after `b` in the open log.
+  function comesAfter(a,b){const span=yearEnd();return span?isAfterInLog(span[0],a,b):isInvertedRange(a,b);}
+  // Two times as [earlier, later], or null without both. Rows may be out of
+  // order; more than half a year apart they cross a year end instead.
+  const orderedTimes=(a,b)=>a&&b?(yearEnd()?comesAfter(a,b):isEmptyTimeRange(a,b))?[b,a]:[a,b]:null;
   // Positions of sorted ranges, first to last or last to first.
   function* positionsIn(ranges,backward=false){
     for(const [a,b] of backward?[...ranges].reverse():ranges)for(let k=0;k<=b-a;k++)yield backward?b-k:a+k;
@@ -1011,11 +1021,26 @@ export function mountLargeLogView(native, {transport, tips=null, help=null, docu
   const showingInUse=()=>conds.include.filter(c=>c.enabled!==false&&!isEmptyCondition(c));
   // A bound replaces its side and clears the other end if it crosses it, so
   // an item keeps its name's promise: `13:00부터만` on 10:00 ~ 12:00 is 13:00 ~ 끝.
+  // One date without a year does not say which side of a year end a row is
+  // on, so in a log that crosses one the log's own first or last date is the
+  // other end, or the row's where it is out of order. A date keeps rows a
+  // moment out of order there; only when the dates do not cross the year end,
+  // at 183 days, is it the whole time.
   function narrowedTime(c,bounds){
     const next={timeFrom:bounds.timeFrom??c.timeFrom??'',timeTo:bounds.timeTo??c.timeTo??''};
-    if(isEmptyTimeRange(next.timeFrom,next.timeTo))next['timeFrom' in bounds?'timeTo':'timeFrom']='';
+    if('timeFrom' in bounds&&'timeTo' in bounds)return next;
+    if(comesAfter(next.timeFrom,next.timeTo))next['timeFrom' in bounds?'timeTo':'timeFrom']='';
+    const span=yearEnd(),date=at=>at.split(' ')[0],at=bounds.timeFrom??bounds.timeTo;
+    if(!span||!isYearless(at))return next;
+    const [first,last]=span,complete=(key,time)=>{next[key]=date(time);if(isEmptyTimeRange(next.timeFrom,next.timeTo))next[key]=time;};
+    if(!next.timeFrom)complete('timeFrom',comesAfter(first,at)?at:first);
+    // A followed log's last date is still to come (`endless`).
+    if(!next.timeTo&&!logs.getState().following)complete('timeTo',comesAfter(at,last)?at:last);
     return next;
   }
+  // A start that would hide the rows of the new year still to come.
+  const endless=t=>!t.timeTo&&!!yearEnd()&&isYearless(t.timeFrom);
+  const ENDLESS='해를 넘긴 로그를 따라가는 중에는 끝 시각도 필요합니다';
   const sameTime=(c,t)=>(c.timeFrom??'')===t.timeFrom&&(c.timeTo??'')===t.timeTo;
   // A menu note's range; an end on the start's date omits the date.
   function rangeText({timeFrom,timeTo}){
@@ -1027,8 +1052,10 @@ export function mountLargeLogView(native, {transport, tips=null, help=null, docu
   function narrowTime(bounds){
     syncEditor();
     const targets=showingInUse();
-    if(!targets.length)return void addShowing(bounds);
-    const before=targets.map(c=>({timeFrom:c.timeFrom??'',timeTo:c.timeTo??''})),after=targets.map(c=>narrowedTime(c,bounds));
+    const after=(targets.length?targets:[{}]).map(c=>narrowedTime(c,bounds));
+    if(after.some(endless))return void notify(`${ENDLESS}.`);
+    if(!targets.length)return void addShowing(Object.fromEntries(Object.entries(after[0]).filter(([,at])=>at)));
+    const before=targets.map(c=>({timeFrom:c.timeFrom??'',timeTo:c.timeTo??''}));
     if(targets.every((c,i)=>sameTime(c,after[i])))return void notify('이미 이 시간으로 보고 있습니다.');
     targets.forEach((c,i)=>Object.assign(c,after[i]));
     loadEditor();buildConditions();apply();
@@ -1153,11 +1180,12 @@ export function mountLargeLogView(native, {transport, tips=null, help=null, docu
   function timeItem(label,action,bounds,rows){
     const targets=showingInUse(),title=`${targets.length?'보기 조건에 맞는 줄 중 ':''}${rows}만 보여 줍니다`;
     if(!bounds)return [label,action,title];
-    const after=targets.map(c=>narrowedTime(c,bounds));
+    const after=(targets.length?targets:[{}]).map(c=>narrowedTime(c,bounds));
+    if(after.some(endless))return [label,action,title,{disabled:true,note:ENDLESS}];
     if(targets.length&&targets.every((c,i)=>sameTime(c,after[i])))return [label,action,title,{disabled:true,note:'지금 보는 시간과 같습니다'}];
     const timed=targets.some(c=>String(c.timeFrom??'').trim()||String(c.timeTo??'').trim()),both='timeFrom' in bounds&&'timeTo' in bounds;
-    const ranges=[...new Set((targets.length?after:[narrowedTime({},bounds)]).map(rangeText))],what=ranges.length===1?`시간: ${ranges[0]}`:'조건마다 다른 시간';
-    const note=targets.length>1?`보기 조건 ${targets.length}개 · ${what}`:timed||both?what:'';
+    const ranges=[...new Set(after.map(rangeText))],what=ranges.length===1?`시간: ${ranges[0]}`:'조건마다 다른 시간';
+    const note=targets.length>1?`보기 조건 ${targets.length}개 · ${what}`:timed||both||yearEnd()?what:'';
     return [label,action,title,note?{note}:{}];
   }
   const rangeItem=({size,times,run})=>timeItem(`선택한 ${formatNumber(size)}행의 시간 범위만 보기`,run,times&&{timeFrom:times[0],timeTo:times[1]},'선택한 첫 행의 시각부터 마지막 행의 시각까지의 줄');

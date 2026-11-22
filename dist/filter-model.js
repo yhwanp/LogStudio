@@ -10,21 +10,44 @@ export function isTimeBound(value) {
   if (words.length === 2) return DATE.test(words[0]) && CLOCK.test(words[1]);
   return words.length === 1 && (words[0].includes('-') ? DATE.test(words[0]) : CLOCK.test(words[0]));
 }
+// Days before each month, counting February 29, as the core counts them.
+const BEFORE = [0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335];
+// A bound with a date, or null: its year (null without one), its month, day
+// and filled clock as text that orders (`key`), and its day of the year.
+function datedBound(value, upper) {
+  const [date, clock = ''] = String(value ?? '').trim().split(/\s+/);
+  if (!date?.includes('-') || !isTimeBound(value)) return null;
+  const parts = date.split('-'), [month, day] = parts.slice(-2), fill = upper ? '23:59:59.999999999' : '00:00:00.000000000';
+  const time = clock + fill.slice(clock.length);
+  return {year:parts.length === 3 ? parts[0] : null, key:`${month}-${day} ${time}`, time, day:BEFORE[month - 1] + Number(day)};
+}
+// Whether `a` is more than half a year, 183 days, after `b` within a year.
+const halfYearAfter = (a, b) => a.day - b.day > 183 || (a.day - b.day === 183 && a.time > b.time);
 // True when both bounds carry a date and the end comes before the start under
-// the core's comparison, so no row can match. Dates are compared by year only
-// when both bounds have one; mixed bounds may still match dated rows.
-export function isEmptyTimeRange(from, to) {
-  if (!isTimeBound(from) || !isTimeBound(to)) return false;
-  const point = (value, upper) => {
-    const [date, clock = ''] = String(value ?? '').trim().split(/\s+/);
-    if (!date || !date.includes('-')) return null;
-    const parts = date.split('-'), fill = upper ? '23:59:59.999999999' : '00:00:00.000000000';
-    const time = clock + fill.slice(clock.length);
-    return {year:parts.length === 3 ? parts[0] : null, key:`${parts.at(-2)}-${parts.at(-1)} ${time}`};
-  };
-  const start = point(from, false), end = point(to, true);
+// the core's comparison. Dates are compared by year only when both bounds
+// have one; false when only one has.
+export function isInvertedRange(from, to) {
+  const start = datedBound(from, false), end = datedBound(to, true);
   if (!start || !end || (start.year === null) !== (end.year === null)) return false;
   return `${start.year ?? ''}${start.key}` > `${end.year ?? ''}${end.key}`;
+}
+// True when the end is read as the next year's, as the core reads it: the
+// years are not both known, and the end comes more than half a year before
+// the start.
+export function wrapsYear(from, to) {
+  const start = datedBound(from, false), end = datedBound(to, true);
+  return !!start && !!end && (start.year === null || end.year === null) && halfYearAfter(start, end);
+}
+// True when no row can match the range.
+export const isEmptyTimeRange = (from, to) => isInvertedRange(from, to) && !wrapsYear(from, to);
+export const isYearless = value => datedBound(value, false)?.year === null;
+// Whether `a` comes after `b` in a log without years that starts at `first`
+// and crosses a year end: dates far before its start are the next year's.
+export function isAfterInLog(first, a, b) {
+  const start = datedBound(first, false), [x, y] = [datedBound(a, false), datedBound(b, true)];
+  if (!start || x?.year !== null || y?.year !== null) return isInvertedRange(a, b);
+  const days = at => at.day + (halfYearAfter(start, at) ? 366 : 0);
+  return days(x) !== days(y) ? days(x) > days(y) : x.time > y.time;
 }
 // Fields that hold one value, or with their `Regex` switch a pattern.
 export const VALUE_FIELDS = ['tag', 'pid', 'tid', 'ecu', 'apid', 'ctid'];

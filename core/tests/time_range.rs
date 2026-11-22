@@ -173,20 +173,241 @@ fn dated_android_rows_compare_their_year() {
     );
 }
 
+const YEAR_END: &str = "12-30 23:45:00.000  1 2 I A: before
+12-31 23:30:00.000  1 2 I A: a
+01-01 00:10:00.000  1 2 I A: b
+raw continuation
+01-02 09:00:00.000  1 2 I A: after
+";
+
+#[test]
+fn a_dated_range_without_years_runs_past_the_year_end() {
+    counts(
+        YEAR_END,
+        &[
+            ("12-31 23:00", "01-01 01:00", 3),
+            ("12-31", "01-01", 3),
+            ("12-31 23:30", "01-01 00:09", 1),
+            ("12-30", "01-02 08:59", 4),
+            // Two ends in order stay within a year.
+            ("01-01", "12-31", 5),
+            ("01-01", "01-02", 3),
+            // Half a year or less apart the ends are the wrong way round.
+            ("01-02", "01-01", 0),
+            ("12-31 23:30", "12-30", 0),
+        ],
+    );
+    // More than 183 days of a 366-day year, to the nanosecond.
+    const JULY: &str = "07-02 12:00:00.000  1 2 I A: a
+01-01 11:00:00.000  1 2 I A: b
+";
+    counts(
+        JULY,
+        &[
+            ("07-02 12:00", "01-01 11:59", 2),
+            ("07-02 12:00", "01-01 12:00", 0),
+            ("07-02 11:59:59.999999999", "01-01 11:59:59", 0),
+            ("07-02 12:00", "01-01 11:59:59.999999999", 2),
+            ("07-03", "01-01", 1),
+            ("07-02", "01-01", 0),
+        ],
+    );
+}
+
+/// The ranges the page's row menu makes of one end (`narrowedTime`).
+#[test]
+fn ranges_completed_at_a_year_end_keep_their_rows() {
+    // Dates keep rows a moment out of order at the log's ends.
+    counts(
+        "12-30 08:00:00.000  1 2 I A: first
+12-30 07:59:59.998  1 2 I A: before
+12-31 23:59:59.000  1 2 I A: x
+01-01 00:00:01.000  1 2 I A: y
+01-02 09:00:00.004  1 2 I A: after
+01-02 09:00:00.000  1 2 I A: last
+",
+        &[
+            ("12-30", "12-31 23:59:59.000", 3),
+            ("12-31 23:59:59.000", "01-02", 4),
+        ],
+    );
+    // Ends 183 days apart cross the year end only with their times.
+    counts(
+        "07-02 10:00:00.000  1 2 I A: a
+07-02 11:00:00.000  1 2 I A: b
+01-01 08:30:00.000  1 2 I A: c
+01-01 09:00:00.000  1 2 I A: d
+",
+        &[
+            ("07-02", "01-01 08:30:00.000", 0),
+            ("07-02 10:00:00.000", "01-01 08:30:00.000", 3),
+            ("07-02 11:00:00.000", "01-01", 0),
+            ("07-02 11:00:00.000", "01-01 09:00:00.000", 3),
+            ("07-02 10:00:00.000", "01-01 09:00:00.000", 4),
+        ],
+    );
+}
+
+#[test]
+fn rows_with_a_year_take_a_yearless_range_every_year() {
+    const YEARS: &str = "2024-12-31 23:59:59.000  1 2 I A: a
+2025-01-01 00:00:01.000  1 2 I A: b
+2025-06-18 00:00:00.000  1 2 I A: c
+2025-12-31 23:59:59.000  1 2 I A: d
+2026-01-01 00:00:01.000  1 2 I A: e
+";
+    counts(
+        YEARS,
+        &[
+            ("12-31", "01-01", 4),
+            // A year on one end gives the other its own.
+            ("2025-12-31", "01-01", 2),
+            ("12-31", "2025-01-01", 2),
+            // Years on both are compared as given.
+            ("2025-12-31", "2026-01-01", 2),
+            ("2024-12-31", "2026-01-01", 5),
+            ("2026-01-01", "2025-12-31", 0),
+        ],
+    );
+    counts(
+        IOS,
+        &[
+            ("12-31 23:59:59", "01-01 00:00:01", 2),
+            ("2025-12-31 23:00", "01-01 01:00", 2),
+        ],
+    );
+}
+
+#[test]
+fn rows_without_a_year_take_a_range_of_two_years() {
+    counts(
+        YEAR_END,
+        &[
+            ("2025-12-31 23:00", "2026-01-01 01:00", 3),
+            ("2025-12-31 23:00", "01-01 01:00", 3),
+            ("12-31 23:00", "2026-01-01 01:00", 3),
+            ("2025-12-30", "2025-12-31", 2),
+            // Any span of years in order, however far apart the dates.
+            ("2025-01-02", "2026-01-01", 5),
+            ("2026-01-01", "2025-12-31", 0),
+        ],
+    );
+}
+
+#[test]
+fn a_range_of_a_whole_year_takes_every_row_without_one() {
+    const ALL: &str = "01-01 00:00:00.000  1 2 I A: a
+02-28 23:59:59.999  1 2 I A: b
+02-29 12:00:00.000  1 2 I A: c
+03-01 00:00:00.000  1 2 I A: d
+06-18 11:59:30.000  1 2 I A: e
+06-18 12:00:00.000  1 2 I A: f
+12-31 23:59:59.999  1 2 I A: g
+";
+    counts(
+        ALL,
+        &[
+            // The year between two year ends.
+            ("2024-12-31", "2026-01-01", 7),
+            ("2024-12-31", "2025-12-31", 7),
+            // Exactly a year, and a moment less.
+            ("2025-01-01", "2025-12-31", 7),
+            ("2025-06-18 12:00", "2026-06-18 12:00", 7),
+            ("2025-06-18 12:00", "2026-06-18 11:59", 7),
+            ("2025-06-18 12:00", "2026-06-18 11:58", 6),
+            ("2025-06-18 11:59:30", "2026-06-18 11:59:29.999999999", 7),
+            (
+                "2025-06-18 11:59:30.000000001",
+                "2026-06-18 11:59:29.999999999",
+                6,
+            ),
+            // Years whose end has no February 29, and one that has.
+            ("2025-03-01", "2026-02-28", 7),
+            ("2025-03-01", "2026-02-27", 5),
+            ("2023-03-01", "2024-02-29", 7),
+            ("2023-03-01", "2024-02-28", 6),
+            ("2024-02-29", "2025-02-28", 7),
+            ("2024-02-29", "2025-02-27", 6),
+            ("2024-03-01", "2025-03-01", 7),
+            // Longer, whichever way round the dates are.
+            ("2024-06-18", "2026-03-01", 7),
+            ("2024-03-01", "2026-06-18", 7),
+            ("2020-02-29", "2024-02-29", 7),
+            ("2000-01-01", "9999-12-31", 7),
+            // Within a year, and the wrong way round.
+            ("2025-03-01", "2025-06-18", 3),
+            ("2026-01-01", "2024-12-31", 0),
+        ],
+    );
+}
+
 /// The page warns about a dated range only when it can match nothing
 /// (`isEmptyTimeRange`); these are the cases it relies on.
 #[test]
-fn inverted_dated_ranges_match_nothing_unless_years_are_mixed() {
-    const YEAR_END: &str = "12-31 23:30:00.000  1 2 I A: a
-01-01 00:10:00.000  1 2 I A: b
-";
-    counts(YEAR_END, &[("12-31 23:00", "01-01 01:00", 0)]);
+fn inverted_dated_ranges_match_nothing_within_half_a_year() {
+    counts(YEAR_END, &[("12-31 23:30", "12-31 23:00", 0)]);
     counts(
         IOS,
         &[
             ("2026-01-01", "2025-12-31", 0),
-            // One year: dated rows compare it on that side only.
-            ("2025-12-31 23:00", "01-01 01:00", 1),
+            ("01-01 00:00:02", "01-01 00:00:01", 0),
         ],
     );
+}
+
+#[test]
+fn the_status_has_the_first_and_last_row_times() {
+    let span = |d: &Dataset| d.status(0)["span"].clone();
+    let open = |text: &str| {
+        let d = Dataset::new(1, Source::text(text, "span").unwrap());
+        d.start(|_| {});
+        wait(|| d.status(0)["textComplete"] == true);
+        d
+    };
+    let d = open(&format!("--------- beginning of main\n{YEAR_END}tail\n"));
+    assert_eq!(
+        span(&d),
+        serde_json::json!(["12-30 23:45:00.000", "01-02 09:00:00.000"])
+    );
+    d.close();
+    // Ends without a row time are looked through, up to 64 KiB of them.
+    let raw = "no time here\n".repeat(4000);
+    let d = open(&format!("{raw}{YEAR_END}{raw}"));
+    assert_eq!(
+        span(&d),
+        serde_json::json!(["12-30 23:45:00.000", "01-02 09:00:00.000"])
+    );
+    d.close();
+    for text in ["no time\n", "", &"no time here\n".repeat(20_000)] {
+        let d = open(text);
+        assert!(span(&d).is_null());
+        d.close();
+    }
+}
+
+#[test]
+fn the_row_times_follow_a_growing_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("grow.log");
+    std::fs::write(&path, "").unwrap();
+    let d = Dataset::new(1, Source::granted(&path).unwrap());
+    d.start(|_| {});
+    wait(|| d.status(0)["textComplete"] == true);
+    assert!(d.status(0)["span"].is_null());
+    d.follow_poll_ms
+        .store(2, std::sync::atomic::Ordering::Relaxed);
+    d.follow(true).unwrap();
+    let append = |text: &str| {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        f.write_all(text.as_bytes()).unwrap();
+    };
+    append("12-31 23:59:59.000  1 2 I A: a\n");
+    wait(|| d.status(0)["span"] == serde_json::json!(["12-31 23:59:59.000", "12-31 23:59:59.000"]));
+    append("01-01 00:00:01.000  1 2 I A: b\n");
+    wait(|| d.status(0)["span"] == serde_json::json!(["12-31 23:59:59.000", "01-01 00:00:01.000"]));
+    d.close();
 }

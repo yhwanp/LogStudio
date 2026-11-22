@@ -301,3 +301,12 @@ test('native refusals show in the dialog and filters of another format cannot be
   await r.$('filterNameCancel').dispatch('click');
   assert.equal(r.$('filterNameDialog').open, false);
 });
+
+test('saved time ranges keep their words, whichever year they read as', () => {
+  const ranges = [['12-31 23:59', '01-01 00:10'], ['01-01 00:00:03.000', '12-31 23:59:56.000'], ['06-19', '06-18'], ['2025-12-31', '2026-01-01'], ['23:00', '01:00'], ['12-31', '']];
+  for (const [timeFrom, timeTo] of ranges) {
+    const fields = {include:[{...emptyCondition(), timeFrom, timeTo}], exclude:[], includeRaw:true}, read = fromStored(toStored(fields));
+    assert.deepEqual([read.include[0].timeFrom, read.include[0].timeTo], [timeFrom, timeTo]);
+    assert.ok(sameFields(read, fields));
+  }
+});
