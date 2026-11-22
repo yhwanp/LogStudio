@@ -1,5 +1,6 @@
 //! Starts the command-line tools that captures use, such as adb and
 //! Xcode's tools, and runs a command to its end within a time limit.
+use super::link::Cancel;
 use std::{
     io::{self, Read},
     path::Path,
@@ -41,10 +42,27 @@ fn drain(pipe: Option<impl Read + Send + 'static>, limit: u64) -> mpsc::Receiver
     }
     received
 }
+/// How often a running command is looked at.
+const LOOK: Duration = Duration::from_millis(10);
 /// Runs `command` to its end within `timeout`; past it, the error's kind is
 /// `TimedOut`. A process it started, such as an adb server, may hold the
 /// outputs open, so they are read only until the deadline.
-pub(super) fn run(mut command: Command, timeout: Duration, limit: u64) -> io::Result<Output> {
+pub(super) fn run(command: Command, timeout: Duration, limit: u64) -> io::Result<Output> {
+    run_unless(command, timeout, limit, &Cancel::default())
+}
+/// `run`, ended once `cancel` is set; the error's kind is `Interrupted`
+/// then. Only the command itself is killed, not what it started.
+pub(super) fn run_unless(
+    mut command: Command,
+    timeout: Duration,
+    limit: u64,
+    cancel: &Cancel,
+) -> io::Result<Output> {
+    let cancelled = || cancel.is_set();
+    let ended = || io::Error::new(io::ErrorKind::Interrupted, "command cancelled");
+    if cancelled() {
+        return Err(ended());
+    }
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = command.spawn()?;
     let stdout = drain(child.stdout.take(), limit);
@@ -53,27 +71,40 @@ pub(super) fn run(mut command: Command, timeout: Duration, limit: u64) -> io::Re
     let status = loop {
         match child.try_wait()? {
             Some(status) => break status,
-            None if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
+            None if !cancelled() && Instant::now() < deadline => thread::sleep(LOOK),
             None => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(io::Error::new(io::ErrorKind::TimedOut, "command timed out"));
+                return Err(if cancelled() {
+                    ended()
+                } else {
+                    io::Error::new(io::ErrorKind::TimedOut, "command timed out")
+                });
             }
         }
     };
     // A program that exited has written all its output, so the rest arrives
     // at once. A pipe that a child it left running holds open gets a moment,
     // not the rest of the timeout.
-    let left = || {
-        deadline
+    let rest = |pipe: mpsc::Receiver<Vec<u8>>| {
+        let left = deadline
             .saturating_duration_since(Instant::now())
-            .clamp(Duration::from_millis(100), Duration::from_secs(1))
+            .clamp(Duration::from_millis(100), Duration::from_secs(1));
+        let until = Instant::now() + left;
+        loop {
+            let wait = until.saturating_duration_since(Instant::now()).min(LOOK);
+            match pipe.recv_timeout(wait) {
+                Ok(out) => return Ok(out),
+                _ if cancelled() => return Err(ended()),
+                Err(mpsc::RecvTimeoutError::Timeout) if Instant::now() < until => {}
+                Err(_) => return Ok(vec![]),
+            }
+        }
     };
     Ok(Output {
         success: status.success(),
-        stdout: stdout.recv_timeout(left()).unwrap_or_default(),
-        stderr: String::from_utf8_lossy(&stderr.recv_timeout(left()).unwrap_or_default())
-            .into_owned(),
+        stdout: rest(stdout)?,
+        stderr: String::from_utf8_lossy(&rest(stderr)?).into_owned(),
     })
 }
 
@@ -117,5 +148,28 @@ mod tests {
             .err()
             .expect("sleep ended within 100 ms");
         assert_eq!(e.kind(), io::ErrorKind::TimedOut);
+    }
+    #[test]
+    fn a_cancelled_command_ends_at_once() {
+        // Other tests start by writing the scripts they run, which a process
+        // started meanwhile would hold open.
+        thread::sleep(Duration::from_millis(500));
+        // One that runs, and one that ended but left its output open.
+        for script in ["exec sleep 5", "sleep 5 & exit 0"] {
+            let cancel = Cancel::default();
+            let at = Instant::now();
+            let e = thread::scope(|s| {
+                let running =
+                    s.spawn(|| run_unless(sh(script), Duration::from_secs(10), 64, &cancel));
+                thread::sleep(Duration::from_millis(100));
+                cancel.set_stopped(true);
+                running.join().unwrap().err().expect("not cancelled")
+            });
+            assert_eq!(e.kind(), io::ErrorKind::Interrupted);
+            assert!(at.elapsed() < Duration::from_millis(900), "{script}");
+            let at = Instant::now();
+            assert!(run_unless(sh(script), Duration::from_secs(10), 64, &cancel).is_err());
+            assert!(at.elapsed() < Duration::from_millis(100));
+        }
     }
 }

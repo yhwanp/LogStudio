@@ -154,12 +154,17 @@ fn a_candidate_that_does_not_answer_in_time_is_skipped() {
     assert!(at.elapsed() < Duration::from_secs(5));
 }
 
-/// A synthetic adb that answers from files in its folder.
+/// A synthetic adb that answers from files in its folder. With a file
+/// `hang`, streams end and every other command hangs; its process ID is
+/// written to `hung`.
 #[cfg(unix)]
 const FAKE_ADB: &str = r#"
 dir="$(dirname "$0")"
+[ -f "$dir/hang" ] && { echo $$ > "$dir/hung"; exec sleep 60; }
 case "$1" in
   start-server)
+    # A server started by the first command outlives it, as adb's does.
+    [ -f "$dir/server" ] || { sleep 120 >/dev/null 2>&1 & echo $! > "$dir/server"; }
     [ -f "$dir/mismatch" ] && echo "adb server version (40) doesn't match this client (41); killing..." >&2
     exit 0;;
   devices) cat "$dir/devices"; exit 0;;
@@ -179,13 +184,33 @@ case "$1" in
         echo "10-23 14:00:01.000  1  2 I T: old";;
       "logcat -v")
         echo "$@" > "$dir/stream-args"
-        i=1; while :; do echo "10-23 14:00:05.000  1  2 I T: live $i"; i=$((i+1)); sleep 0.01; done;;
+        i=1; while [ ! -f "$dir/hang" ]; do echo "10-23 14:00:05.000  1  2 I T: live $i"; i=$((i+1)); sleep 0.01; done;;
     esac;;
 esac
 "#;
 
+/// The fake adb's folder, which ends what its commands left running with it.
 #[cfg(unix)]
-fn fake_adb() -> (tempfile::TempDir, logstudio_core::capture::cli::AdbCli) {
+struct FakeAdb(tempfile::TempDir);
+#[cfg(unix)]
+impl FakeAdb {
+    fn path(&self) -> &Path {
+        self.0.path()
+    }
+}
+#[cfg(unix)]
+impl Drop for FakeAdb {
+    fn drop(&mut self) {
+        for file in ["server", "hung"] {
+            if runs(self.path(), file) {
+                let pid = std::fs::read_to_string(self.path().join(file)).unwrap();
+                let _ = std::process::Command::new("kill").arg(pid.trim()).status();
+            }
+        }
+    }
+}
+#[cfg(unix)]
+fn fake_adb() -> (FakeAdb, logstudio_core::capture::cli::AdbCli) {
     let dir = tempfile::tempdir().unwrap();
     let adb = script(dir.path(), "adb", FAKE_ADB);
     std::fs::write(
@@ -193,7 +218,10 @@ fn fake_adb() -> (tempfile::TempDir, logstudio_core::capture::cli::AdbCli) {
         "List of devices attached\nSER1  device product:p model:Pixel_8 transport_id:1\nLOCKED  unauthorized transport_id:2\n\n",
     )
     .unwrap();
-    (dir, logstudio_core::capture::cli::AdbCli::new(&adb))
+    (
+        FakeAdb(dir),
+        logstudio_core::capture::cli::AdbCli::new(&adb),
+    )
 }
 
 #[cfg(unix)]
@@ -263,4 +291,167 @@ fn a_capture_through_the_adb_command_line_records_until_stopped() {
         "{text:.80}"
     );
     assert!(!text.contains("old"));
+}
+
+/// Runs `f` and fails when it takes seconds, as adb's time limits do.
+#[cfg(unix)]
+fn at_once(what: &str, f: impl FnOnce()) {
+    let at = Instant::now();
+    f();
+    let took = at.elapsed();
+    println!("{what}: {took:?}");
+    assert!(took < Duration::from_secs(3), "{what} took {took:?}");
+}
+#[cfg(unix)]
+fn wait(what: &str, mut done: impl FnMut() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !done() {
+        assert!(Instant::now() < deadline, "timed out: {what}");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+/// Whether the process whose ID the fake adb wrote to `file` still runs.
+#[cfg(unix)]
+fn runs(dir: &Path, file: &str) -> bool {
+    std::fs::read_to_string(dir.join(file)).is_ok_and(|pid| running(&pid))
+}
+#[cfg(unix)]
+fn running(pid: &str) -> bool {
+    std::process::Command::new("kill")
+        .args(["-0", pid.trim()])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .unwrap()
+        .success()
+}
+#[cfg(unix)]
+struct Recording {
+    dir: FakeAdb,
+    capture: Arc<logstudio_core::capture::Capture>,
+}
+/// A capture through a fake adb that recorded some rows.
+#[cfg(unix)]
+fn recording() -> Recording {
+    use logstudio_core::capture::{link::Platform, store::Store, Capture, Options};
+    let (dir, adb) = fake_adb();
+    let slot = Store::new(dir.path().join("captures"))
+        .create(Platform::Android, "Pixel 8")
+        .unwrap();
+    let options = Options {
+        poll: Duration::from_millis(50),
+        ..Options::default()
+    };
+    let capture = Capture::start(Arc::new(adb), "SER1", slot, options).unwrap();
+    wait("rows", || capture.rows() >= 5);
+    Recording { dir, capture }
+}
+#[cfg(unix)]
+impl Recording {
+    fn hang(&self) {
+        std::fs::write(self.dir.path().join("hang"), "").unwrap();
+    }
+    fn answer(&self) {
+        std::fs::remove_file(self.dir.path().join("hang")).unwrap();
+        std::fs::remove_file(self.dir.path().join("hung")).unwrap();
+    }
+    fn hung(&self) {
+        // The process ID is written whole once its line is.
+        let file = self.dir.path().join("hung");
+        wait("a hung adb", || {
+            std::fs::read_to_string(&file).is_ok_and(|pid| pid.ends_with('\n'))
+        });
+    }
+}
+#[cfg(unix)]
+#[test]
+fn a_hung_adb_holds_neither_the_waiting_state_nor_a_stop() {
+    use logstudio_core::capture::Phase;
+    let r = recording();
+    r.hang();
+    let at = Instant::now();
+    while r.capture.phase() == Phase::Recording && at.elapsed() < Duration::from_secs(40) {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let took = at.elapsed();
+    println!("waiting shown: {took:?}");
+    assert_eq!(r.capture.phase(), Phase::Waiting);
+    assert!(
+        took < Duration::from_secs(3),
+        "waiting shown after {took:?}"
+    );
+    r.hung();
+    at_once("stop", || r.capture.stop());
+    assert_eq!(r.capture.phase(), Phase::Stopped);
+    // Only the hung command ended; adb's server belongs to every tool.
+    assert!(!runs(r.dir.path(), "hung"));
+    assert!(runs(r.dir.path(), "server"));
+    // Waiting for the device again, as it does between polls.
+    r.answer();
+    r.capture.resume().unwrap();
+    let rows = r.capture.rows();
+    wait("rows again", || r.capture.rows() > rows);
+    r.hang();
+    r.hung();
+    at_once("second stop", || r.capture.stop());
+    assert_eq!(r.capture.phase(), Phase::Stopped);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_hung_adb_does_not_hold_closing_its_log() {
+    use logstudio_core::{capture::Phase, Engine};
+    let r = recording();
+    let engine = Arc::new(Engine::default());
+    let id = engine.begin_open();
+    engine.open_capture(id, r.capture.clone()).unwrap();
+    r.hang();
+    r.hung();
+    at_once("close", || engine.close());
+    assert_eq!(r.capture.phase(), Phase::Stopped);
+    assert!(runs(r.dir.path(), "server"));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_hung_adb_does_not_hold_a_stop_or_close_of_a_capture_recording_on() {
+    use logstudio_core::capture::Phase;
+    for close in [false, true] {
+        let r = recording();
+        r.capture.stop();
+        let rows = r.capture.rows();
+        r.hang();
+        let c = r.capture.clone();
+        let resuming = std::thread::spawn(move || c.resume());
+        r.hung();
+        if close {
+            at_once("close while recording on", || r.capture.close());
+        } else {
+            at_once("stop while recording on", || r.capture.stop());
+        }
+        assert!(resuming.join().unwrap().is_err());
+        assert_eq!(r.capture.phase(), Phase::Stopped);
+        assert!(!runs(r.dir.path(), "hung"));
+        assert_eq!(r.capture.rows(), rows);
+        assert!(r.capture.breaks().is_empty());
+        r.answer();
+        // Stopped, it records on once adb answers; closed, it does not.
+        assert_eq!(r.capture.resume().is_ok(), !close);
+        if !close {
+            wait("rows again", || r.capture.rows() > rows);
+            assert_eq!(r.capture.breaks().len(), 1);
+            r.capture.stop();
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_fake_adb_leaves_no_server_behind() {
+    use logstudio_core::capture::link::Link;
+    let (dir, adb) = fake_adb();
+    adb.devices().unwrap();
+    let server = std::fs::read_to_string(dir.path().join("server")).unwrap();
+    assert!(running(&server));
+    drop(dir);
+    wait("its server to end", || !running(&server));
 }
