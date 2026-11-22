@@ -709,7 +709,14 @@ impl Engine {
             }
         }
     }
-    pub fn request(&self, v: Value) -> io::Result<Value> {
+    pub fn request(&self, mut v: Value) -> io::Result<Value> {
+        // A query's filter has bounds of its own (`Filter::new`), by condition
+        // and field, and may be far larger than any other request.
+        let filters = if v["action"] == "query" {
+            v.get_mut("filters").map(Value::take)
+        } else {
+            None
+        };
         if serde_json::to_vec(&v)?.len() > 16384 {
             return Err(error("Request budget exceeded"));
         }
@@ -744,7 +751,7 @@ impl Engine {
             .as_u64()
             .ok_or_else(|| error("Missing query ID"))?;
         if action == "query" {
-            let f: Filters = serde_json::from_value(v["filters"].clone())?;
+            let f: Filters = serde_json::from_value(filters.unwrap_or_default())?;
             let q = d.query(pane, id, Filter::new(f)?)?;
             return Ok(json!({"datasetId":d.id,"queryId":id,"query":q.json()}));
         }

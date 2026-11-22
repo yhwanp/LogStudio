@@ -71,6 +71,16 @@ impl Default for Condition {
 }
 /// Conditions a filter may list, besides its own fields.
 pub const MAX_CONDITIONS: usize = 32;
+/// Bytes a field may have. The page counts UTF-16 units, of at most three
+/// bytes each: 1,000 in a field or the search, a third more once a list
+/// becomes a pattern, 4,000 in a tag saved as a list, and 64 in a time.
+const VALUE_BYTES: usize = 4000;
+const TAG_BYTES: usize = 12_000;
+const TIME_BYTES: usize = 192;
+/// A filter over a bound, which is named.
+fn over_budget(name: &str) -> io::Error {
+    error(format!("Filter budget exceeded: {name}"))
+}
 /// A filter shows the rows that match one of its showing conditions (every
 /// row when it has none) and none of its hiding conditions. The fields from
 /// `levels` to `tid` are one showing condition and `exclude_tags` one hiding
@@ -184,16 +194,23 @@ pub struct Cond {
 impl Cond {
     /// Checks a condition's budget before any of it is parsed.
     fn budget(c: &Condition) -> io::Result<()> {
-        if c.tag.len() > 4000
-            || c.time_from.len() > 64
-            || c.time_to.len() > 64
-            || [&c.pid, &c.tid, &c.ecu, &c.apid, &c.ctid]
-                .iter()
-                .any(|v| v.len() > 1000)
-            || c.message.len() > 4000
-            || c.levels.len() > 8
-        {
-            return Err(error("Filter budget exceeded"));
+        if c.levels.len() > LEVELS.len() {
+            return Err(error("Invalid filter"));
+        }
+        for (text, bytes, name) in [
+            (&c.tag, TAG_BYTES, "tag"),
+            (&c.pid, VALUE_BYTES, "PID"),
+            (&c.tid, VALUE_BYTES, "TID"),
+            (&c.ecu, VALUE_BYTES, "ECU"),
+            (&c.apid, VALUE_BYTES, "APID"),
+            (&c.ctid, VALUE_BYTES, "CTID"),
+            (&c.message, VALUE_BYTES, "message"),
+            (&c.time_from, TIME_BYTES, "time"),
+            (&c.time_to, TIME_BYTES, "time"),
+        ] {
+            if text.len() > bytes {
+                return Err(over_budget(name));
+            }
         }
         Ok(())
     }
@@ -657,8 +674,11 @@ impl Filter {
                 .chain(&include)
                 .chain(&exclude)
         };
-        if fields.query.len() > 4000 || include.len() + exclude.len() > MAX_CONDITIONS {
-            return Err(error("Filter budget exceeded"));
+        if fields.query.len() > VALUE_BYTES {
+            return Err(over_budget("query"));
+        }
+        if include.len() + exclude.len() > MAX_CONDITIONS {
+            return Err(over_budget("conditions"));
         }
         for c in all() {
             Cond::budget(c)?;

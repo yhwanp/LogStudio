@@ -103,7 +103,7 @@ fn message_conditions_take_a_normal_form_and_report_bad_patterns() {
         .unwrap();
     assert_eq!(
         Filter::new(long).err().unwrap().to_string(),
-        "Filter budget exceeded"
+        "Filter budget exceeded: message"
     );
     // A string with a line break matches no message.
     assert!(!shown(

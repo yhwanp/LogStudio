@@ -103,11 +103,19 @@ def run(ctx):
         app.wait_count(2571)
         s = st()
         check('a message hides the rows whose message contains it, ignoring case', s['chips'] == ['제외', '메시지: “frame RENDERED”×'], s)
+        app.enter('searchInput', 'Network connected')
+        app.wait(lambda: st()['searchCount'] == '429건', what='429 search results')
         app.click('messageRegex')
         app.enter('messageFilter', 'Frame (rendered')
         app.wait(lambda: st()['messageError'] is not None, what='pattern error')
         time.sleep(.3)
         s = st()
+        total = js("return document.getElementById('largeTotal').textContent;")
+        check('the search keeps its results too, and says the condition is not applied',
+              s['searchCount'] == '429건' and '입력한 조건 미적용' in total and js("return document.querySelectorAll('#largeRows .log-row').length;") > 0, {'state': s, 'total': total})
+        app.capture('02b-search-kept-over-pattern-error')
+        app.enter('searchInput', '')
+        app.wait(lambda: app.hidden('largeSearchPane'), what='search closed')
         check('a pattern the engine rejects is explained by the field; the last conditions stay applied',
               s['messageError'].startswith('메시지 정규식을 확인해 주세요') and s['invalid'] == 'true' and s['regex'] is True and s['banner'] is None
               and s['pending'] == '입력한 조건 미적용 · 이전 조건 결과' and s['count'] == '로그 · 결과 2,571건' and s['chips'] == ['제외', '메시지: “frame RENDERED”×'], s)

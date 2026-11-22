@@ -28,6 +28,18 @@ def ui(root: Path):
     return out
 
 
+def long_messages(root: Path):
+    """long-messages.log: a row that stays, then 31 rows whose messages have
+    over 1,000 characters, of Korean, quotes and backslashes, and emoji, each
+    starting with its own number."""
+    texts = ['긴 합성 메시지 ', '\\"path\\" ', '한🙂']
+    out = ['06-18 19:24:00.000  1000 1001 I StayTag             : this row stays']
+    for i in range(31):
+        out.append(f'06-18 19:24:{i + 1:02d}.000  1000 1001 I LongTag             : {i:02d} {texts[i % 3] * 400}')
+    (root / 'long-messages.log').write_text('\n'.join(out) + '\n', encoding='utf-8')
+    return out
+
+
 def days(root: Path):
     """days.log: one row every 30 minutes from 06-18 00:00 to 06-19 23:30."""
     out = []

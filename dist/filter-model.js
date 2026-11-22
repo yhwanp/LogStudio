@@ -74,11 +74,21 @@ export function upgradeCondition(c) {
 // the tag, PID, TID, DLT ID, time and message criteria a row must all match.
 // `enabled` is the page's own switch. A condition without criteria is skipped.
 export const MAX_CONDITIONS = 32;
+// Text bounds in UTF-16 units, as input fields count them; the core's bounds
+// in bytes leave room for any text of theirs.
 const TEXT = 1000, TAG_TEXT = 4000;
+// A text cut to `n` units, whole characters only.
+export const clip = (text, n=TEXT) => text.slice(0, n).replace(/[\uD800-\uDBFF]$/, '');
 // The engine's error for a condition's pattern names its field; only the
 // engine knows the grammar.
 const PATTERN_ERROR = /^Invalid or unsupported (tag|PID|TID|ECU|APID|CTID|message) pattern: /;
 export const patternField = text => PATTERN_ERROR.exec(String(text ?? ''))?.[1]?.replace(/^[A-Z]+$/, name => name.toLowerCase()) ?? null;
+// The engine's error for a filter over its bounds names the bound.
+const SIZE_ERROR = /^(?:Filter budget exceeded(?:: (tag|PID|TID|ECU|APID|CTID|message|time|query|conditions))?|Request budget exceeded)$/;
+export const oversizedField = text => SIZE_ERROR.exec(String(text ?? ''))?.[1] ?? null;
+// Whether an error refuses the filter itself, so that the query before it
+// stays.
+export const refusesFilter = text => patternField(text) !== null || SIZE_ERROR.test(String(text ?? ''));
 const noValues = () => Object.fromEntries(REGEX_FIELDS.flatMap(key => [[key, ''], [regexKey(key), false]]));
 export const emptyCondition = () => ({levels:[...LEVELS], ...noValues(), timeFrom:'', timeTo:'', enabled:true});
 // A condition without `levels` has every level.
@@ -90,9 +100,8 @@ export function readCondition(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const c = emptyCondition();
   if (Array.isArray(value.levels)) c.levels = LEVELS.filter(level => value.levels.includes(level));
-  // A list saved before patterns grows when it becomes one, within the core's
-  // bound for a tag.
-  for (const key of [...REGEX_FIELDS, 'timeFrom', 'timeTo']) if (typeof value[key] === 'string') c[key] = value[key].slice(0, key === 'tag' ? TAG_TEXT : TEXT);
+  // A list saved before patterns grows when it becomes one.
+  for (const key of [...REGEX_FIELDS, 'timeFrom', 'timeTo']) if (typeof value[key] === 'string') c[key] = clip(value[key], key === 'tag' ? TAG_TEXT : TEXT);
   for (const key of REGEX_FIELDS) c[regexKey(key)] = value[regexKey(key)] === true;
   c.enabled = value.enabled !== false;
   return c;

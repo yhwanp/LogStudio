@@ -1,7 +1,7 @@
 import {handleLogPaste, isEditableTarget, FILE_PASTE_FALLBACK} from './clipboard.js';
 import {mountPasteConfirm, createPasteFlow, replacesLog, describeClosing} from './paste-confirm.js';
 import {makeDemo} from './demo.js';
-import {LEVELS, REGEX_FIELDS, regexKey, validateFilters, isTimeBound, isEmptyTimeRange, numberError, commaHint, patternField, patternOfList, conditionFault, emptyCondition, isEmptyCondition, normalizeFilters, coreFilters, withoutConditions, conditionsWithoutRows, MAX_CONDITIONS} from './filter-model.js';
+import {LEVELS, REGEX_FIELDS, regexKey, validateFilters, isTimeBound, isEmptyTimeRange, numberError, commaHint, patternField, refusesFilter, clip, patternOfList, conditionFault, emptyCondition, isEmptyCondition, normalizeFilters, coreFilters, withoutConditions, conditionsWithoutRows, MAX_CONDITIONS} from './filter-model.js';
 import {mountFilterEditor} from './filter-editor.js';
 import {mountLogLayout, widestLine} from './layout.js';
 import {createContinuousViewport, ROW_HEIGHT} from './continuous-view.js';
@@ -708,11 +708,12 @@ export function mountLargeLogView(native, {transport, tips=null, help=null, docu
     // A pattern only the engine can check: the upper logs keep the last
     // conditions it accepted. The editor shows why while it edits a condition
     // with that pattern; otherwise the banner does.
-    const patternOf=value=>patternField(value)?value:'';
-    const pattern=upper.rejected||patternOf(!upper.closed&&upper.error)||patternOf(!lower.closed&&lower.error),patternKey=patternField(pattern);
-    const editing=activeCondition(),inField=!!pattern&&editorOpen()&&(upper.rejected?badPattern(editing):!!editing?.[patternKey]&&editing[regexKey(patternKey)]===true);
+    // A filter over the engine's bounds is always told in the banner.
+    const refusalOf=value=>refusesFilter(value)?value:'';
+    const refused=upper.rejected||refusalOf(!upper.closed&&upper.error)||refusalOf(!lower.closed&&lower.error)||!lower.closed&&lower.rejected||'',patternKey=patternField(refused);
+    const editing=activeCondition(),inField=!!patternKey&&editorOpen()&&(upper.rejected?badPattern(editing):!!editing?.[patternKey]&&editing[regexKey(patternKey)]===true);
     // A pattern is explained once typing pauses, not at its first "(".
-    const patternMessage=inField&&!patternHeld?describeLogError(pattern,shownFormat):'';
+    const patternMessage=inField&&!patternHeld?describeLogError(refused,shownFormat):'';
     for(const f of fields){
       const message=f.key===patternKey?patternMessage:f.key==='pid'?pidMessage:f.key==='tid'?tidMessage:'';
       // Unchanged text stays, so an alert is not spoken again at every render.
@@ -728,14 +729,14 @@ export function mountLargeLogView(native, {transport, tips=null, help=null, docu
     const followMessage=!upper.closed&&upper.followError?describeFollowError(upper.followError):'';
     // The capture bar only says a capture stopped; the bar here says why.
     const captureMessage=!upper.closed&&upper.capture?.state==='failed'?upper.capture.error:'';
-    const raw=inputError||(fieldMessage&&!editorOpen()?fieldMessage:'')||(pattern&&!inField?describeLogError(pattern,shownFormat):'')||(regexError||patternOf(lowerError)?'':lowerError)||(!upper.closed&&!patternOf(upper.error)&&upper.error)||followMessage||captureMessage||'';
+    const raw=inputError||(fieldMessage&&!editorOpen()?fieldMessage:'')||(refused&&!inField?describeLogError(refused,shownFormat):'')||(regexError||refusalOf(lowerError)?'':lowerError)||(!upper.closed&&!refusalOf(upper.error)&&upper.error)||followMessage||captureMessage||'';
     const message=describeLogError(raw);ui.largeError.textContent=message;ui.largeError.hidden=!message;ui.errorBar.hidden=!message;
     // A changed file is one action away from being read again with its work.
     ui.errorReopen.hidden=!(SOURCE_CHANGES.has(raw)&&canReopen(upper));
   }
   function renderLogs(state){
     extras?.selected('logs',state.datasetId,state.selectedLine);
-    // The engine rejected the pattern that would have switched the filter on,
+    // The engine rejected the filter that would have been switched on,
     // and kept the query without conditions: the filter is still off.
     if(state.rejected&&!filtersOff&&!logs.filters().include.length){filtersOff=true;upperFingerprint=JSON.stringify(coreFilters(logs.filters()));closeNote();renderFilterSummary();}
     // CLI sources can already be indexing before the event listener attaches.
@@ -772,7 +773,7 @@ export function mountLargeLogView(native, {transport, tips=null, help=null, docu
     if(hasFile!==shownFile){shownFile=hasFile;if(!hasFile)void devices?.loadLeftovers();}
     table(state,'logs',logs,false);detail(state,logs);errors();markSelections();resolveMarks(state);
     // Cards and chips say when the engine finds no row for a condition, and
-    // chips show the conditions kept when it rejects a message pattern.
+    // chips show the conditions kept when it rejects a filter.
     const marks=rowless(state),seen=JSON.stringify([[...marks.include],[...marks.exclude],marks.following,state.rejected]);
     if(seen!==rowlessShown){rowlessShown=seen;if(chipPress)chipsStale=true;else renderFilterSummary();}
     if(hasFile&&state.count){tips?.offer('help');tips?.offer('moved');}
@@ -1179,7 +1180,7 @@ export function mountLargeLogView(native, {transport, tips=null, help=null, docu
     const values=Object.fromEntries(entry.dlt?named.map(([key,,value])=>[key,value]):named.slice(0,1).map(([key,,value])=>[key,value]));
     // One group per field, separated, so the menu reads by field.
     const groups=[named.length?[['이 행으로 조건 추가…',()=>addShowing(values,{edit:true}),`${entry.dlt?'이 행의 ECU·APID·CTID':'이 행의 태그'}로 조건을 만들고 편집창을 엽니다`]]:[],named.flatMap(([key,label,value])=>[...(entry.dlt?[]:[[`${label} '${quote(value)}' 보기 조건 추가`,()=>addShowing({[key]:value}),note]]),[`${label} '${quote(value)}' 제외`,()=>addExcluded({[key]:value}),'이 조건에 맞는 줄을 숨깁니다']])];
-    const whole=String(entry.message??''),part=picked.trim(),chosen=part&&whole.includes(part),message=(chosen?part:whole.trim()).slice(0,1000),field=entry.dlt?'페이로드':'메시지';
+    const whole=String(entry.message??''),part=picked.trim(),chosen=part&&whole.includes(part),message=clip(chosen?part:whole.trim()),field=entry.dlt?'페이로드':'메시지';
     // Without text selected in the row the whole message is taken; the
     // tooltip says how to take part of it.
     const partly=chosen?'':' · 일부만 쓰려면 텍스트를 선택해 우클릭';
@@ -1611,7 +1612,7 @@ export function mountLargeLogView(native, {transport, tips=null, help=null, docu
   ui.allLevels.addEventListener('click',()=>{selectedLevels=new Set(LEVELS);updateLevels();apply();});ui.errorLevels.addEventListener('click',()=>{selectedLevels=new Set(active.list==='exclude'?['V','D']:['W','E','F','A']);updateLevels();apply();});ui.resetFilters.addEventListener('click',reset);
   // Typing waits for a pause before it applies; a field other than the
   // search keeps the search results' place.
-  function edited(input){if(disposed)return;if(input===ui.searchInput)lowerTab='search';if(debounce!==null)window.clearTimeout(debounce);inputPending=!!ui.searchInput.value||input!==ui.searchInput;inputPaused=false;validationError=false;search.invalidateQuery({place:input===ui.searchInput?null:placeOf('large',search)});renderSearch(search.getState());debounce=window.setTimeout(apply,150);}
+  function edited(input){if(disposed)return;if(input===ui.searchInput)lowerTab='search';if(debounce!==null)window.clearTimeout(debounce);inputPending=!!ui.searchInput.value||input!==ui.searchInput;inputPaused=false;validationError=false;const place=placeOf('large',search);search.invalidateQuery({place:input===ui.searchInput?null:place,kept:{place}});renderSearch(search.getState());debounce=window.setTimeout(apply,150);}
   // A field's switch reads it as a pattern; without a value it only waits for
   // one. Alt+R switches the field being typed in.
   for(const f of fields){
@@ -1678,7 +1679,7 @@ export function mountLargeLogView(native, {transport, tips=null, help=null, docu
   // The filters to keep: what is typed when valid, else what was applied.
   function currentFilters(){const typed=readFilters();try{validateFilters(typed);return logs.getState().rejected?keptFilters(typed):typed;}catch{return logs.getState().rejected?keptFilters(typed):appliedFilters??defaultFilters();}}
   // The typed search and options with the conditions the upper logs kept
-  // when the engine rejected a message pattern.
+  // when the engine rejected a filter.
   function keptFilters(typed=readFilters()){const kept=keptConditions();return {...typed,include:kept.include,exclude:kept.exclude,includeRaw:kept.includeRaw};}
   // A page's own filter always has a showing condition; only a filter
   // switched off goes to the engine without one.

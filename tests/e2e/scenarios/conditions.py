@@ -2,8 +2,9 @@
 joined by 또는, a hiding condition with levels, items and their switches, the
 chips reading as the filter, the editor floating over the log, the row menu
 adding a condition, a search inside the conditions, a saved filter of several
-conditions after a restart, conditions no row of the log matches, and DLT
-conditions (ui.log, ui-copy.log, vehicle.dlt; counts from a row-at-a-time
+conditions after a restart, conditions no row of the log matches, DLT
+conditions and as many long messages hidden as the page takes (ui.log,
+ui-copy.log, vehicle.dlt, long-messages.log; counts from a row-at-a-time
 oracle)."""
 import json
 import re
@@ -309,3 +310,24 @@ def run(ctx):
         app.wait_count(len(shown))
         check('DLT conditions: an APID or Error and Fatal, without an ECU', True, {'count': app.count(), 'expected': len(shown)})
         app.capture('05-dlt-conditions')
+
+    # Every long message hidden: 31 hiding conditions of 1,000 characters each.
+    fixtures.long_messages(ctx.fixtures)
+    with ctx.launch() as app:
+        js = app.js
+        app.open_fixture('long-messages.log')
+        app.wait_count(32)
+        for hidden in range(31):
+            js("""const r=document.querySelector('#logsRows [data-line-number="'+arguments[0]+'"]'),b=r.getBoundingClientRect();
+            r.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:b.left+300,clientY:b.top+10,button:2}));
+            [...document.querySelectorAll('#rowMenu [role=menuitem]')].find(e=>/^메시지 .* 제외$/.test(e.textContent)).click();return true;""", str(hidden + 2))
+            if hidden == 6:
+                time.sleep(.5)
+                app.capture('07-seven-long-messages-hidden')
+            app.wait_count(31 - hidden)
+            # The count shows before the rows are drawn.
+            app.wait(lambda: app.row_exists(1) and not app.row_exists(hidden + 2), what='rows without the hidden one')
+        shown = js("return [...document.querySelectorAll('#logsRows .log-row')].map(r=>r.dataset.lineNumber);")
+        check('31 long messages of Korean, quotes and emoji hidden leave the row that stays, without an error',
+              shown == ['1'] and app.hidden('errorBar') and app.hidden('logsPending'), {'rows': shown, 'error': app.text('largeError')})
+        app.capture('08-every-long-message-hidden')
