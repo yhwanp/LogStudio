@@ -4,7 +4,13 @@
 //! connection runs commands the page chose.
 use super::gate::Stamp;
 use serde_json::{json, Value};
-use std::{io, sync::Arc};
+use std::{
+    io,
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
+    },
+};
 
 /// The device left the connection, or the connection names none such.
 pub const GONE: &str = "Device not found; connect it and retry";
@@ -141,6 +147,36 @@ pub fn parse_devices(text: &str) -> Vec<Device> {
         })
         .collect()
 }
+/// Ends a capture's running request early: while the capture is stopped,
+/// and while a stop waits for a resume, which the resume cannot undo.
+#[derive(Default)]
+pub struct Cancel {
+    stopped: AtomicBool,
+    waiting: AtomicUsize,
+}
+impl Cancel {
+    pub fn is_set(&self) -> bool {
+        self.waiting.load(Ordering::Acquire) > 0 || self.stopped.load(Ordering::Acquire)
+    }
+    pub(super) fn set_stopped(&self, on: bool) {
+        self.stopped.store(on, Ordering::Release);
+    }
+    #[cfg(test)]
+    pub(super) fn is_waited(&self) -> bool {
+        self.waiting.load(Ordering::Acquire) > 0
+    }
+    /// Keeps this set while a stop waits, until the returned guard drops.
+    pub(super) fn wait(&self) -> Waiting<'_> {
+        self.waiting.fetch_add(1, Ordering::AcqRel);
+        Waiting(self)
+    }
+}
+pub(super) struct Waiting<'a>(&'a Cancel);
+impl Drop for Waiting<'_> {
+    fn drop(&mut self) {
+        self.0.waiting.fetch_sub(1, Ordering::AcqRel);
+    }
+}
 /// Ends a stream's blocked read from another thread.
 pub type Closer = Arc<dyn Fn() + Send + Sync>;
 /// A running log stream's output: `logcat`'s, or an iPhone's log as text.
@@ -157,6 +193,11 @@ pub trait Link: Send + Sync {
     /// logged while the device was away are lost.
     fn replays(&self) -> bool {
         true
+    }
+    /// This connection with requests that end early once `cancel` is set;
+    /// None when its requests end soon anyway.
+    fn cancelled_by(&self, _cancel: Arc<Cancel>) -> Option<Arc<dyn Link>> {
+        None
     }
     fn devices(&self) -> io::Result<Vec<Device>>;
     /// `/proc/sys/kernel/random/boot_id`, which changes when it boots.

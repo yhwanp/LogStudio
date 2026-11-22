@@ -22,7 +22,7 @@ pub mod store;
 
 use crate::source::{error, MAX_FILE, MAX_LINE};
 use gate::Gate;
-use link::{Closer, Device, Link, Platform, Stream};
+use link::{Cancel, Closer, Device, Link, Platform, Stream};
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
@@ -31,7 +31,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc, Condvar, Mutex,
+        mpsc, Arc, Condvar, Mutex,
     },
     thread::{self, JoinHandle},
     time::Duration,
@@ -185,7 +185,8 @@ pub struct Capture {
     options: Options,
     status: Mutex<Status>,
     wake: Condvar,
-    stop: AtomicBool,
+    /// Set as the capture stops; also ends the link's running request.
+    stop: Arc<Cancel>,
     closer: Mutex<Option<Closer>>,
     /// The thread that records. Held while a capture stops or resumes, so
     /// that the two do not cross.
@@ -206,6 +207,9 @@ pub struct Capture {
 fn now() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
+/// How long listing the devices may take after one left, before the
+/// capture shows that it waits without saying why.
+const LISTING: Duration = Duration::from_millis(500);
 /// Bytes of written rows kept to continue after them.
 const TAIL: usize = 64 * 1024;
 /// Appends whole rows; the bytes after the last LF wait for the rest.
@@ -294,6 +298,8 @@ impl Capture {
         slot: Slot,
         options: Options,
     ) -> io::Result<Arc<Self>> {
+        let stop = Arc::new(Cancel::default());
+        let link = link.cancelled_by(stop.clone()).unwrap_or(link);
         let c = match connect(&*link, serial, &slot.path, &options) {
             Ok(c) => c,
             Err(e) => {
@@ -337,7 +343,7 @@ impl Capture {
                 undone: None,
             }),
             wake: Condvar::new(),
-            stop: AtomicBool::new(false),
+            stop,
             closer: Mutex::new(None),
             worker: Mutex::new(None),
             writer: Some(Mutex::new(writer)),
@@ -395,7 +401,7 @@ impl Capture {
                 undone: None,
             }),
             wake: Condvar::new(),
-            stop: AtomicBool::new(true),
+            stop: Arc::default(),
             closer: Mutex::new(None),
             worker: Mutex::new(None),
             writer: None,
@@ -689,8 +695,11 @@ impl Capture {
     /// it keeps them.
     pub fn stop(&self) {
         let worker = {
+            // A resume holds the lock while it looks for the device, which
+            // this ends.
+            let _waiting = self.stop.wait();
             let mut worker = self.worker.lock().unwrap();
-            self.stop.store(true, Ordering::Release);
+            self.stop.set_stopped(true);
             let closer = self.closer.lock().unwrap().take();
             if let Some(close) = closer {
                 close();
@@ -709,7 +718,8 @@ impl Capture {
     /// capture started now would: after the rows the device holds now, with
     /// a break where it stopped. A device not ready yet is waited for. A row
     /// that stopping cut short ends where it was cut. A capture left by an
-    /// earlier run, one closing, or one not stopped, fails.
+    /// earlier run, one closing, or one not stopped, fails, as does a resume
+    /// stopped before it found the device.
     pub fn resume(self: &Arc<Self>) -> io::Result<()> {
         {
             let mut worker = self.worker.lock().unwrap();
@@ -741,19 +751,21 @@ impl Capture {
                 s.fresh = true;
                 s.kept.take()
             };
+            self.stop.set_stopped(false);
             // A device found ready records at once; the page then never
             // shows the capture waiting for it.
-            let back = match self.attempt(&mut HashMap::new()) {
-                Ok(back) => back,
-                Err(e) => {
+            let found = self.attempt(&mut HashMap::new());
+            let back = match found {
+                Ok(back) if !self.stopping() => back,
+                found => {
+                    self.stop.set_stopped(true);
                     self.status.lock().unwrap().kept = kept;
-                    return Err(e);
+                    return Err(found.err().unwrap_or_else(|| error(NOT_STOPPED)));
                 }
             };
             if let Some(k) = kept {
                 k.remove();
             }
-            self.stop.store(false, Ordering::Release);
             let stream = match back {
                 Some(back) => Some(self.returned(back)),
                 None => {
@@ -768,7 +780,7 @@ impl Capture {
         Ok(())
     }
     fn stopping(&self) -> bool {
-        self.stop.load(Ordering::Acquire)
+        self.stop.is_set()
     }
     fn notify(&self) {
         let observer = self.observer.lock().unwrap().clone();
@@ -795,13 +807,7 @@ impl Capture {
                 if self.stopping() {
                     break Ok(());
                 }
-                // The reason the device left, such as a simulator shut
-                // down, shows as soon as the capture waits, not a poll later.
-                let lost = now();
-                let devices = self.link.devices().unwrap_or_default();
-                self.away(lost);
-                self.explain(&devices);
-                self.notify();
+                self.leave();
             }
             match self.reconnect() {
                 Ok(Some(back)) => stream = Some(self.returned(back)),
@@ -826,6 +832,26 @@ impl Capture {
                 }
             }
         }
+        self.notify();
+    }
+    /// The stream ended: the capture waits. The reason the device left, such
+    /// as a simulator shut down, shows at once, not a poll later; when the
+    /// listing hangs, the capture is shown waiting without it.
+    fn leave(&self) {
+        let lost = now();
+        thread::scope(|scope| {
+            let (answer, listing) = mpsc::channel();
+            scope.spawn(move || {
+                let _ = answer.send(self.link.devices().unwrap_or_default());
+            });
+            let listed = listing.recv_timeout(LISTING);
+            self.away(lost);
+            let devices = listed.unwrap_or_else(|_| {
+                self.notify();
+                listing.recv().unwrap_or_default()
+            });
+            self.explain(&devices);
+        });
         self.notify();
     }
     /// The device left, or a resume did not find it: the capture waits.
@@ -1113,4 +1139,93 @@ fn copy_start(
     }
     out.sync_all()?;
     std::fs::rename(partial, to)
+}
+
+#[cfg(test)]
+mod tests {
+    //! Moments of stopping and recording on that only a held lock can reach.
+    use super::*;
+    use std::time::Instant;
+
+    /// Devices that listing hangs on, once told to, until it is cancelled.
+    #[derive(Clone)]
+    struct Hanging {
+        world: Arc<fake::FakeLink>,
+        hang: Arc<AtomicBool>,
+        cancel: Arc<Cancel>,
+    }
+    impl Link for Hanging {
+        fn cancelled_by(&self, cancel: Arc<Cancel>) -> Option<Arc<dyn Link>> {
+            Some(Arc::new(Self {
+                cancel,
+                ..self.clone()
+            }))
+        }
+        fn devices(&self) -> io::Result<Vec<Device>> {
+            let until = Instant::now() + Duration::from_secs(10);
+            while self.hang.load(Ordering::Acquire) && Instant::now() < until {
+                if self.cancel.is_set() {
+                    return Err(io::ErrorKind::Interrupted.into());
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+            self.world.devices()
+        }
+        fn boot_id(&self, serial: &str) -> io::Result<String> {
+            self.world.boot_id(serial)
+        }
+        fn identity(&self, serial: &str) -> io::Result<String> {
+            self.world.identity(serial)
+        }
+        fn recent(&self, serial: &str, count: usize) -> io::Result<Vec<u8>> {
+            self.world.recent(serial, count)
+        }
+        fn stream(&self, serial: &str, since: Option<gate::Stamp>) -> io::Result<Box<dyn Stream>> {
+            self.world.stream(serial, since)
+        }
+    }
+    #[test]
+    fn a_stop_before_a_resume_looks_for_the_device_is_not_lost() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store::Store::new(dir.path());
+        let link = Hanging {
+            world: fake::FakeLink::new(),
+            hang: Arc::default(),
+            cancel: Arc::default(),
+        };
+        link.world.add("SER1", "Pixel_8", "SER1");
+        let slot = store.create(Platform::Android, "Pixel 8").unwrap();
+        let c = Capture::start(Arc::new(link.clone()), "SER1", slot, Options::default()).unwrap();
+        c.stop();
+        link.hang.store(true, Ordering::Release);
+        // The resume holds the worker's lock and waits for the writer's.
+        let writer = c.writer();
+        let resume = thread::spawn({
+            let c = c.clone();
+            move || c.resume()
+        });
+        while c.worker.try_lock().is_ok() {
+            thread::sleep(Duration::from_millis(1));
+        }
+        // The stop comes before adb is asked anything.
+        let stop = thread::spawn({
+            let c = c.clone();
+            move || c.stop()
+        });
+        while !c.stop.is_waited() {
+            thread::sleep(Duration::from_millis(1));
+        }
+        drop(writer);
+        let at = Instant::now();
+        stop.join().unwrap();
+        let took = at.elapsed();
+        assert!(took < Duration::from_secs(3), "stop took {took:?}");
+        assert!(resume.join().unwrap().is_err());
+        assert_eq!(c.phase(), Phase::Stopped);
+        // A resume after it records on.
+        link.hang.store(false, Ordering::Release);
+        c.resume().unwrap();
+        assert_eq!(c.phase(), Phase::Recording);
+        c.stop();
+    }
 }

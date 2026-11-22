@@ -3,8 +3,8 @@
 use super::{
     adb::command,
     gate::Stamp,
-    link::{self, parse_devices, Closer, Device, Link, Stream},
-    process::{run, Output},
+    link::{self, parse_devices, Cancel, Closer, Device, Link, Stream},
+    process::{run_unless, Output},
 };
 use crate::source::error;
 use std::{
@@ -23,6 +23,8 @@ const OUTPUT_LIMIT: u64 = 16 * 1024 * 1024;
 const MISMATCH: &str = "doesn't match this client";
 pub struct AdbCli {
     adb: PathBuf,
+    /// Ends a running adb command once set. The adb server goes on.
+    cancel: Arc<Cancel>,
 }
 /// Why adb failed for a device, by what it printed.
 fn device_error(stderr: &str) -> io::Error {
@@ -41,12 +43,15 @@ fn device_error(stderr: &str) -> io::Error {
 }
 impl AdbCli {
     pub fn new(adb: &Path) -> Self {
-        Self { adb: adb.into() }
+        Self {
+            adb: adb.into(),
+            cancel: Arc::default(),
+        }
     }
     fn run(&self, args: &[&str], timeout: Duration) -> io::Result<Output> {
         let mut c = command(&self.adb);
         c.args(args);
-        run(c, timeout, OUTPUT_LIMIT)
+        run_unless(c, timeout, OUTPUT_LIMIT, &self.cancel)
     }
     /// Starts the adb server, when it is not running, before a stream does:
     /// a server that a stream's command started would keep the stream's
@@ -100,6 +105,10 @@ impl Drop for CliStream {
     }
 }
 impl Link for AdbCli {
+    fn cancelled_by(&self, cancel: Arc<Cancel>) -> Option<Arc<dyn Link>> {
+        let adb = self.adb.clone();
+        Some(Arc::new(Self { adb, cancel }))
+    }
     fn devices(&self) -> io::Result<Vec<Device>> {
         self.serve()?;
         let out = self.run(&["devices", "-l"], QUERY_TIMEOUT)?;
