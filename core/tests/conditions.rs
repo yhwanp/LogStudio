@@ -227,9 +227,9 @@ fn conditions_are_skipped_normalized_bounded_and_compared() {
         json!({"include":[{"levels":["Q"]}]}),
         json!({"exclude":[{"timeFrom":"25:00"}]}),
         json!({"include":[{"pid":"1,2"}]}),
-        json!({"include":[{"apid":"x".repeat(1001)}]}),
+        json!({"include":[{"apid":"x".repeat(4001)}]}),
         json!({"include":[{"apid":"(","apidRegex":true}]}),
-        json!({"include":[{"tag":"x".repeat(4001)}]}),
+        json!({"include":[{"tag":"x".repeat(12_001)}]}),
     ] {
         assert!(Filter::new(f(bad.clone())).is_err(), "{bad}");
     }

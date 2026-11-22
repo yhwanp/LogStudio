@@ -187,8 +187,8 @@ fn values_are_normalized_bounded_and_validated() {
         Filter::new(show(pid("12a"))).is_ok(),
         "a pattern may be any text"
     );
-    assert!(Filter::new(filters("", "", &"1".repeat(1001), "")).is_err());
-    assert!(Filter::new(filters("", "", &"1".repeat(1000), "")).is_ok());
+    assert!(Filter::new(filters("", "", &"1".repeat(4001), "")).is_err());
+    assert!(Filter::new(filters("", "", &"1".repeat(4000), "")).is_ok());
     assert!(serde_json::from_value::<Filters>(serde_json::json!({"pid": ["1"]})).is_err());
 }
 

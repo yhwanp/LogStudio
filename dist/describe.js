@@ -1,5 +1,5 @@
 // User-facing text for progress, native errors and active filters.
-import {LEVELS, isActiveCondition, patternField} from './filter-model.js';
+import {LEVELS, MAX_CONDITIONS, isActiveCondition, patternField, oversizedField} from './filter-model.js';
 import {BUSY} from './controller.js';
 
 import {levelNames} from './columns.js';
@@ -20,7 +20,7 @@ export function describeLargeProgress(state, {omitDuplicateFileCount=false, comp
   const failed = state.queryStatus === 'error' || state.status === 'error' || !!state.error;
   // A followed file's query has read every row so far and waits for more.
   const waiting = !!state.following && !!state.caughtUp && state.queryStatus === 'running' && !failed;
-  const query = inputPending ? (state.inputInvalid ? '입력한 조건 미적용' : state.inputPaused ? compactSearch ? '검색 취소됨 · 부분 결과' : '검색 취소됨 · 새 조건 미적용 · Enter로 검색' : compactSearch ? '검색 중' : '새 조건 적용 대기') : exact ? '검색 완료' : stopped ? '검색 취소됨 · 부분 결과' : failed ? '검색 미완료 · 부분 결과' : waiting ? '따라가는 중' : compactSearch ? '검색 중' : '검색 중 · 부분 결과';
+  const query = inputPending ? (state.inputInvalid ? '입력한 조건 미적용' : state.inputPaused ? compactSearch ? '검색 취소됨 · 부분 결과' : '검색 취소됨 · 새 조건 미적용 · Enter로 검색' : compactSearch ? '검색 중' : '새 조건 적용 대기') : compactSearch && state.rejected ? '입력한 조건 미적용' : exact ? '검색 완료' : stopped ? '검색 취소됨 · 부분 결과' : failed ? '검색 미완료 · 부분 결과' : waiting ? '따라가는 중' : compactSearch ? '검색 중' : '검색 중 · 부분 결과';
   // With results, the continuous viewport reports the visible range itself.
   const range = inputPending ? (compactSearch ? '' : '새 조건 적용 대기') : state.count ? '' : exact ? '검색 결과가 없습니다' : stopped ? '검색이 취소되었습니다' : failed ? '검색을 완료하지 못했습니다' : waiting ? '아직 결과가 없습니다 · 따라가는 중' : '검색 중…';
   const progress = state.size > 0 ? ` ${Math.min(99, Math.max(0, Math.floor(state.indexedBytes / state.size * 100)))}%` : '';
@@ -110,6 +110,7 @@ export function describeLogError(value, format='text') {
     'Physical row is not indexed yet; retry':'이 행을 아직 읽지 못했습니다. 잠시 후 다시 시도해 주세요.',
     'Physical row is not indexed':'이 행을 아직 읽지 못했습니다. 잠시 후 다시 시도해 주세요.',
     'Filter budget exceeded':'필터 조건이 너무 많거나 깁니다. 조건을 줄여 주세요.',
+    'Request budget exceeded':'작업이 너무 커서 완료하지 못했습니다.',
     'Invalid filter':'필터 조건이 올바르지 않습니다. 조건을 확인해 주세요.',
     'PID and TID must contain ASCII digits':'PID와 TID는 숫자로 입력해 주세요.',
     'Supported options: FILE, --large-log FILE':'실행 인자를 확인해 주세요. 로그 파일 경로나 --large-log 파일 경로만 받습니다.',
@@ -185,6 +186,11 @@ export function describeLogError(value, format='text') {
     const name = {tag:format === 'dlt' ? '모든 ID' : '태그', message:format === 'dlt' ? '페이로드' : '메시지'}[field] ?? field.toUpperCase();
     return `${name} 정규식을 확인해 주세요: ${text.slice(text.indexOf(': ') + 2)}`;
   }
+  // A filter over the engine's bounds keeps the one before it.
+  const over = oversizedField(text);
+  if (over === 'query') return '검색어가 너무 깁니다. 줄여 주세요.';
+  if (over === 'conditions') return `조건은 ${MAX_CONDITIONS}개까지 쓸 수 있습니다.`;
+  if (over) return `조건의 ${{tag:format === 'dlt' ? '모든 ID' : '태그', message:format === 'dlt' ? '페이로드' : '메시지', time:'시간'}[over] ?? over} 입력이 너무 깁니다. 줄여 주세요.`;
   // Engine text without a translation keeps its detail behind Korean context.
   return messages[text] ?? (text && !/[가-힣]/.test(text) ? `작업을 완료하지 못했습니다. (${text})` : text);
 }

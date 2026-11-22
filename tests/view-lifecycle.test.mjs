@@ -2049,6 +2049,62 @@ test('a message condition comes from a row, the field or its 정규식 switch, a
   assert.equal(field.value,'');assert.equal(r.get('messageRegex').checked,false);
 });
 
+test('a filter the engine finds too long keeps the last conditions and says which field in the banner',async t=>{
+  const long='길다'.repeat(600)+'🙂',rows=[{lineNumber:1,kind:'parsed',raw:`06-18 19:24:00.000  100 200 I App: ${long}`,date:'06-18',time:'19:24:00.000',pid:'100',tid:'200',level:'I',tag:'App',message:long}];
+  let refuse=false;
+  const query=async()=>{if(refuse)throw 'Filter budget exceeded: message';return {status:'complete',count:1,complete:true};};
+  const r=await rig({rows,query});t.after(()=>r.controller.close());
+  const upper=()=>r.calls.filter(c=>c.args.request?.action==='query'&&c.args.request.pane==='logs').at(-1).args.request.filters;
+  const chips=()=>chipNodes(r.get('activeFilters')).map(chip=>chip.textContent);
+  const field=r.get('messageFilter'),enter=async value=>{field.value=value;await field.dispatch('input');await field.dispatch('keydown',{key:'Enter',preventDefault(){}});await settle();};
+  await enter('짧음');
+  const kept=r.controller.logs.getState().queryId;
+  refuse=true;
+  const row=r.get('logsRows').children.find(n=>n.dataset.lineNumber==='1');
+  await row.dispatch('contextmenu',{clientX:10,clientY:20,preventDefault(){}});await settle();
+  await r.get('rowMenu').children.find(n=>/^메시지 .* 제외$/.test(n.textContent)).dispatch('click');await settle();
+  assert.equal(upper().exclude[0].message,long.slice(0,1000));
+  assert.equal(r.controller.logs.getState().queryId,kept);assert.equal(r.controller.logs.getState().count,1);
+  assert.equal(r.get('largeError').hidden,false);assert.equal(r.get('largeError').textContent,'조건의 메시지 입력이 너무 깁니다. 줄여 주세요.');
+  assert.equal(r.get('logsPending').textContent,'입력한 조건 미적용 · 이전 조건 결과');
+  assert.deepEqual(chips(),['메시지: “짧음”×']);
+  // It is no pattern: no field and no condition is marked for one.
+  assert.equal(r.get('messageFilterError').hidden,true);assert.notEqual(field.attributes['aria-invalid'],'true');
+  assert.ok(itemSummaries(r).every(text=>!/확인 필요/.test(text)));
+  refuse=false;
+  await r.get('toast').children.find(n=>n.textContent==='실행 취소').dispatch('click');await settle();
+  assert.equal(r.get('largeError').hidden,true);assert.equal(r.get('logsPending').hidden,true);
+  assert.deepEqual(upper().exclude,[]);assert.deepEqual(chips(),['메시지: “짧음”×']);
+});
+
+test('a search the engine finds too long keeps its results and says so',async t=>{
+  const query=async b=>{if(b.filters.query==='긴 검색')throw 'Filter budget exceeded: query';return {status:'complete',count:1,complete:true};};
+  const r=await rig({rows:[{lineNumber:1,kind:'raw',raw:'짧음'}],query});t.after(()=>r.controller.close());
+  const shown=()=>r.get('largeRows').children.filter(n=>n.dataset.lineNumber).length;
+  await searchFor(r,'짧음');
+  const kept=r.controller.getState().queryId;
+  assert.equal(r.get('largeCount').textContent,'1건');assert.equal(shown(),1);
+  await searchFor(r,'긴 검색');
+  assert.equal(r.get('largeError').textContent,'검색어가 너무 깁니다. 줄여 주세요.');assert.equal(r.get('logsPending').hidden,true);
+  assert.equal(r.controller.getState().queryId,kept);
+  assert.equal(r.get('largeCount').textContent,'1건');assert.equal(shown(),1);assert.equal(r.get('largeTotal').textContent,' · 입력한 조건 미적용');
+  await searchFor(r,'짧음');
+  assert.equal(r.get('largeError').hidden,true);assert.equal(r.get('largeCount').textContent,'1건');assert.doesNotMatch(r.get('largeTotal').textContent,/미적용/);
+  // A search cleared before has no results to go back to.
+  await searchFor(r,'');for(const [id,task] of [...r.timers])if(task.ms===150){r.timers.delete(id);task.fn();}
+  await searchFor(r,'긴 검색');
+  assert.equal(r.get('largeError').textContent,'검색어가 너무 깁니다. 줄여 주세요.');assert.equal(r.get('largeCount').textContent,'0건');assert.equal(shown(),0);
+});
+
+test('a long message hidden from the row menu ends at a whole character',async t=>{
+  const message='가'.repeat(999)+'🙂 끝',rows=[{lineNumber:1,kind:'parsed',raw:message,date:'06-18',time:'19:24:00.000',pid:'100',tid:'200',level:'I',tag:'App',message}];
+  const r=await rig({rows});t.after(()=>r.controller.close());
+  const row=r.get('logsRows').children.find(n=>n.dataset.lineNumber==='1');
+  await row.dispatch('contextmenu',{clientX:10,clientY:20,preventDefault(){}});await settle();
+  await r.get('rowMenu').children.find(n=>/^메시지 .* 제외$/.test(n.textContent)).dispatch('click');await settle();
+  assert.equal(r.calls.filter(c=>c.args.request?.action==='query'&&c.args.request.pane==='logs').at(-1).args.request.filters.exclude[0].message,'가'.repeat(999));
+});
+
 // The lower region: bookmarks and search results with the upper logs.
 const lineDetail=b=>({text:`line ${b.lineNumber}`,startByte:0,nextByte:8,totalBytes:8,complete:true,highlights:[]});
 async function markRows(r,lines){

@@ -1,6 +1,6 @@
 // One pane's query lifecycle against the native engine: status polling,
 // pushed progress, paging, location and detail reads. No DOM access.
-import {validateFilters, defaultFilters, normalizeFilters, coreFilters, patternField} from './filter-model.js';
+import {validateFilters, defaultFilters, normalizeFilters, coreFilters, refusesFilter} from './filter-model.js';
 
 export const PAGE_SIZE = 200;
 export const DETAIL_BYTES = 65536;
@@ -54,6 +54,9 @@ export function createLargeLogController({transport, onChange=()=>{}, onLocate=(
   let disposed = false, timer = null, retryTimer = null, statusBusy = false, serial = 0, detailSerial = 0, navigationSerial = 0;
   let progressTimer = null, pendingProgress = null, statusRevision = 0, queryInvalidated = false;
   let detailHistory = [], locationBusy = false, locationNearest = false, locationKeepsAnchor = false, locationRestore = null, searchMarks = null, relocation = null;
+  // The query a refused filter goes back to: the engine still has it, though
+  // typing has discarded it here or the engine was busy.
+  let replaced = null;
   let querySequence = 0, desiredFilters = defaultFilters();
   const requests = new Map();
   const initialState = {datasetId:null, name:'', files:[], size:0, status:'connecting', indexedBytes:0, total:0, summary:null, complete:false, textComplete:false, summaryComplete:false, analysis:null, queryComplete:false, fieldFiltering:false, queryId:0, queryAccepted:false, queryStatus:'idle', caughtUp:false, count:0, scannedBytes:0, viewportStart:0, scrollRevision:0, scrollAlign:'start', scrollOffset:0, selectedIndex:null, locationPending:null, detail:null, selectedLine:null, error:'', closed:false, followable:false, following:false, grown:false, followError:'', tailRevision:0, format:'text', ios:false, conditions:null, checkedConditions:null, capture:null, rejected:'', anchor:null, anchorOffset:null};
@@ -228,9 +231,12 @@ export function createLargeLogController({transport, onChange=()=>{}, onLocate=(
   // its replacement. A reserved identity rejects late replies/events and clears
   // viewport caches once; repeated pending keystrokes do no extra clearing.
   // A `place` stays for the replacement (`setFilters`): its selected row and
-  // detail stay meanwhile.
-  function invalidateQuery({place=null}={}){
+  // detail stay meanwhile. With `kept` the list goes back to the query, at
+  // `kept.place`, if the engine refuses the replacement.
+  function invalidateQuery({place=null,kept=null}={}){
+    if(!kept)replaced=null;
     if(disposed||queryInvalidated||!state.datasetId)return;
+    if(kept&&state.queryAccepted)replaced={...queryState(),place:kept.place};
     const old=capture(),running=state.queryStatus==='running';
     queryInvalidated=true;clearProgress();serial++;detailSerial++;navigationSerial++;
     cancelRequests();if(timer!==null)clearTimer(timer);if(retryTimer!==null)clearTimer(retryTimer);timer=retryTimer=null;
@@ -244,6 +250,7 @@ export function createLargeLogController({transport, onChange=()=>{}, onLocate=(
     // may reject it harmlessly. It never publishes discarded state.
     if(running&&old.queryId)void request('cancel',old).catch(()=>{});
   }
+  function queryState(){return {queryId:state.queryId, queryAccepted:state.queryAccepted, queryStatus:state.queryStatus, count:state.count, queryComplete:state.queryComplete, caughtUp:state.caughtUp, scannedBytes:state.scannedBytes, fieldFiltering:state.fieldFiltering, conditions:state.conditions, checkedConditions:state.checkedConditions, filters:desiredFilters, place:null};}
   // Starts a query for `filters`. Without a `place` the list starts at its
   // first result with nothing selected; with one (see `startRelocation`) it
   // returns there once the scan reaches that row.
@@ -253,7 +260,8 @@ export function createLargeLogController({transport, onChange=()=>{}, onLocate=(
     if (retryTimer !== null) clearTimer(retryTimer); retryTimer = null;
     validateFilters(filters); queryInvalidated=false;
     // The engine checks a filter before it replaces the pane's query.
-    const previous = {queryId:state.queryId, queryAccepted:state.queryAccepted, queryStatus:state.queryStatus, count:state.count, queryComplete:state.queryComplete, caughtUp:state.caughtUp, scannedBytes:state.scannedBytes, fieldFiltering:state.fieldFiltering, conditions:state.conditions, checkedConditions:state.checkedConditions, filters:desiredFilters};
+    const previous = state.queryAccepted ? queryState() : replaced;
+    replaced = null;
     desiredFilters = normalizeFilters(filters);
     if (state.datasetId === null) {endRelocation(); return;}
     cancelRequests(['query', 'range', 'viewport', 'locate']);
@@ -281,11 +289,13 @@ export function createLargeLogController({transport, onChange=()=>{}, onLocate=(
     } catch (error) {
       if (sequence !== serial) return;
       if (error?.userMessage === BUSY && retryAttempt < MAX_QUERY_RETRIES) {
+        replaced = previous;
         retryTimer = setTimer(() => {retryTimer = null; if (!disposed && sequence === serial) void setFilters(desiredFilters, {retryAttempt:retryAttempt + 1, place:relocating()});}, Math.min(2000, 250 * 2 ** retryAttempt));
-      } else if (patternField(error?.userMessage) && previous.queryAccepted) {
-        // A pattern the engine rejects leaves its previous query, and
-        // the list returns to it and its place; `rejected` says why.
-        const place = relocating(), {filters:kept, ...query} = previous;
+      } else if (refusesFilter(error?.userMessage) && previous) {
+        // A pattern the engine rejects, or a filter over its bounds, leaves
+        // its previous query, and the list returns to it and its place;
+        // `rejected` says why.
+        const {filters:kept, place:from, ...query} = previous, place = relocating() ?? from;
         endRelocation(); desiredFilters = kept; Object.assign(state, query);
         state.rejected = safeMessage(error.userMessage); state.scrollRevision++; state.viewportStart = 0;
         if (place) {startRelocation(place); state.locationPending = place.line;} else state.locationPending = null;
@@ -549,10 +559,10 @@ export function createLargeLogController({transport, onChange=()=>{}, onLocate=(
     cancelRequests();serial++;detailSerial++;navigationSerial++;
     if(timer!==null)clearTimer(timer);if(retryTimer!==null)clearTimer(retryTimer);
     timer=retryTimer=null;statusBusy=false;disposed=false;
-    querySequence=0;statusRevision=0;detailHistory=[];searchMarks=null;desiredFilters=normalizeFilters(filters);
+    querySequence=0;statusRevision=0;replaced=null;detailHistory=[];searchMarks=null;desiredFilters=normalizeFilters(filters);
     Object.assign(state,initialState,{detail:null});emit();return poll({waitForQuery:true});
   }
-  // The filters of the pane's query: after a rejected pattern, the ones kept.
+  // The filters of the pane's query: after a rejected one, the ones kept.
   const filters = () => normalizeFilters(desiredFilters);
   return {reopen,start:poll, setFollow, acceptProgress, invalidateQuery, setFilters, filters, fetchRows, readRows, readLines, readLineText, readRecordText, seek, rememberPosition, selectLine, locateLine, restorePosition, relocating, stopRelocating, setSearchMarks, reportError:fail, loadDetail, previousDetail, closeDetail, cancel, close, getState:snapshot};
 }
