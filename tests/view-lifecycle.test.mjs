@@ -39,13 +39,14 @@ class Element {
   dispatch(key,event={}){return Promise.all((this.listeners[key]??[]).map(fn=>fn(event)));}
   querySelector(selector){const line=selector.match(/^\[data-line-number="(\d+)"\]$/)?.[1];return this.children.find(child=>line?child.dataset.lineNumber===line:child.className===selector.slice(1));}
 }
-async function rig({rows=[],detail=null,query=null,page=null,startupError=null,files=null,total=6,format=null,exported=null,extrasList=null,capture=null}={}){
+async function rig({rows=[],detail=null,query=null,page=null,startupError=null,files=null,total=6,format=null,exported=null,extrasList=null,capture=null,answers={}}={}){
   let ownerDocument;const elements=new Map(),get=id=>{if(!elements.has(id))elements.set(id,Object.assign(new Element(),{ownerDocument}));return elements.get(id);};
   // Column layout has its own mounted tests; this rig exercises view lifecycle.
   delete get('workspace').style;
   new Element().append(get('searchInput'));new Element().append(get('caseSensitive'));get('includeRaw').checked=true;
   const handlers=new Map(),document={getElementById:get,createElement:tag=>new Element(tag),createDocumentFragment:()=>Object.assign(new Element(),{fragment:true}),querySelector:()=>new Element(),addEventListener:(key,fn)=>handlers.set(key,fn)};
   ownerDocument=document;
+  Object.assign(get('captureDialog'),{showModal(){this.open=true;},close(){this.open=false;}});
   document.createElement=tag=>Object.assign(new Element(tag),{ownerDocument:document});
   for(const element of elements.values())element.ownerDocument=document;
   const timers=new Map();let timerId=0;
@@ -60,6 +61,7 @@ async function rig({rows=[],detail=null,query=null,page=null,startupError=null,f
     if(action==='export_results')return exported??{rows:3000};
     // Without `extrasList` this is a build without extensions, which refuses every request.
     if(action==='extras'){if(!extrasList)throw 'This build has no extensions';return args.request.action==='list'?extrasList:{};}
+    if(answers[action])return answers[action](args);
     if(action!=='log_request')return {};
     const b=args.request,id={datasetId:dataset};
     if(b.action==='close')return {closed:true};
@@ -1795,6 +1797,32 @@ test('an extras build without settings files shows 확장 with a note and the se
 test('a device capture has no file to read again',async t=>{
   const r=await rig({capture:{state:'recording'}});t.after(()=>r.controller.close());
   assert.equal(await moreState(r,'다시 열기'),undefined);assert.ok(await moreState(r,'파일 닫기'));
+});
+
+test('closing a capture log lists what it left once it closed',async t=>{
+  const r=await rig({capture:{state:'recording',device:'Pixel 8',bytes:4096,rows:32,unsaved:true,breaks:[]}});t.after(()=>r.controller.close());
+  await choose(r,'파일 닫기');await r.get('captureForm').dispatch('submit',{preventDefault(){}});await settle();
+  const closed=r.calls.findIndex(c=>c.args.request?.action==='close');
+  assert.ok(closed>=0&&r.calls.findLastIndex(c=>c.action==='capture_leftovers')>closed);
+});
+
+test('a capture keeps its file when the log to replace it does not open',async t=>{
+  const refuse=error=>async()=>{throw error;};
+  const r=await rig({capture:{state:'recording',device:'Pixel 8',bytes:4096,rows:32,unsaved:true,breaks:[]},answers:{open_text:refuse('Paste failed'),finish_file_paste:refuse('Paste grant expired; paste again')}});t.after(()=>r.controller.close());
+  const marks=()=>r.calls.filter(c=>c.action==='discard_capture').map(c=>c.args);
+  // Each way to open another log asks, is told 저장 안 함, and then fails.
+  const discard=async open=>{const before=marks().length;const opening=open();await settle();await r.get('captureDiscard').dispatch('click');await opening;await settle();return marks().slice(before);};
+  const refused=[{datasetId:1,discard:true},{datasetId:1,discard:false}];
+  const paste=text=>r.handlers.get('paste')({target:new Element(),clipboardData:{types:['text/plain'],files:[],items:[],getData:()=>text},preventDefault(){}});
+  assert.deepEqual(await discard(()=>paste('a\nb\n')),refused,'pasted text');
+  assert.deepEqual(await discard(()=>r.get('loadDemo').dispatch('click')),refused,'the sample log');
+  assert.deepEqual(await discard(()=>r.listener('native-file-paste')({payload:{grant:'native-paste-1'}})),refused,'a copied file');
+  // Dropped files open on their own thread, and say so when refused.
+  const dropped=await discard(()=>r.listener('drop-held')({payload:{token:1,count:1}}));
+  assert.deepEqual(dropped,refused.slice(0,1),'opening');
+  await r.emit({status:'error',error:'Select a regular file; symbolic links are not supported'});await settle();
+  assert.deepEqual(marks().at(-1),{datasetId:1,discard:false},'dropped files');
+  assert.match(r.get('largeError').textContent,/심볼릭 링크/);
 });
 
 test('Cmd/Ctrl+L with no rows says so instead of doing nothing',async t=>{

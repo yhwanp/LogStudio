@@ -1787,7 +1787,7 @@ export function mountLargeLogView(native, {transport, tips=null, help=null, docu
   }
   search.close=close;search.logs=logs;
   // A capture's unsaved rows are asked about before its log closes.
-  async function closeFile(){if(await devices.guard()!=='cancel')void close();}
+  async function closeFile(){if(await devices.guard()==='cancel')return;await close();void devices.loadLeftovers();}
   window.addEventListener('pagehide',()=>{
     saver.flush();pageGone=true;sourceEventSequence++;pickerSequence++;pickerPending=false;pendingSourceId=null;savedInput=null;pendingPastePrefix=null;
     clearDetail();
@@ -1833,10 +1833,11 @@ export function mountLargeLogView(native, {transport, tips=null, help=null, docu
   }
   async function openInput(text,name,size){
     if(pageGone)return;
-    const limit=25*1024**2;
+    // A shown capture keeps its file when the text does not open.
+    const limit=25*1024**2,shown=logs.getState().datasetId,refuse=error=>{devices.keep(shown);inputError=error;errors();};
     // Paste inspection already measured UTF-8 bytes; avoid encoding it twice.
-    if(text.length>limit||(size??new TextEncoder().encode(text).byteLength)>limit){inputError='붙여넣기는 최대 25 MiB입니다. 큰 파일은 파일 선택으로 열어 주세요.';errors();return;}
-    try{await native.core.invoke('open_text',{text,name});}catch(error){inputError=String(error).slice(0,500);errors();}
+    if(text.length>limit||(size??new TextEncoder().encode(text).byteLength)>limit){refuse('붙여넣기는 최대 25 MiB입니다. 큰 파일은 파일 선택으로 열어 주세요.');return;}
+    try{await native.core.invoke('open_text',{text,name});}catch(error){refuse(String(error).slice(0,500));}
   }
   async function openPicker(){
     if(pageGone||await devices.guard()==='cancel')return;
@@ -1863,7 +1864,8 @@ export function mountLargeLogView(native, {transport, tips=null, help=null, docu
     replaces:()=>replacesLog(logs.getState(),pendingSourceId!==null),
     closing:()=>{const state=logs.getState();return describeClosing(work.datasetId===state.datasetId?work.reopenable:null);},
     openText:item=>{void openInput(item.text,'붙여넣은 로그 텍스트',item.size);},
-    report:error=>{inputError=String(error).slice(0,500);errors();},isGone:()=>pageGone,inField:()=>isEditableTarget(document.activeElement)});
+    report:error=>{inputError=String(error).slice(0,500);errors();},isGone:()=>pageGone,inField:()=>isEditableTarget(document.activeElement),
+    keep:id=>devices.keep(id),shown:()=>logs.getState().datasetId});
   window.addEventListener('pagehide',()=>pasteDialog.dismiss());
   void native.event.listen('native-text-prefix',async ({payload})=>{
     if(!Number.isSafeInteger(payload.count)||payload.count<1||payload.count>Math.floor(25*1024**2/3)+1)return;
@@ -1904,7 +1906,8 @@ export function mountLargeLogView(native, {transport, tips=null, help=null, docu
   }).catch(()=>{});
   const sourceEvents=native.event.listen('source-changed',async ({payload})=>{
     if(pageGone)return;ui.dropHint.hidden=true;
-    if(payload.status==='error'){inputError=payload.error;errors();return;}
+    // Dropped files that were refused: a shown capture keeps its file.
+    if(payload.status==='error'){devices.keep(logs.getState().datasetId);inputError=payload.error;errors();return;}
     const id=payload.datasetId;
     if(!Number.isSafeInteger(id)||id<=0)return;
     if(payload.status==='opened'){

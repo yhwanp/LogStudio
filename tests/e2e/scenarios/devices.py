@@ -15,6 +15,10 @@ QA = "window.__TAURI__.core.invoke('qa_devices',{action:arguments[0]});return tr
 # Chooses the app menu's Quit as ⌘Q does; the menu's item IDs land in
 # window.__quit.
 QUIT = "window.__quit=null;window.__TAURI__.core.invoke('qa_quit').then(ids=>{window.__quit=ids;});return true;"
+# Saves as usual, but holds the answer back until window.__saved() is called:
+# the time a person takes in the next file dialog.
+HOLD_SAVE = ("const real=window.__fetch=window.fetch;window.__saved=null;"
+             "window.fetch=(url,...rest)=>{const answer=real(url,...rest);return String(url).endsWith('/save_capture')?answer.then(r=>new Promise(go=>{window.__saved=()=>go(r);})):answer;};return true;")
 STATE = """const bar=document.getElementById('captureBar'),rows=[...document.querySelectorAll('#logsRows .log-row')];return {
   bar:bar.hidden?null:{tone:bar.dataset.tone,text:document.getElementById('captureText').textContent,stop:!document.getElementById('captureStop').hidden,
     stopLabel:document.getElementById('captureStopName').textContent,focus:document.activeElement?.id??null,
@@ -466,6 +470,8 @@ def run(ctx):
         js("document.querySelector('#leftoverList .recent-open').click();return true;")
         s = until(lambda v: v['bar'] and not v['empty'] and v['count'] == '로그 · 전체 30건', 'left file shown')
         check('a left file opens as a capture to save, not to record on', s['bar']['text'] == '남은 기기 로그 · 저장 안 됨' and not s['bar']['stop'], s['bar'])
+        why = js("return document.getElementById('captureState').title")
+        check('its bar says why it was left', re.fullmatch(r'저장하지 않은 부분이 있어 남겨 두었던 기기 로그입니다\([0-9.]+ (B|KiB)\)\.', why) is not None, why)
         app.capture('09-left-file-open')
         app.menu('파일 닫기')
         until(lambda v: v['dialog'], 'asked about the left file')
@@ -473,6 +479,49 @@ def run(ctx):
         s = until(lambda v: v['empty'], 'left file closed')
         time.sleep(.5)
         check('a left file not kept is deleted', st()['leftovers'] == [] and not left.exists(), [p.name for p in captures.glob('*')])
+
+        # Rows that came after the save chosen as the log closes are not
+        # lost: the whole capture stays as a left log, listed at once. The
+        # saved file stays as it was saved.
+        def record():
+            app.click('emptyDevice')
+            menu(lambda v: any(x.startswith('Pixel 8') for x in v), 'device menu to save')
+            js(PICK, 'Pixel 8')
+            until(lambda v: v['bar'] and v['bar']['tone'] == 'live' and '저장 안 됨' in v['bar']['text'], 'recording to save')
+            return next(captures.glob('*.log'))
+        recording = record()
+        js(HOLD_SAVE)
+        app.menu('파일 닫기')
+        until(lambda v: v['dialog'], 'asked to save')
+        app.click('captureSaveAs')
+        app.wait(lambda: js('return !!window.__saved'), what='saved')
+        saved = ctx.saves / recording.name
+        was = saved.read_bytes()
+        app.wait(lambda: recording.stat().st_size > len(was), what='rows after the save')
+        js('window.fetch=window.__fetch;window.__saved();return true;')
+        s = until(lambda v: v['empty'] and v['leftovers'], 'left after the save')
+        kept = recording.read_bytes()
+        check('rows that came after a save as the log closes leave the whole capture as a left log',
+              s['leftovers'] == [recording.name] and len(was) > 0 and kept.startswith(was) and len(kept) > len(was), {'leftovers': s['leftovers'], 'saved': len(was), 'kept': len(kept)})
+        check('the saved file holds the rows up to the save', saved.read_bytes() == was and was.endswith(b'\n'), len(was))
+        said = js("return {toast:document.getElementById('toast').textContent,note:document.querySelector('.leftover-note').textContent}")
+        check('the save and the list say that the whole capture is kept', '그 뒤 들어온 줄이 있으면 저장하지 않은 기기 로그 목록에 전체 로그를 남겨 둡니다.' in said['toast'] and said['note'] == '저장하지 않은 부분이 있어 남겨 둔 로그입니다. 이미 저장한 앞부분도 들어 있을 수 있으며, 열어서 저장하거나 삭제할 수 있습니다.', said)
+        app.capture('09b-left-after-save')
+        for _ in range(2):
+            js("document.querySelector('#leftoverList .leftover-remove').click();return true;")
+        until(lambda v: not v['leftovers'], 'left capture deleted')
+        # A save that holds every row leaves nothing behind.
+        recording = record()
+        app.click('captureStop')
+        until(lambda v: v['bar'] and v['bar']['tone'] == 'stopped', 'stopped to save')
+        rows = recording.read_bytes()
+        app.menu('파일 닫기')
+        until(lambda v: v['dialog'], 'asked to save the stopped one')
+        app.click('captureSaveAs')
+        until(lambda v: v['empty'], 'closed after the save')
+        app.wait(lambda: not recording.exists(), what='saved capture removed')
+        said = js("return document.getElementById('toast').textContent")
+        check('a save of every row lets the capture file go', (ctx.saves / recording.name).read_bytes() == rows and not st()['leftovers'] and '남겨' not in said, {'bytes': len(rows), 'toast': said})
 
         # Another adb version takes the server: the capture stops, the bar
         # says so and the error bar says why, whole.

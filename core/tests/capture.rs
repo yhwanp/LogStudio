@@ -1282,6 +1282,20 @@ fn closing_deletes_a_capture_file_that_holds_nothing_unsaved() {
     let path = c.path().to_path_buf();
     c.close();
     assert!(!path.exists());
+    // A row came after the save: the whole file stays for the next run.
+    let c = s.start("SER1");
+    s.link.log("SER1", &row(2, 0, "two"));
+    wait("bytes", || c.bytes() > 0);
+    c.save(&s._dir.path().join("kept.log"), &never).unwrap();
+    c.discard(false);
+    s.link.log("SER1", &row(3, 0, "three"));
+    written(&c, &[row(2, 0, "two"), row(3, 0, "three")].concat());
+    c.close();
+    let path = c.path().to_path_buf();
+    drop(c);
+    let left: Vec<_> = s.store.leftovers().into_iter().map(|l| l.path).collect();
+    assert_eq!(left, std::slice::from_ref(&path));
+    s.store.remove(&path).unwrap();
     // No row came.
     let c = s.start("SER1");
     let path = c.path().to_path_buf();

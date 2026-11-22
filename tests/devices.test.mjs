@@ -209,6 +209,8 @@ test('the capture bar names each state; breaks name where the device left and ca
   assert.equal(locked.title, '기기 잠금을 풀어 주세요. 준비되면 이어서 기록합니다. 멈춘 동안의 로그는 기록되지 않습니다.');
   assert.equal(describeCapture({...base, state:'stopped', recovered:true}).text, '남은 기기 로그 · 저장 안 됨');
   assert.equal(describeCapture({...base, state:'stopped', recovered:true, unsaved:false}).text, '남은 기기 로그 · 저장함');
+  // Left by an earlier run, or by a log closed in this one; also once saved.
+  for (const unsaved of [true, false]) assert.match(describeCapture({...base, state:'stopped', recovered:true, unsaved}).title, /^저장하지 않은 부분이 있어 남겨 두었던 기기 로그입니다\([^)]+\)\.$/);
   // A failure's reason is a sentence: the bar keeps it to its title.
   const failed = describeCapture({...base, state:'failed', error:'Recording stopped: not enough disk space'});
   assert.equal(failed.text, '기록 중단 · 저장 안 됨 · Pixel 8');
@@ -349,7 +351,9 @@ test('a capture with unsaved rows asks; others close without a question', async 
   answer = r.devices.guard(); await settle(); r.$('captureCancel').fire('click');
   assert.equal(await answer, 'cancel');
   assert.equal(r.calls.some(c => c[0] === 'discard_capture'), false);
-  // 저장 saves first; a cancelled save dialog keeps the log.
+  // 저장 saves first; a cancelled save dialog keeps the log. Rows may still
+  // arrive after the save, so the file is never marked to go: closing
+  // deletes it only when the save holds every row.
   r = rig({state:{capture:unsaved}, answers:{save_capture:{cancelled:true}}});
   answer = r.devices.guard(); await settle(); r.$('captureForm').fire('submit');
   assert.equal(await answer, 'cancel');
@@ -357,8 +361,25 @@ test('a capture with unsaved rows asks; others close without a question', async 
   r = rig({state:{capture:unsaved}, answers:{save_capture:{bytes:4096}}});
   answer = r.devices.guard(); await settle(); r.$('captureForm').fire('submit');
   assert.equal(await answer, 'asked');
-  assert.deepEqual(r.calls.filter(c => c[0].endsWith('_capture')).map(c => c[0]), ['save_capture', 'discard_capture']);
-  assert.match(r.notes.at(-1), /기기 로그\(4\.0 KiB\)를 저장했습니다/);
+  assert.deepEqual(r.calls.filter(c => c[0].endsWith('_capture')), [['save_capture', {datasetId:7}], ['discard_capture', {datasetId:7, discard:false}]]);
+  assert.equal(r.notes.at(-1), '기기 로그(4.0 KiB)를 저장했습니다. 그 뒤 들어온 줄이 있으면 저장하지 않은 기기 로그 목록에 전체 로그를 남겨 둡니다.');
+  // A stopped capture gets no more rows, and one saved in place goes on.
+  r = rig({state:{capture:{...unsaved, state:'stopped'}}, answers:{save_capture:{bytes:4096}}});
+  answer = r.devices.guard(); await settle(); r.$('captureForm').fire('submit');
+  assert.equal(await answer, 'asked');
+  assert.equal(r.notes.at(-1), '기기 로그(4.0 KiB)를 저장했습니다.');
+  r = rig({state:{capture:unsaved}, answers:{save_capture:{bytes:4096}}});
+  assert.equal(await r.devices.save(), true);
+  assert.equal(r.notes.at(-1), '기기 로그(4.0 KiB)를 저장했습니다.');
+});
+
+test('a window that does not close keeps its capture file', async () => {
+  const r = rig({state:{capture:unsaved}, answers:{answer_close:new Error('Could not close the window')}});
+  await settle();
+  void r.listeners['close-held']({payload:{}}); await settle();
+  r.$('captureDiscard').fire('click'); await settle();
+  assert.deepEqual(r.calls.filter(c => ['answer_close', 'discard_capture'].includes(c[0])),
+    [['discard_capture', {datasetId:7, discard:true}], ['answer_close', {close:true}], ['discard_capture', {datasetId:7, discard:false}]]);
 });
 
 test('dropped files and closing the window wait for the answer', async () => {

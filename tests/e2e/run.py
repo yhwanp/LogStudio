@@ -38,6 +38,9 @@ class Context:
         self.results = results
         self.home = Path(tempfile.mkdtemp(prefix=f'logstudio-e2e-{name}-home-'))
         self.fixtures = Path(tempfile.mkdtemp(prefix=f'logstudio-e2e-{name}-fixtures-'))
+        # Device logs saved land here: the native panel cannot be driven.
+        self.saves = self.home / 'saves'
+        self.saves.mkdir()
         self.shots = out / name
         self.shots.mkdir(parents=True, exist_ok=True)
         self.data = self.home / 'Library/Application Support/dev.logstudio.desktop'
