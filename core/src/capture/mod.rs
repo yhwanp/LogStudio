@@ -138,6 +138,21 @@ struct Status {
     /// The rows a cut of the stopped capture set aside, to be restored
     /// until the capture records again, closes or lets them go.
     kept: Option<Kept>,
+    /// The cut that is being undone: the rows it set aside are back, and
+    /// its file waits until they opened.
+    undone: Option<Undone>,
+}
+/// The cut a restore undoes, to be made again if the rows do not open.
+struct Undone {
+    slot: Slot,
+    file: File,
+    cleared: Option<i64>,
+}
+impl Undone {
+    fn remove(self) {
+        drop(self.file);
+        let _ = self.slot.remove();
+    }
 }
 /// What a capture had before a cut made while stopped.
 struct Kept {
@@ -151,6 +166,12 @@ struct Kept {
     cleared: Option<i64>,
     saved: u64,
     discard: bool,
+}
+impl Kept {
+    fn remove(self) {
+        drop(self.file);
+        let _ = self.slot.remove();
+    }
 }
 type Observer = Arc<dyn Fn(&Capture) + Send + Sync>;
 pub struct Capture {
@@ -313,6 +334,7 @@ impl Capture {
                 reason: String::new(),
                 shutdown: false,
                 kept: None,
+                undone: None,
             }),
             wake: Condvar::new(),
             stop: AtomicBool::new(false),
@@ -370,6 +392,7 @@ impl Capture {
                 reason: String::new(),
                 shutdown: false,
                 kept: None,
+                undone: None,
             }),
             wake: Condvar::new(),
             stop: AtomicBool::new(true),
@@ -440,6 +463,7 @@ impl Capture {
             let mut s = self.status.lock().unwrap();
             let file = std::mem::replace(&mut w.file, cut.file);
             let slot = std::mem::replace(&mut s.slot, cut.slot);
+            let undone = s.undone.take();
             // Keep the first set of cleared rows: clearing again while still
             // stopped and empty discards only the empty file.
             let old = if s.phase == Phase::Stopped && s.kept.is_none() {
@@ -455,7 +479,9 @@ impl Capture {
                     saved: self.saved.load(Ordering::Acquire),
                     discard: self.discard.load(Ordering::Acquire),
                 });
-                None
+                // Cleared again while a restore was pending: that restore's
+                // empty file is deleted.
+                undone.map(|u| u.slot)
             } else {
                 Some(slot)
             };
@@ -480,38 +506,74 @@ impl Capture {
     }
     /// Takes back the rows a cut of the stopped capture set aside: the
     /// capture writes their file again, with their breaks, app starts and
-    /// saves. Returns the file the cut made, to be deleted once nothing
-    /// reads it. Fails once the capture recorded again or let them go.
-    pub fn restore(&self) -> io::Result<Slot> {
-        let writer = self
-            .writer
-            .as_ref()
-            .ok_or_else(|| error(NOTHING_TO_RESTORE))?;
-        let empty = {
+    /// saves. Returns that file to be opened; call `confirm_restore` once it
+    /// opens, or `revert_restore` if it does not. Until then `forget_kept`
+    /// cannot delete the rows, and closing the capture keeps unsaved ones.
+    /// Fails while a restore is pending, and once the capture recorded again
+    /// or let the rows go.
+    pub fn restore(&self) -> io::Result<PathBuf> {
+        let nothing = || error(NOTHING_TO_RESTORE);
+        let mut w = self.writer.as_ref().ok_or_else(nothing)?.lock().unwrap();
+        let mut s = self.status.lock().unwrap();
+        if s.phase != Phase::Stopped || s.bytes > 0 || s.undone.is_some() {
+            return Err(nothing());
+        }
+        let k = s.kept.take().ok_or_else(nothing)?;
+        let file = std::mem::replace(&mut w.file, k.file);
+        let slot = std::mem::replace(&mut s.slot, k.slot);
+        let cleared = std::mem::replace(&mut s.cleared, k.cleared);
+        s.undone = Some(Undone {
+            slot,
+            file,
+            cleared,
+        });
+        (w.tail, w.bytes, w.rows) = (k.tail, k.bytes, k.rows);
+        (s.bytes, s.rows) = (k.bytes, k.rows);
+        (s.breaks, s.launches) = (k.breaks, k.launches);
+        // A save of the cut file must not count for these rows.
+        s.cuts += 1;
+        self.saved.store(k.saved, Ordering::Release);
+        self.discard.store(k.discard, Ordering::Release);
+        Ok(s.slot.path.clone())
+    }
+    /// The rows a restore took back opened. Returns the file the undone cut
+    /// made, to be deleted once nothing reads it.
+    pub fn confirm_restore(&self) -> Option<Slot> {
+        let undone = self.status.lock().unwrap().undone.take();
+        undone.map(|u| u.slot)
+    }
+    /// The rows a restore took back did not open: they are set aside again,
+    /// as after the cut.
+    pub fn revert_restore(&self) {
+        let Some(writer) = &self.writer else { return };
+        {
             let mut w = writer.lock().unwrap();
             let mut s = self.status.lock().unwrap();
-            if s.phase != Phase::Stopped || s.bytes > 0 {
-                return Err(error(NOTHING_TO_RESTORE));
-            }
-            let k = s.kept.take().ok_or_else(|| error(NOTHING_TO_RESTORE))?;
-            (w.file, w.tail, w.bytes, w.rows) = (k.file, k.tail, k.bytes, k.rows);
-            (s.bytes, s.rows) = (k.bytes, k.rows);
-            (s.breaks, s.launches, s.cleared) = (k.breaks, k.launches, k.cleared);
-            // A save of the cut file must not count for these rows.
+            let Some(u) = s.undone.take() else { return };
+            s.kept = Some(Kept {
+                file: std::mem::replace(&mut w.file, u.file),
+                slot: std::mem::replace(&mut s.slot, u.slot),
+                cleared: std::mem::replace(&mut s.cleared, u.cleared),
+                tail: std::mem::take(&mut w.tail),
+                bytes: w.bytes,
+                rows: w.rows,
+                breaks: std::mem::take(&mut s.breaks),
+                launches: std::mem::take(&mut s.launches),
+                saved: self.saved.swap(0, Ordering::AcqRel),
+                discard: false,
+            });
+            self.discard.store(false, Ordering::Release);
+            (w.bytes, w.rows) = (0, 0);
+            (s.bytes, s.rows) = (0, 0);
             s.cuts += 1;
-            self.saved.store(k.saved, Ordering::Release);
-            self.discard.store(k.discard, Ordering::Release);
-            std::mem::replace(&mut s.slot, k.slot)
-        };
+        }
         self.notify();
-        Ok(empty)
     }
     /// Deletes the rows a cut of the stopped capture set aside.
     pub fn forget_kept(&self) {
         let kept = self.status.lock().unwrap().kept.take();
         if let Some(k) = kept {
-            drop(k.file);
-            let _ = k.slot.remove();
+            k.remove();
         }
     }
     /// Marks the file to be deleted when the capture closes, or kept.
@@ -525,6 +587,10 @@ impl Capture {
         self.closed.store(true, Ordering::Release);
         self.stop();
         self.forget_kept();
+        let undone = self.status.lock().unwrap().undone.take();
+        if let Some(u) = undone {
+            u.remove();
+        }
         if self.discard.load(Ordering::Acquire) || !self.unsaved() {
             let _ = self.status.lock().unwrap().slot.remove();
         }
@@ -665,12 +731,28 @@ impl Capture {
                     (s.bytes, s.rows) = (w.bytes, w.rows);
                 }
             }
-            self.status.lock().unwrap().fresh = true;
+            // Recording on keeps the clear: from here its rows cannot be
+            // taken back. One being undone is not recorded over.
+            let kept = {
+                let mut s = self.status.lock().unwrap();
+                if s.undone.is_some() {
+                    return Err(error(NOT_STOPPED));
+                }
+                s.fresh = true;
+                s.kept.take()
+            };
             // A device found ready records at once; the page then never
             // shows the capture waiting for it.
-            let back = self.attempt(&mut HashMap::new())?;
-            // Recording on keeps the clear.
-            self.forget_kept();
+            let back = match self.attempt(&mut HashMap::new()) {
+                Ok(back) => back,
+                Err(e) => {
+                    self.status.lock().unwrap().kept = kept;
+                    return Err(e);
+                }
+            };
+            if let Some(k) = kept {
+                k.remove();
+            }
             self.stop.store(false, Ordering::Release);
             let stream = match back {
                 Some(back) => Some(self.returned(back)),

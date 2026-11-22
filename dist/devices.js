@@ -406,6 +406,8 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
   // `quiet` turns the bar's live status back on after a clear's notice has
   // been read; `cleared` is that notice, closed when recording resumes.
   let quiet = null, cleared = '';
+  // Lets the rows of a stopped clear go once they cannot be taken back.
+  let expiry = null;
 
   // The device menu opens at once and fills in when adb and the devices
   // answer. `shownMenu` is the version of the menu this module last showed:
@@ -663,14 +665,17 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
       starting.set(job.datasetId, job);
     }
     if (stopped && Number.isSafeInteger(status.datasetId)) {
-      window.setTimeout(() => void invoke('forget_cleared_capture', {datasetId:status.datasetId}).catch(() => {}), RESTORABLE_MS);
+      expiry = window.setTimeout(() => void invoke('forget_cleared_capture', {datasetId:status.datasetId}).catch(() => {}), RESTORABLE_MS);
     }
   }
   // Takes back the rows a clear of the stopped capture set aside, as the
-  // log they were, with its bookmarks and places.
+  // log they were, with its bookmarks and places. They may take long to
+  // open, so their time no longer runs out; if they do not open, they go
+  // when the capture records on or its log closes.
   async function restore(was, before) {
     const {datasetId, capture} = logs.getState();
     if (clearing || toggling || capture?.state !== 'stopped' || isGone() || !Number.isSafeInteger(datasetId)) return;
+    window.clearTimeout(expiry);
     await replace(datasetId, 'restore_capture', restoredNotice(was), null, before);
   }
   // Replaces the shown log by a clear or its undoing, keeping the input for

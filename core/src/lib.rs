@@ -36,6 +36,15 @@ struct State {
     /// aside, to take them back.
     clears: Vec<(u64, u64, Option<Cut>)>,
 }
+impl State {
+    /// Whether dataset `id` is shown or kept for rollback.
+    fn keeps(&self, id: u64) -> bool {
+        [&self.active, &self.previous]
+            .into_iter()
+            .flatten()
+            .any(|d| d.id == id)
+    }
+}
 /// Receives every engine notification.
 type Observer = Arc<dyn Fn(Value) + Send + Sync>;
 pub struct Engine {
@@ -185,29 +194,51 @@ impl Engine {
         Ok(self.status_of(&d, 0))
     }
     fn finish(self: &Arc<Self>, id: u64, valid: bool) {
+        if let Some((discarded, followed)) = self.switch(id, valid) {
+            self.settle(id, valid, discarded, followed);
+        }
+    }
+    /// Keeps dataset `id` that opened, or shows the one before again when it
+    /// did not. Returns the dataset to close, and whether the one shown
+    /// again was followed; None when another log opens by now.
+    fn switch(&self, id: u64, valid: bool) -> Option<(Option<Arc<Dataset>>, bool)> {
+        let mut s = self.state.lock().unwrap();
+        if s.active.as_ref().is_none_or(|d| d.id != id) {
+            return None;
+        }
+        let followed = std::mem::take(&mut s.followed_previous);
+        Some(if valid {
+            (s.previous.take(), false)
+        } else {
+            let failed = s.active.take();
+            s.active = s.previous.take();
+            (failed, followed)
+        })
+    }
+    /// Completes `switch`. Another log may open in between.
+    fn settle(
+        self: &Arc<Self>,
+        id: u64,
+        valid: bool,
+        discarded: Option<Arc<Dataset>>,
+        followed: bool,
+    ) {
         let mut cleared = None;
-        let (discarded, followed) = {
-            let mut s = self.state.lock().unwrap();
-            if s.active.as_ref().is_none_or(|d| d.id != id) {
-                return;
-            }
-            let followed = std::mem::take(&mut s.followed_previous);
-            if valid {
-                (s.previous.take(), false)
-            } else {
-                let failed = s.active.take();
-                s.active = s.previous.take();
-                (failed, followed)
-            }
-        };
-        let active = self.state.lock().unwrap().active.clone();
-        if let Some(d) = active {
-            if !valid {
-                self.revive(&d, followed);
-            } else if d.id == id {
+        if valid {
+            // Another log opening by now keeps it for rollback.
+            let opened = {
+                let s = self.state.lock().unwrap();
+                let mut kept = [&s.active, &s.previous].into_iter().flatten();
+                kept.find(|d| d.id == id).cloned()
+            };
+            if let Some(d) = opened {
                 cleared = self.cut(&d);
-                // A capture's rows arrive after its file opened.
-                self.follow_capture(&d);
+                self.follow_opened(&d);
+            }
+        } else {
+            let shown = self.state.lock().unwrap().active.clone();
+            if let Some(d) = shown {
+                self.revive(&d, followed);
             }
         }
         let (message, file) = discarded
@@ -220,6 +251,9 @@ impl Engine {
             .unwrap_or_default();
         if let Some(d) = discarded {
             self.retire(d);
+        }
+        if !valid {
+            self.revert_restore();
         }
         // The rows before a clear go once the log that showed them closed.
         if let Some(slot) = cleared {
@@ -257,6 +291,7 @@ impl Engine {
         }
         if let Some(d) = discarded {
             self.retire(d);
+            self.revert_restore();
             self.emit(json!({"status":"rollback","error":"Opening cancelled","datasetId":id}));
         }
     }
@@ -355,30 +390,54 @@ impl Engine {
         opened
     }
     /// Undoes the last clear of the stopped capture shown as dataset `from`:
-    /// opens the set-aside file as dataset `id`, then switches the capture
-    /// back to it and closes `from`. If the file does not open, the clear
-    /// stays.
+    /// switches the capture back to the set-aside file and opens it as
+    /// dataset `id`, which closes `from`. If the file does not open, the
+    /// capture is cleared again.
     pub fn restore_capture(self: &Arc<Self>, from: u64, id: u64) -> io::Result<Value> {
-        let (capture, path) = match self.shown_capture() {
-            Some((shown, c)) if shown == from && c.phase() == capture::Phase::Stopped => {
-                match c.kept_path() {
-                    Some(path) => (c, path),
-                    None => return Err(error(capture::NOTHING_TO_RESTORE)),
-                }
-            }
-            _ => return Err(error(capture::NOTHING_TO_RESTORE)),
-        };
-        let source = Source::granted(&path)?;
-        {
+        let path = {
+            // Held so that `revert_restore` sees the undoing listed.
             let mut s = self.state.lock().unwrap();
+            let shown = s.active.as_ref().is_some_and(|d| d.id == from);
+            let capture = s
+                .captures
+                .iter()
+                .find(|(d, _)| *d == from && shown)
+                .map(|(_, c)| c.clone())
+                .ok_or_else(|| error(capture::NOTHING_TO_RESTORE))?;
+            let path = capture.restore()?;
             s.captures.push((id, capture));
             s.clears.push((id, from, None));
-        }
-        let opened = self.install(id, source);
+            path
+        };
+        let opened = Source::granted(&path).and_then(|source| self.install(id, source));
         if opened.is_err() {
-            self.forget(id);
+            // The log that showed the capture may have closed meanwhile.
+            if let Some(c) = self.forget(id).0 {
+                c.close();
+            }
+            self.revert_restore();
         }
         opened
+    }
+    /// Reverts the shown capture's restore, unless a log is still opening
+    /// for it: reopening the cleared rows failed or was cancelled.
+    fn revert_restore(&self) {
+        let c = {
+            let s = self.state.lock().unwrap();
+            let Some(d) = &s.active else { return };
+            let shows = |id: u64| s.captures.iter().find(|(d, _)| *d == id).map(|(_, c)| c);
+            let Some(c) = shows(d.id).cloned() else {
+                return;
+            };
+            if s.clears
+                .iter()
+                .any(|(id, _, _)| shows(*id).is_some_and(|o| Arc::ptr_eq(o, &c)))
+            {
+                return;
+            }
+            c
+        };
+        c.revert_restore();
     }
     /// The dataset that `id` replaces while a cleared capture opens.
     pub fn cleared_from(&self, id: u64) -> Option<u64> {
@@ -390,17 +449,31 @@ impl Engine {
     }
     /// Makes the clear, or its undoing, that dataset `d` opened for: its
     /// capture writes `d`'s file from now on. Returns the file to delete
-    /// once nothing reads it.
+    /// once nothing reads it. One whose log closes by now, as after a later
+    /// clear, is not made, and goes as that log closes.
     fn cut(self: &Arc<Self>, d: &Arc<Dataset>) -> Option<capture::store::Slot> {
         let _cutting = self.cutting.lock().unwrap();
-        let cut = {
+        let (cut, capture, undone) = {
             let mut s = self.state.lock().unwrap();
+            if !s.keeps(d.id) {
+                return None;
+            }
             let k = s.clears.iter().position(|(id, _, _)| *id == d.id)?;
             let cut = s.clears.remove(k).2;
+            let capture = s
+                .captures
+                .iter()
+                .find(|(id, _)| *id == d.id)
+                .map(|(_, c)| c.clone());
+            // Confirmed as it leaves the list, so that nothing reverts it.
+            let undone = match &capture {
+                Some(c) if cut.is_none() => c.confirm_restore(),
+                _ => None,
+            };
             self.cut_made.notify_all();
-            cut
+            (cut, capture, undone)
         };
-        let Some(c) = self.capture(d.id) else {
+        let Some(c) = capture else {
             return cut.and_then(|cut| {
                 cut.remove();
                 None
@@ -409,7 +482,7 @@ impl Engine {
         self.watch(d.id, &c);
         match cut {
             Some(cut) => c.cut(cut),
-            None => c.restore().ok(),
+            None => undone,
         }
     }
     /// Drops dataset `id`'s capture and pending clear; the capture is
@@ -517,6 +590,24 @@ impl Engine {
         if followed {
             self.follow_capture(d);
         }
+    }
+    /// Follows the file of a capture that dataset `d` opened for, whose rows
+    /// arrive after that, or has it followed once a rollback shows it.
+    fn follow_opened(&self, d: &Arc<Dataset>) {
+        if self.capture(d.id).is_none() {
+            return;
+        }
+        {
+            let mut s = self.state.lock().unwrap();
+            if !s.keeps(d.id) {
+                return;
+            }
+            if s.previous.as_ref().is_some_and(|p| p.id == d.id) {
+                s.followed_previous = true;
+                return;
+            }
+        }
+        self.follow_capture(d);
     }
     /// Follows a capture's file; one that ended is read to its end.
     fn follow_capture(&self, d: &Arc<Dataset>) {
@@ -709,5 +800,268 @@ impl Engine {
             }
             _ => Err(error("Unsupported action")),
         }
+    }
+}
+#[cfg(test)]
+mod tests {
+    //! Moments of a clear's undoing that only a held lock can reach.
+    use super::*;
+    use capture::{fake::FakeLink, link::Platform, store::Store, Options, Phase};
+    use std::{
+        path::PathBuf,
+        thread,
+        time::{Duration, Instant},
+    };
+
+    const ROWS: &str =
+        "10-23 14:00:01.000  1234  5678 I Tag: one\n10-23 14:00:02.000  1234  5678 I Tag: two\n";
+    fn wait(what: &str, mut done: impl FnMut() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !done() {
+            assert!(Instant::now() < deadline, "timed out: {what}");
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+    struct Setup {
+        _dir: tempfile::TempDir,
+        store: Store,
+        link: Arc<FakeLink>,
+        engine: Arc<Engine>,
+        capture: Arc<Capture>,
+        /// The dataset of the cleared log.
+        cleared: u64,
+        /// The file of the rows cleared.
+        rows: PathBuf,
+    }
+    /// A stopped capture of two rows, cleared.
+    fn cleared() -> Setup {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path().join("captures"));
+        let link = FakeLink::new();
+        link.add("SER1", "Pixel_8", "SER1");
+        let engine = Arc::new(Engine::default());
+        let id = engine.begin_open();
+        let slot = store.create(Platform::Android, "Pixel 8").unwrap();
+        let capture = Capture::start(link.clone(), "SER1", slot, Options::default()).unwrap();
+        engine.open_capture(id, capture.clone()).unwrap();
+        link.log("SER1", ROWS);
+        wait("rows", || capture.rows() == 2);
+        engine.stop_capture(id).unwrap();
+        let rows = capture.path();
+        let cut = Cut::open(store.create(Platform::Android, "Pixel 8").unwrap()).unwrap();
+        let cleared = engine.begin_open();
+        engine.clear_capture(id, cleared, cut).unwrap();
+        wait("cleared", || {
+            capture.kept_path().is_some() && engine.capture(id).is_none()
+        });
+        Setup {
+            _dir: dir,
+            store,
+            link,
+            engine,
+            capture,
+            cleared,
+            rows,
+        }
+    }
+    impl Setup {
+        /// Opens the cleared rows again and runs `between` once they are
+        /// verified, before the capture takes them back.
+        fn restore(&self, between: impl FnOnce()) -> u64 {
+            let cutting = self.engine.cutting.lock().unwrap();
+            let back = self.engine.begin_open();
+            self.engine.restore_capture(self.cleared, back).unwrap();
+            wait("verified", || {
+                self.engine.state.lock().unwrap().previous.is_none()
+            });
+            between();
+            drop(cutting);
+            back
+        }
+        fn status(&self) -> Value {
+            self.engine.request(json!({"action":"status"})).unwrap()
+        }
+        fn shows_rows_again(&self, back: u64) {
+            wait("restored", || {
+                let s = self.status();
+                s["datasetId"] == back && s["total"] == 2 && s["capture"]["rows"] == 2
+            });
+            assert_eq!(self.capture.path(), self.rows);
+            assert_eq!(std::fs::read(&self.rows).unwrap(), ROWS.as_bytes());
+        }
+    }
+    #[test]
+    fn rows_verified_to_be_taken_back_are_not_let_go() {
+        let s = cleared();
+        let back = s.restore(|| s.capture.forget_kept());
+        s.shows_rows_again(back);
+        assert!(s.capture.unsaved());
+    }
+    #[test]
+    fn rows_being_taken_back_are_not_let_go_by_recording_on() {
+        let s = cleared();
+        let back = s.restore(|| assert!(s.capture.resume().is_err()));
+        s.shows_rows_again(back);
+        assert_eq!(s.capture.phase(), Phase::Stopped);
+        s.engine.resume_capture(back).unwrap();
+        assert_eq!(s.capture.path(), s.rows);
+    }
+    #[test]
+    fn rows_being_taken_back_are_asked_about_and_saved_as_they_are() {
+        let s = cleared();
+        let to = s._dir.path().join("saved.log");
+        let back = s.restore(|| {
+            let shown = s.status();
+            assert_eq!(shown["capture"]["unsaved"], true);
+            assert_eq!(shown["capture"]["bytes"], ROWS.len());
+            assert_eq!(shown["capture"]["rows"], 2);
+            s.capture.save(&to, &AtomicBool::new(false)).unwrap();
+        });
+        s.shows_rows_again(back);
+        assert_eq!(std::fs::read(&to).unwrap(), ROWS.as_bytes());
+        assert!(!s.capture.unsaved());
+    }
+    #[test]
+    fn closing_as_rows_are_taken_back_keeps_them_unless_discarded() {
+        for discard in [false, true] {
+            let s = cleared();
+            let empty = s.capture.path();
+            let mut closing = None;
+            s.restore(|| {
+                s.capture.discard(discard);
+                // It waits for the log's thread, which the held lock keeps.
+                let engine = s.engine.clone();
+                closing = Some(thread::spawn(move || engine.close()));
+                wait("closing", || {
+                    s.engine.state.lock().unwrap().active.is_none()
+                });
+            });
+            closing.unwrap().join().unwrap();
+            wait("closed", || s.engine.capture(s.cleared).is_none());
+            wait("cleared file removed", || !empty.exists());
+            let (store, rows) = (s.store, s.rows);
+            drop((s.capture, s.engine));
+            if discard {
+                assert!(!rows.exists());
+                continue;
+            }
+            assert_eq!(std::fs::read(&rows).unwrap(), ROWS.as_bytes());
+            let left: Vec<PathBuf> = store.leftovers().into_iter().map(|l| l.path).collect();
+            assert_eq!(left, [rows]);
+        }
+    }
+    impl Setup {
+        /// Shows `path` as dataset `id` as an open does, read to its end but
+        /// not finished.
+        fn read(&self, id: u64, path: &Path) {
+            let d = Dataset::new(id, Source::granted(path).unwrap());
+            let shown = {
+                let mut s = self.engine.state.lock().unwrap();
+                let shown = s.active.replace(d.clone()).unwrap();
+                s.previous = Some(shown.clone());
+                shown
+            };
+            shown.suspend();
+            d.start(|_| {});
+            wait("read", || d.index.lock().unwrap().done);
+        }
+        /// Shows `path` as dataset `id` for a clear, or its undoing without
+        /// `cut`, which is made only once another log opened over it. That
+        /// log then does not open after all.
+        fn made_under_another(&self, id: u64, path: &Path, cut: Option<Cut>) {
+            let from = self.engine.shown().unwrap().id;
+            self.read(id, path);
+            {
+                let mut s = self.engine.state.lock().unwrap();
+                s.captures.push((id, self.capture.clone()));
+                s.clears.push((id, from, cut));
+            }
+            let (discarded, followed) = self.engine.switch(id, true).unwrap();
+            let (other, file) = (self.engine.begin_open(), self._dir.path().join("other.log"));
+            std::fs::write(&file, ROWS).unwrap();
+            self.read(other, &file);
+            self.engine.settle(id, true, discarded, followed);
+            self.engine.finish(other, false);
+            assert_eq!(self.status()["datasetId"], id);
+        }
+        /// Records on, which must not wait for a clear that is never made.
+        fn records_on(&self, id: u64) {
+            let (done, answer) = std::sync::mpsc::channel();
+            let engine = self.engine.clone();
+            thread::spawn(move || done.send(engine.resume_capture(id)));
+            let answer = answer.recv_timeout(Duration::from_secs(5));
+            answer.expect("resume waits").unwrap();
+        }
+    }
+    #[test]
+    fn rows_taken_back_record_on_after_another_log_failed_to_open() {
+        let s = cleared();
+        let empty = s.capture.path();
+        let back = s.engine.begin_open();
+        let path = s.capture.restore().unwrap();
+        s.made_under_another(back, &path, None);
+        s.shows_rows_again(back);
+        s.records_on(back);
+        assert_eq!(s.capture.path(), s.rows);
+        assert!(s.rows.exists() && !empty.exists());
+    }
+    #[test]
+    fn a_cleared_log_records_on_and_is_followed_after_another_log_failed_to_open() {
+        let s = cleared();
+        let again = |live: bool| {
+            let shown = s.status()["datasetId"].as_u64().unwrap();
+            if live {
+                s.engine.resume_capture(shown).unwrap();
+            }
+            let slot = s.store.create(Platform::Android, "Pixel 8").unwrap();
+            let (id, path) = (s.engine.begin_open(), slot.path.clone());
+            s.made_under_another(id, &path, Some(Cut::open(slot).unwrap()));
+            assert_eq!(s.capture.path(), path);
+            id
+        };
+        let id = again(true);
+        wait("followed", || s.status()["following"] == true);
+        s.engine.stop_capture(id).unwrap();
+        let id = again(false);
+        s.records_on(id);
+        s.engine.close();
+    }
+    #[test]
+    fn a_clear_made_late_does_not_undo_the_one_after_it() {
+        let s = cleared();
+        let pending = |from: u64| {
+            let slot = s.store.create(Platform::Android, "Pixel 8").unwrap();
+            let (id, path) = (s.engine.begin_open(), slot.path.clone());
+            s.read(id, &path);
+            let mut state = s.engine.state.lock().unwrap();
+            state.captures.push((id, s.capture.clone()));
+            let cut = Some(Cut::open(slot).unwrap());
+            state.clears.push((id, from, cut));
+            (id, path, state.active.clone().unwrap())
+        };
+        s.engine.resume_capture(s.cleared).unwrap();
+        // The first clear's log is kept, but the clear is not made before
+        // the second one's log is, and the second is made first.
+        let (first, first_path, first_log) = pending(s.cleared);
+        let (before, _) = s.engine.switch(first, true).unwrap();
+        let (second, second_path, second_log) = pending(first);
+        let (discarded, _) = s.engine.switch(second, true).unwrap();
+        let old = s.engine.cut(&second_log);
+        assert!(s.engine.cut(&first_log).is_none());
+        assert_eq!(s.capture.path(), second_path);
+        // The rest of both, as `settle` does it.
+        for d in [before, discarded].into_iter().flatten() {
+            s.engine.retire(d);
+        }
+        old.unwrap().remove().unwrap();
+        assert!(!first_path.exists() && second_path.exists());
+        s.engine.follow_opened(&second_log);
+        // Rows the device holds already would not be recorded again.
+        s.link.log("SER1", &ROWS.replace("14:00", "14:01"));
+        wait("shown", || {
+            let shown = s.status();
+            shown["datasetId"] == second && shown["total"] == 2
+        });
+        s.engine.close();
     }
 }

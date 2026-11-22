@@ -320,8 +320,9 @@ function rig({state = {}, answers = {}, platform = 'MacIntel', unreport = null, 
   ui.rowMenu.hidden = true;
   const menu = {show:(items, x, y, label) => {if (ui.rowMenu.hidden) opener = document.activeElement; ui.rowMenu.hidden = false; ui.rowMenu.focus(); menus.push({items, x, y, label}); return ++version;},
     close:(restore = false) => {if (ui.rowMenu.hidden) return; version++; ui.rowMenu.hidden = true; if (restore) opener?.focus(); opener = null;}, version:() => version};
-  const timers = [];
-  const window = {navigator:{platform}, setTimeout:(fn, ms) => {timers.push(fn); return timers.length;}, clearTimeout:() => {}};
+  const timers = [], cancelled = new Set();
+  let timerId = 0;
+  const window = {navigator:{platform}, setTimeout:(fn, ms) => {const id = ++timerId; timers.push(() => cancelled.has(id) ? undefined : fn()); return id;}, clearTimeout:id => {cancelled.add(id);}};
   const unreported = [], dismissed = [];
   const devices = mountDevices({ui, document, window, native, menu, logs, isGone:() => false, report:m => reports.push(m), unreport:unreport ?? (m => unreported.push(m)), notify:(m, action, options) => {notes.push(m); if (options?.wait) waited.push(m);},
     dismiss:m => dismissed.push(m), keepInput, holdInput});
@@ -616,9 +617,40 @@ test('the trash button clears a stopped capture, which stays stopped until recor
   assert.equal(r.ui.captureClear.getAttribute('aria-disabled'), 'true');
   r.ui.captureClear.fire('click'); await settle();
   assert.equal(r.calls.filter(c => c[0] === 'clear_capture').length, 1);
-  // The rows set aside go once the notice has: a timer lets them go.
+  // The rows taken back are no longer let go.
   r.timers.forEach(fn => fn()); await settle();
-  assert.deepEqual(r.calls.filter(c => c[0] === 'forget_cleared_capture'), [['forget_cleared_capture', {datasetId:8}]]);
+  assert.deepEqual(r.calls.filter(c => c[0] === 'forget_cleared_capture'), []);
+});
+
+test('rows a stopped clear set aside go once its notice has, unless an undo began', async () => {
+  const stopped = {...unsaved, state:'stopped'};
+  let undo = null;
+  const cleared = async answers => {
+    const r = rig({state:{capture:stopped}, answers:{clear_capture:{datasetId:8}, ...answers}, keepInput:(from, notice, ms, action) => {undo = action ?? undo; return () => {};}});
+    r.devices.render();
+    r.ui.captureClear.fire('click'); await settle();
+    r.logs.state = {datasetId:8, closed:false, capture:{...stopped, bytes:0, rows:0, unsaved:false}};
+    return r;
+  };
+  const forgets = r => r.calls.filter(c => c[0] === 'forget_cleared_capture');
+  let r = await cleared({});
+  r.timers.forEach(fn => fn()); await settle();
+  assert.deepEqual(forgets(r), [['forget_cleared_capture', {datasetId:8}]]);
+  // An undo still opening a large log when the time runs out.
+  let opened;
+  r = await cleared({restore_capture:() => new Promise(resolve => {opened = resolve;})});
+  void undo.run(); await settle();
+  r.timers.forEach(fn => fn()); await settle();
+  assert.deepEqual(forgets(r), []);
+  opened({datasetId:9}); await settle();
+  r.timers.forEach(fn => fn()); await settle();
+  assert.deepEqual(forgets(r), []);
+  // One that fails is told, and its rows stay for the capture to let go.
+  r = await cleared({restore_capture:new Error('The cleared device log can no longer be restored')});
+  await undo.run(); await settle();
+  r.timers.forEach(fn => fn()); await settle();
+  assert.deepEqual(forgets(r), []);
+  assert.deepEqual(r.reports, ['The cleared device log can no longer be restored']);
 });
 
 test('a failed clear of a stopped capture shows the log again with the bar and its focus', async () => {
