@@ -365,6 +365,16 @@ mod tests {
         grants.consume_prefix(&prefix).unwrap();
         assert!(grants.consume_prefix(&prefix).is_err());
     }
+    /// Tests that use a pasteboard take turns, as they run on threads of one
+    /// process: AppKit crashes or loses contents when two threads use
+    /// pasteboards at once, even separate ones. The app itself uses them on
+    /// the main thread only.
+    #[cfg(target_os = "macos")]
+    fn pasteboard_turn() -> std::sync::MutexGuard<'static, ()> {
+        static TURN: Mutex<()> = Mutex::new(());
+        // Another test's failure is not this one's.
+        TURN.lock().unwrap_or_else(|e| e.into_inner())
+    }
     #[cfg(target_os = "macos")]
     #[test]
     fn native_private_pasteboard_preserves_bom_count() {
@@ -372,6 +382,7 @@ mod tests {
         use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
         use objc2_foundation::{NSData, NSString};
         use std::ptr::NonNull;
+        let _turn = pasteboard_turn();
         let board = NSPasteboard::pasteboardWithUniqueName();
         board.clearContents();
         // UTF-8 NSString constructors consume a leading encoding marker.
@@ -402,6 +413,7 @@ mod tests {
         use objc2::runtime::ProtocolObject;
         use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString, NSPasteboardWriting};
         use objc2_foundation::{NSArray, NSString, NSURL};
+        let _turn = pasteboard_turn();
         // Never read or overwrite the user's general clipboard.
         let board = NSPasteboard::pasteboardWithUniqueName();
         board.clearContents();
