@@ -350,6 +350,14 @@ fn write_atomically(file: &Path, value: &Value) -> std::io::Result<()> {
 mod tests {
     use super::*;
 
+    /// Tests that start a process take turns with those that expect a capture
+    /// file's lock to be free: on Unix a child holds copies of every open
+    /// file, and with them a lock just dropped, until it runs its program.
+    fn spawn_turn() -> std::sync::MutexGuard<'static, ()> {
+        static TURN: Mutex<()> = Mutex::new(());
+        // Another test's failure is not this one's.
+        TURN.lock().unwrap_or_else(|e| e.into_inner())
+    }
     /// Devices without this computer's simulators, which tests must not see.
     fn devices(dir: &Path) -> Devices {
         let d = Devices::default();
@@ -360,6 +368,7 @@ mod tests {
 
     #[test]
     fn a_picked_adb_is_kept_only_when_it_runs_as_one() {
+        let _turn = spawn_turn();
         let dir = tempfile::tempdir().unwrap();
         let d = devices(dir.path());
         assert_eq!(d.chosen(), None);
@@ -523,6 +532,7 @@ mod tests {
 
     #[test]
     fn leftovers_are_named_by_ids_and_deleted_by_them() {
+        let _turn = spawn_turn();
         let dir = tempfile::tempdir().unwrap();
         let d = devices(dir.path());
         assert_eq!(d.leftovers(), json!([]));
