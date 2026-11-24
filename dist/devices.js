@@ -931,15 +931,24 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
       void loadLeftovers();
     });
     row.append(open, remove);
+    row.dataset.name = item.name;
     return row;
   }
+  // A focused button stays with its file. Deleting the file with the keyboard
+  // goes on to the one that takes its place.
   async function loadLeftovers() {
     let list = [];
     try {list = await invoke('capture_leftovers');} catch {}
     if (isGone()) return;
-    list = Array.isArray(list) ? list.filter(item => Number.isSafeInteger(item?.id) && typeof item.name === 'string').slice(0, 20) : [];
+    list = Array.isArray(list) ? list.filter(item => Number.isSafeInteger(item?.id) && typeof item.name === 'string') : [];
+    const focused = document.activeElement, rows = [...ui.leftoverList.children], at = focused ? rows.findIndex(row => row.contains(focused)) : -1;
+    const button = at < 0 ? -1 : [...rows[at].children].indexOf(focused);
     ui.captureLeftovers.hidden = !list.length;
     ui.leftoverList.replaceChildren(...list.map(leftoverRow));
+    if (button < 0) return;
+    const now = [...ui.leftoverList.children], same = now.find(row => row.dataset.name === rows[at].dataset.name);
+    if (same) same.children[button].focus();
+    else if (button === 1) (now[Math.min(at, now.length - 1)]?.children[1] ?? ui.emptyDevice).focus();
   }
   void loadLeftovers();
 

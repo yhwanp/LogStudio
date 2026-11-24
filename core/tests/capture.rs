@@ -844,6 +844,23 @@ fn capture_files_held_by_a_running_app_are_no_leftovers() {
 }
 
 #[test]
+fn leftovers_are_listed_newest_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::new(dir.path());
+    let start = std::time::SystemTime::now() - Duration::from_secs(1_000_000);
+    // Their names do not say their order, except of files as old as another.
+    for (name, at) in [("ios-B", 3), ("logcat-C", 1), ("ios-A", 2), ("ios-D", 2)] {
+        let file = std::fs::File::create(dir.path().join(format!("{name}.log"))).unwrap();
+        file.set_modified(start + Duration::from_secs(at)).unwrap();
+    }
+    let names: Vec<_> = store.leftovers().into_iter().map(|l| l.name).collect();
+    assert_eq!(
+        names,
+        ["ios-B.log", "ios-D.log", "ios-A.log", "logcat-C.log"]
+    );
+}
+
+#[test]
 fn an_engine_follows_a_capture_until_it_stops() {
     let s = setup();
     let e = Arc::new(Engine::default());
