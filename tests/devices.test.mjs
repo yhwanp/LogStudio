@@ -915,6 +915,67 @@ test('files left by an earlier run open, or go after a second press', async () =
   assert.deepEqual(r.calls.find(c => c[0] === 'open_leftover'), ['open_leftover', {id:5}]);
 });
 
+test('every left file is listed, in the order native code gives', async () => {
+  const left = Array.from({length:45}, (_, i) => ({id:i + 1, name:`logcat-Pixel_8-${i}.log`, size:10, modified:at(10, 15, 0)}));
+  const r = rig({answers:{capture_leftovers:() => left}});
+  await settle();
+  assert.deepEqual(r.ui.leftoverList.children.map(row => row.children[0].children[0].textContent), left.map(l => l.name));
+});
+
+test('deleting a left file with the keyboard keeps the focus in the list', async () => {
+  let left = [1, 2, 3].map(id => ({id, name:`logcat-${id}.log`, size:10, modified:at(10, 15, 0)}));
+  const r = rig({answers:{capture_leftovers:() => left, delete_leftover:({id}) => {left = left.filter(l => l.id !== id);}}});
+  await settle();
+  const remove = i => r.ui.leftoverList.children[i].children[1];
+  const press = async (i, focused = true) => {
+    const button = remove(i);
+    if (focused) button.focus();
+    button.fire('click'); button.fire('click'); await settle();
+  };
+  // The file that took its place, or the one before at the end.
+  await press(1);
+  assert.equal(r.document.activeElement.getAttribute('aria-label'), 'logcat-3.log 삭제');
+  await press(1);
+  assert.equal(r.document.activeElement.getAttribute('aria-label'), 'logcat-1.log 삭제');
+  await press(0);
+  assert.equal(r.document.activeElement, r.ui.emptyDevice, 'the list is gone');
+  // A mouse press leaves the focus where it was.
+  left = [1, 2].map(id => ({id, name:`logcat-${id}.log`, size:10, modified:at(10, 15, 0)}));
+  await r.devices.loadLeftovers();
+  r.ui.openFile.focus();
+  await press(0, false);
+  assert.equal(r.document.activeElement, r.ui.openFile);
+});
+
+test('a focus moved on while a left file is deleted stays with its file', async () => {
+  let id = 0, gone;
+  let left = ['a', 'b', 'c'].map(name => ({name:`logcat-${name}.log`, size:10, modified:at(10, 15, 0)}));
+  // Native code names the files anew each time they are listed.
+  const r = rig({answers:{capture_leftovers:() => left.map(l => ({...l, id:++id})), delete_leftover:() => new Promise(resolve => {gone = resolve;})}});
+  await settle();
+  const button = (i, k) => r.ui.leftoverList.children[i].children[k];
+  const name = node => r.ui.leftoverList.children.findIndex(row => row.children.includes(node));
+  for (const [k, what] of [[0, 'open'], [1, '삭제']]) {
+    left = ['a', 'b', 'c'].map(name => ({name:`logcat-${name}.log`, size:10, modified:at(10, 15, 0)}));
+    await r.devices.loadLeftovers();
+    button(0, 1).focus();
+    button(0, 1).fire('click'); button(0, 1).fire('click'); await settle();
+    const old = button(2, k);
+    old.focus();
+    left = left.slice(1);
+    gone(); await settle();
+    assert.notEqual(r.document.activeElement, old);
+    assert.equal(r.document.activeElement, button(1, k), `${what} of the same file`);
+    assert.equal(name(r.document.activeElement), 1);
+  }
+  // One that could not be deleted keeps it too.
+  const kept = button(1, 1);
+  kept.focus();
+  await r.devices.loadLeftovers();
+  assert.equal(r.document.activeElement, button(1, 1));
+  assert.notEqual(r.document.activeElement, kept);
+});
+
 test('a device waiting on the person is listed again while the menu is open', async () => {
   const ipad = {serial:'QA0UDID0000000000000002', state:'untrusted', model:'QA iPad', product:'iPad0,0', platform:'ios', version:'27.0'};
   let listed = {devices:[ipad], androidError:null, iosError:null};

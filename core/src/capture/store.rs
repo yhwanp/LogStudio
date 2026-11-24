@@ -115,7 +115,7 @@ impl Store {
             _lock: lock,
         })
     }
-    /// Capture files whose lock no running app holds, oldest first.
+    /// Capture files whose lock no running app holds, newest first.
     pub fn leftovers(&self) -> Vec<Leftover> {
         let Ok(entries) = std::fs::read_dir(&self.dir) else {
             return vec![];
@@ -139,7 +139,7 @@ impl Store {
                 })
             })
             .collect();
-        found.sort_by_key(|l| l.modified);
+        found.sort_by(|a, b| (b.modified, &b.name).cmp(&(a.modified, &a.name)));
         found
     }
     /// Whether `path` names a regular capture file of this store.
