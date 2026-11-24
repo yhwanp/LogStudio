@@ -20,7 +20,10 @@ mod process;
 pub mod sim;
 pub mod store;
 
-use crate::source::{error, MAX_FILE, MAX_LINE};
+use crate::{
+    partial::Partial,
+    source::{error, MAX_FILE, MAX_LINE},
+};
 use gate::Gate;
 use link::{Cancel, Closer, Device, Link, Platform, Stream};
 use serde_json::{json, Value};
@@ -442,11 +445,10 @@ impl Capture {
         if to == path || std::fs::canonicalize(to).ok() == std::fs::canonicalize(&path).ok() {
             return Err(error("Choose a file other than the capture"));
         }
-        let name = to.file_name().ok_or_else(|| error("Save failed"))?;
-        let mut partial = to.to_path_buf();
-        partial.set_file_name(format!(".{}.logstudio-partial", name.to_string_lossy()));
-        if let Err(e) = copy_start(&path, len, &partial, to, cancel) {
-            let _ = std::fs::remove_file(&partial);
+        if to.file_name().is_none() {
+            return Err(error("Save failed"));
+        }
+        if let Err(e) = copy_start(&path, len, to, cancel) {
             return Err(match crate::source::public_message(&e, "") {
                 m if !m.is_empty() => e,
                 _ => error(match e.kind() {
@@ -1206,17 +1208,11 @@ impl Cut {
         let _ = self.slot.remove();
     }
 }
-/// Copies the first `len` bytes of `from` to `to` through `partial`, which
-/// replaces `to` only once complete.
-fn copy_start(
-    from: &Path,
-    len: u64,
-    partial: &Path,
-    to: &Path,
-    cancel: &AtomicBool,
-) -> io::Result<()> {
+/// Copies the first `len` bytes of `from` to `to`, which changes only once
+/// the copy is complete.
+fn copy_start(from: &Path, len: u64, to: &Path, cancel: &AtomicBool) -> io::Result<()> {
     let mut from = std::io::Read::take(File::open(from)?, len);
-    let mut out = File::create(partial)?;
+    let partial = Partial::beside(to)?;
     let mut buf = vec![0; 1 << 20];
     loop {
         if cancel.load(Ordering::Acquire) {
@@ -1226,10 +1222,9 @@ fn copy_start(
         if n == 0 {
             break;
         }
-        out.write_all(&buf[..n])?;
+        partial.file().write_all(&buf[..n])?;
     }
-    out.sync_all()?;
-    std::fs::rename(partial, to)
+    partial.replace(to, cancel, "Save cancelled")
 }
 
 #[cfg(test)]

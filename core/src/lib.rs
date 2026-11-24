@@ -6,6 +6,7 @@ pub mod fields_index;
 pub mod launch;
 pub mod order;
 pub mod parser;
+mod partial;
 pub mod search;
 pub mod source;
 use capture::{Capture, Cut};
@@ -673,15 +674,15 @@ impl Engine {
         if d.source.is_same_file(path) {
             return Err(error("Choose a file other than the open log"));
         }
-        let name = path.file_name().ok_or_else(|| error("Export failed"))?;
-        let mut partial = path.to_path_buf();
-        partial.set_file_name(format!(".{}.logstudio-partial", name.to_string_lossy()));
+        if path.file_name().is_none() {
+            return Err(error("Export failed"));
+        }
         let result = (|| {
-            let file = std::fs::File::create(&partial)?;
-            let mut out = io::BufWriter::with_capacity(1 << 20, file);
+            let partial = partial::Partial::beside(path)?;
+            let mut out = io::BufWriter::with_capacity(1 << 20, partial.file());
             let written = d.export_as(&q, kind, &mut out, cancel, progress)?;
-            out.into_inner().map_err(|e| e.into_error())?.sync_all()?;
-            std::fs::rename(&partial, path)?;
+            out.into_inner().map_err(|e| e.into_error())?;
+            partial.replace(path, cancel, "Export cancelled")?;
             Ok::<_, io::Error>(written)
         })();
         match result {
@@ -693,7 +694,6 @@ impl Engine {
                 Ok(v)
             }
             Err(e) => {
-                let _ = std::fs::remove_file(&partial);
                 // Policy errors pass through; OS write failures get a public
                 // message without the private path.
                 if !source::public_message(&e, "").is_empty() {

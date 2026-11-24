@@ -14,6 +14,7 @@
 | `core/src/dlt.rs` | DLT(프로토콜 버전 1) 단위 분할(`units`), 헤더 파싱, `dlt-viewer` 호환 페이로드 포매팅 및 행 렌더링(`Decoder::render`), 행 필드 추출(`parse_row`), 로컬 시각 변환(`Clock`), 테스트·벤치마크용 합성 생성기(`synth`) |
 | `core/src/search.rs` | 고정 버전 `grep-regex` / `grep-searcher` 기반 문자열·정규식 검색 및 하이라이트 범위 계산, 필터 조건(레벨·태그·PID·TID·시간·메시지) 컴파일과 블록·행 판정 |
 | `core/src/encoding.rs` | 표시 텍스트 디코딩: 손상된 UTF-8 바이트의 표시용 대체(`U+FFFD`)와 손상 위치 마스크, Mac OS Roman으로 잘못 읽혀 깨진 UTF-8 문자 복원(`repair`), UTF-16(UTF-32 BOM 포함)·압축 파일 판별 |
+| `core/src/partial.rs` | 내보내기·기기 로그 저장이 쓰는 임시 파일(`Partial`): 목적지 폴더에 겹치지 않는 고유한 이름으로 새로 만들고, 다 쓴 뒤 취소되지 않았을 때만 목적지를 교체하며, 새로 만든 그 파일만 지움 |
 | `core/src/launch.rs` | CLI 경로 인자(복수 지정 시 병합 열기) 및 `--large-log`(반복 가능) 옵션 해석 |
 | `core/src/capture/` | 기기 기록: `mod.rs`(기록기·재연결 상태 흐름·저장·버리기·새 파일로 비우기(`Cut`)), `gate.rs`(`threadtime` 시각과 시작 경계·중복 제거), `link.rs`(연결 계층 trait·기기 종류·`adb devices -l` 파서·공개 오류 문구), `cli.rs`(adb 명령 실행 연결), `adb.rs`(adb 탐지·`adb version` 검증), `process.rs`(adb·Xcode 도구 명령을 표준 입력과 Windows 콘솔 창 없이 만들고, 시간 제한 안에 끝까지 실행), `ios.rs`(Apple 기기 서비스(usbmuxd)로 iPhone·iPad 목록과 `os_trace_relay` 로그를 받아 iOS 로그 줄로 쓰는 연결), `sim.rs`(CoreSimulator의 `simctl`로 실행 중인 iOS 시뮬레이터 목록과 `log stream --style ndjson`을 받아 같은 iOS 로그 줄로 쓰는 연결. 출력은 소켓으로 받아, 기록을 멈추면 시뮬레이터 안의 `log`도 바로 끝남), `apps.rs`(기록 중인 iPhone·iPad의 개발용 서명 앱 목록과 Xcode `devicectl`로 `OS_ACTIVITY_DT_MODE=1` 실행), `store.rs`(임시 기록 파일과 잠금·남은 기록), `fake.rs`(테스트·QA용 가짜 연결과 합성 로그) |
 | `core/src/lib.rs` | `Engine`: 파일 열기·검증·롤백 복원, 기기 기록 로그 열기(`open_capture`)·비운 기록을 새 데이터셋으로 바꾸기(`clear_capture`)와 수명 관리, IPC 요청 처리, 진행 상태 이벤트 발행 |
@@ -24,6 +25,7 @@
 | `src-tauri/src/work.rs` | 파일별 작업 상태 저장(`work-states.json`): 정규 경로·크기·수정 시각으로 식별, 최근 50개 보관, 크기 제한 적용 |
 | `src-tauri/src/filters.rs` | 저장된 필터 관리(`saved-filters.json`): 이름 정규화 및 중복 검사, 크기 제한, 원자적 파일 교체 저장 |
 | `src-tauri/src/devices.rs` | 기기 기록의 데스크톱 상태: adb 탐지 결과와 사용자가 지정한 adb(`adb.json`), Android 기기와 iPhone·iPad를 함께 담은 마지막 기기 목록(기록은 이 목록의 serial·UDID로만 시작하며, 기기 종류에 맞는 연결을 고름), 기록 중인 iPhone·iPad의 마지막 앱 목록(앱은 이 목록의 bundle ID로만 실행), 앱 캐시의 임시 기록 폴더(`captures/`)와 남은 기록 ID, QA 빌드의 가짜 기기 |
+| `src-tauri/src/exports.rs` | 한 번에 하나만 실행하는 내보내기·기기 로그 저장: 취소, 종료할 때의 중단과 정리 대기 |
 | `src-tauri/src/recent.rs` | 최근 파일 목록 관리(`recent-files.json`): 프론트엔드에는 ID와 표시 이름만 전달하고 검증된 파일만 재열기 허용 |
 | `src-tauri/tauri.conf.json`, `src-tauri/capabilities/` | 앱 메타데이터·버전·식별자, 프론트엔드 경로(`frontendDist`), CSP 설정, Tauri 권한 정의 |
 | `src-tauri/icons/` | 앱 아이콘 원본(`icon.svg`, `icon-rounded.svg`) 및 생성된 `icon.icns`·`icon.ico`·`icon.png`([빌드와 배포](#빌드와-배포) 참고) |
@@ -209,6 +211,9 @@
 - **기기 기록과 외부 프로그램 실행:** 앱이 실행하는 외부 프로그램은 adb와, macOS에서 iPhone·iPad 앱 목록을 열거나 앱을 실행할 때만 쓰는 `xcode-select`·`xcodebuild`·`devicectl`뿐입니다. iPhone·iPad는 외부 프로그램 없이 OS의 Apple 기기 서비스와 기기가 이미 맺은 페어링 기록으로만 연결하며, 페어링을 새로 만들거나 바꾸지 않고 로그 서비스 하나만 엽니다. adb는 백엔드가 정해진 위치에서 찾거나 OS 파일 선택 창으로 지정한 파일만 쓰며, `adb version` 출력으로 adb인지 확인합니다. 화면은 실행 파일 경로나 명령을 보낼 수 없고, adb의 출처와 버전만 받습니다. 기기 serial은 백엔드가 마지막으로 받은 기기 목록에 있는 값만 허용하며, 셸을 거치지 않고 프로세스 인자로 넘깁니다. 기기에서 실행하는 명령은 고정된 조회와 `logcat`뿐이며, 앱 실행의 bundle ID는 마지막 앱 목록에 있고 허용 문자(영문자·숫자·`-`·`.`·`_`)만으로 된 값만 받아 `--` 뒤에 넘깁니다. 임시 기록 파일과 남은 기록도 화면에는 ID와 이름만 전달합니다.
 - **확장 기능 창:** extras 빌드의 확장 창은 `extras` URI 스킴에서 페이지를 받고, 그 스킴은 확장 자신의 창이 보낸 GET 요청에만 답합니다. 지도 창만 타일 서버에 접속하며, 메인 창의 CSP와 앱 명령의 메인 창 제한은 그대로입니다. extras 빌드는 `설정 폴더 열기`에서만 앱 데이터의 `extras/` 폴더를 macOS `open`(Windows `explorer`)으로 엽니다([EXTRAS.md](EXTRAS.md#구조)).
 - **메모리 및 원자적 쓰기:** 로그 원문 전체를 메모리에 복제하지 않고 필요할 때마다 128 KiB 블록 단위로 파일에서 직접 읽으며 반복 읽기는 OS 페이지 캐시를 활용합니다. 결과 내보내기와 설정 파일(`recent-files.json`, `work-states.json`, `saved-filters.json`) 저장은 모두 임시 파일에 먼저 기록한 뒤 원자적으로 교체(atomic rename)합니다.
+- **내보내기·저장의 임시 파일:** 목적지 옆에 `.logstudio-<pid>-<시각>-<순번>.partial`을 `create_new`로 만듭니다. 이름이 겹치지 않아 사용자 파일이나 다른 앱이 쓰는 파일을 비우거나 지우지 않고, 두 앱이 같은 목적지에 써도 서로 섞이지 않으며 늦게 끝난 쪽이 남습니다.
+  - **종료:** 창이 닫히거나 앱이 끝날 때(`Destroyed`·`RunEvent::Exit`) 진행 중인 작업을 취소하고, 임시 파일을 지울 때까지 모두 합쳐 최대 1.5초 기다립니다. 저장 창이 열려 있을 뿐이면 기다리지 않습니다.
+  - **남은 파일:** 강제 종료나 응답하지 않는 디스크 때문에 남은 임시 파일과, 이전 버전이 만든 `.이름.logstudio-partial`은 찾아 지우지 않습니다. 다른 앱이 쓰는 중이거나 사용자가 남긴 파일인지 이름만으로는 알 수 없고, 목적지 폴더를 다시 훑는 것은 사용자가 승인한 파일만 다룬다는 원칙에도 어긋나기 때문입니다.
 
 ## 빌드와 배포
 
