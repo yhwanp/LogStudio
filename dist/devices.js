@@ -321,10 +321,17 @@ const UNDO = '실행 취소';
 // A second press of a double click, after a clear that ended at once, is
 // not a second clear.
 const CLEAR_REPEAT_MS = 600;
+// How long closing waits for a save to stop.
+const STOP_MS = 2000;
 // What the stop button says and does in each state: while a capture
 // records it stops, and once stopped it records on into the same log.
 const STOP = {name:'기록 중지', hint:'기록을 멈춥니다 · 기록한 로그는 그대로 남고, 다시 누르면 이어서 기록합니다'};
 const RESUME = {name:'이어서 기록', hint:'같은 로그에 지금부터 들어오는 로그를 이어서 기록합니다 · 멈춘 동안의 로그는 기록되지 않습니다'};
+
+// What the question asks while nothing is being saved, and while the capture
+// is: then its second answer stops the save.
+const ASK_SAVE = {title:'기기 로그를 저장할까요?', save:'저장', discard:'저장\u00a0안\u00a0함'};
+const ASK_SAVING = {title:'기기 로그를 저장하고 있습니다', save:'저장 끝나면 닫기', discard:'저장 멈추고 닫기'};
 
 // One modal question: 저장 (focused), 저장 안 함, or 취소 (also Escape and a
 // press on the backdrop). Resolves 'save', 'discard' or 'cancel'.
@@ -332,9 +339,13 @@ export function mountCaptureDialog({document = globalThis.document} = {}) {
   const $ = id => document.getElementById(id);
   const dialog = $('captureDialog'), note = $('captureDialogNote'), save = $('captureSaveAs');
   let answer = null, opener = null;
-  function ask(text) {
+  function ask(text, words = ASK_SAVE) {
     answer?.('cancel');
+    $('captureDialogTitle').textContent = words.title;
     note.textContent = text;
+    note.hidden = !text;
+    save.textContent = words.save;
+    $('captureDiscard').textContent = words.discard;
     if (!dialog.open) {
       opener = focusOwner(document);
       dialog.showModal();
@@ -380,7 +391,7 @@ export function mountCaptureDialog({document = globalThis.document} = {}) {
   return {ask, dismiss:() => close('cancel'), get isOpen() {return dialog.open;}};
 }
 
-export function mountDevices({ui, document, window, native, menu, logs, isGone, report, unreport = () => {}, notify, dismiss = () => {}, keepInput = () => () => {}, holdInput = () => null}) {
+export function mountDevices({ui, document, window, native, menu, logs, isGone, report, unreport = () => {}, notify, dismiss = () => {}, keepInput = () => () => {}, holdInput = () => null, exporting = () => null}) {
   const invoke = (command, args) => native.core.invoke(command, args);
   const fail = error => report(String(error).slice(0, 500));
   const $ = id => document.getElementById(id);
@@ -396,7 +407,7 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
   // capture shown meanwhile has its own button. A start goes on under the
   // log that replaces its capture's when the capture is cleared.
   const starting = new Map();
-  let adb = null, busy = false, saving = false, clearing = false, clearedAt = -Infinity, launchError = '';
+  let adb = null, busy = false, saving = null, asking = 0, clearing = false, clearedAt = -Infinity, launchError = '';
   // A stop or resume press still in flight. It lasts until the bar shows
   // the new state, so the button stays unavailable while its name is old.
   let toggling = null;
@@ -597,25 +608,59 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
   // Before the shown log closes or another replaces it: a capture with rows
   // no save holds asks whether to save them. 'asked' when it asked and the
   // log may go, 'none' when nothing needed asking, 'cancel' to keep the log.
+  // It waits for a save or an export that runs, and the log stays if that
+  // fails or is cancelled, unless the user chose to stop the save. A later
+  // question takes the place of one that waits.
   async function guard() {
+    const mine = ++asking, gone = () => mine !== asking || isGone();
     const state = logs.getState(), capture = state.capture, datasetId = state.datasetId;
     if (!capture || state.closed || !Number.isSafeInteger(datasetId)) return 'none';
+    const job = saving?.datasetId === datasetId ? saving : null, exported = exporting();
     // A file with no unsaved rows goes when its log closes (native code).
-    if (!capture.unsaved) return 'none';
+    if (!capture.unsaved && !job) return 'none';
+    let discard = false;
     try {
-      const device = captureDevice(capture), size = formatSize(capture.bytes);
       // No-break spaces keep the button's name on one line.
-      const answer = await dialog.ask(`${device}에서 기록한 로그(${size})가 아직 저장되지 않았습니다. 저장\u00a0안\u00a0함을 누르면 지워집니다.`);
-      if (answer === 'cancel' || isGone()) return 'cancel';
-      if (answer === 'save' && !await save(datasetId, true)) return 'cancel';
+      const answer = job ? await dialog.ask('', ASK_SAVING)
+        : await dialog.ask(`${captureDevice(capture)}에서 기록한 로그(${formatSize(capture.bytes)})가 아직 저장되지 않았습니다. 저장\u00a0안\u00a0함을 누르면 지워집니다.`);
+      if (answer === 'cancel' || gone()) {
+        // The log stays after the save, whatever was asked before.
+        if (job && !gone()) job.leaving = false;
+        return 'cancel';
+      }
+      if (job && answer === 'discard') {
+        await invoke('cancel_export');
+        // On a disk that hangs the save does not stop: the rows then stay.
+        discard = await ended(job.done, STOP_MS) && capture.unsaved;
+      } else if (job) {
+        job.leaving = true;
+        if (!await job.done) return 'cancel';
+      } else {
+        discard = answer === 'discard';
+        if (exported && !await exported || gone()) return 'cancel';
+        if (answer === 'save' && !await save(datasetId, true)) return 'cancel';
+      }
+      if (gone()) return 'cancel';
       // Rows may arrive after the save, until the log closes: native code
       // then keeps the whole file, unless the save holds every row.
-      await invoke('discard_capture', {datasetId, discard:answer === 'discard'});
-      return 'asked';
+      await invoke('discard_capture', {datasetId, discard});
+      if (!gone()) return 'asked';
+      keep(datasetId);
+      return 'cancel';
     } catch (error) {
       fail(error);
       return 'cancel';
     }
+  }
+  // Whether `job` ends within `ms`.
+  function ended(job, ms) {
+    return new Promise(resolve => {
+      const timer = window.setTimeout(() => resolve(false), ms);
+      void job.then(() => {
+        window.clearTimeout(timer);
+        resolve(true);
+      });
+    });
   }
   // Saves a copy of the rows so far; false when the user cancelled. While it
   // copies, 저장 becomes 저장 취소: a capture can be gigabytes. `leaving`
@@ -624,12 +669,15 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
     const capture = logs.getState().capture;
     // A log with no rows has nothing to save, such as one just cleared.
     if (saving || clearing || !(capture?.bytes > 0)) return false;
-    saving = true;
+    const job = saving = {datasetId, leaving, done:null};
     render();
+    return job.done = saveCopy(job, capture, datasetId);
+  }
+  async function saveCopy(job, capture, datasetId) {
     try {
       const result = await invoke('save_capture', {datasetId});
       if (result?.cancelled) return false;
-      const more = leaving && (capture.state === 'recording' || capture.state === 'waiting') ? ' 그 뒤 들어온 줄이 있으면 저장하지 않은 기기 로그 목록에 전체 로그를 남겨 둡니다.' : '';
+      const more = job.leaving && (capture.state === 'recording' || capture.state === 'waiting') ? ' 그 뒤 들어온 줄이 있으면 저장하지 않은 기기 로그 목록에 전체 로그를 남겨 둡니다.' : '';
       notify(`기기 로그(${formatSize(result?.bytes ?? 0)})를 저장했습니다.${more}`, null, more ? {ms:5000} : undefined);
       void logs.start();
       return true;
@@ -638,7 +686,7 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
       else fail(error);
       return false;
     } finally {
-      saving = false;
+      saving = null;
       render();
     }
   }
@@ -904,14 +952,19 @@ export function mountDevices({ui, document, window, native, menu, logs, isGone, 
     try {
       await invoke('finish_drop', {token:payload.token, open:answer !== 'cancel'});
     } catch (error) {
+      // A later drop took the place of one let go.
+      if (answer === 'cancel') return;
       fail(error);
       keep(datasetId);
     }
   }).catch(() => {});
+  // The page takes the question at once; native code closes over one that
+  // stays silent.
   void native.event.listen('close-held', async () => {
-    const answer = isGone() ? 'none' : await guard();
+    const answer = isGone() ? 'none' : (void invoke('answer_close', {close:false}).catch(() => {}), await guard());
+    if (answer === 'cancel') return;
     const datasetId = logs.getState().datasetId;
-    try {await invoke('answer_close', {close:answer !== 'cancel'});} catch {keep(datasetId);}
+    try {await invoke('answer_close', {close:true});} catch {keep(datasetId);}
   }).catch(() => {});
   void native.event.listen('capture-changed', ({payload}) => {
     if (!isGone() && payload?.datasetId === logs.getState().datasetId) void logs.start();

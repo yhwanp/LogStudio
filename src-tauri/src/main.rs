@@ -36,12 +36,12 @@ impl Startup {
 struct Held {
     drop: Mutex<Option<(u64, Vec<std::path::PathBuf>)>>,
     tokens: AtomicUsize,
-    /// When the page was asked about closing; it may close once it answers.
+    /// When the page was asked about closing, until it takes the question.
     asked: Mutex<Option<std::time::Instant>>,
     closing: AtomicBool,
 }
-/// A page that has not answered for this long lets the window close: the
-/// capture file then stays for the next run to offer.
+/// A page that has not taken the question for this long lets the window
+/// close: the capture file then stays for the next run to offer.
 const CLOSE_ANSWER: std::time::Duration = std::time::Duration::from_secs(5);
 impl Held {
     fn hold(&self, paths: Vec<std::path::PathBuf>) -> u64 {
@@ -49,8 +49,8 @@ impl Held {
         *self.drop.lock().unwrap() = Some((token, paths));
         token
     }
-    /// Whether closing waits for the page: once per question, until it
-    /// answers or stops answering.
+    /// Whether closing waits for the page, which takes each question as it
+    /// comes; one that stays silent no longer delays it.
     fn delays_close(&self) -> bool {
         if self.closing.load(Ordering::Acquire) {
             return false;
@@ -842,7 +842,8 @@ fn finish_drop(
     }
     Ok(())
 }
-/// The page answered about closing: `close` closes the window, else it stays.
+/// The page took the question about closing, or answered it: `close` closes
+/// the window, else it stays.
 #[tauri::command]
 fn answer_close(window: tauri::WebviewWindow, close: bool) -> Result<(), String> {
     main_window(&window)?;
@@ -1463,4 +1464,26 @@ fn main() {
             handle.state::<AppState>().0.close();
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn closing_waits_for_a_page_that_takes_its_questions() {
+        let held = Held::default();
+        let ago = |by: std::time::Duration| std::time::Instant::now().checked_sub(by);
+        assert!(held.delays_close());
+        // Closing again at once asks again; a page silent since does not
+        // keep the window.
+        assert!(held.delays_close());
+        *held.asked.lock().unwrap() = ago(CLOSE_ANSWER);
+        assert!(!held.delays_close());
+        // One that took the question is asked anew, however long it thinks.
+        *held.asked.lock().unwrap() = None;
+        assert!(held.delays_close());
+        held.closing.store(true, Ordering::Release);
+        assert!(!held.delays_close());
+    }
 }

@@ -294,7 +294,7 @@ class Dialog extends Element {
   close() {if (!this.open) return; this.open = false; this.fire('close');}
 }
 // A page with the device parts, a scripted native side and log state.
-function rig({state = {}, answers = {}, platform = 'MacIntel', unreport = null, keepInput, holdInput} = {}) {
+function rig({state = {}, answers = {}, platform = 'MacIntel', unreport = null, keepInput, holdInput, exporting} = {}) {
   const document = {activeElement:null, body:null};
   const elements = new Map();
   document.getElementById = id => {
@@ -327,7 +327,7 @@ function rig({state = {}, answers = {}, platform = 'MacIntel', unreport = null, 
   const window = {navigator:{platform}, setTimeout:(fn, ms) => {const id = ++timerId; timers.push(() => cancelled.has(id) ? undefined : fn()); return id;}, clearTimeout:id => {cancelled.add(id);}};
   const unreported = [], dismissed = [];
   const devices = mountDevices({ui, document, window, native, menu, logs, isGone:() => false, report:m => reports.push(m), unreport:unreport ?? (m => unreported.push(m)), notify:(m, action, options) => {notes.push(m); if (options?.wait) waited.push(m);},
-    dismiss:m => dismissed.push(m), keepInput, holdInput});
+    dismiss:m => dismissed.push(m), keepInput, holdInput, exporting});
   return {document, ui, calls, listeners, menu, menus, notes, waited, reports, unreported, dismissed, logs, devices, dialog:document.getElementById('captureDialog'), $:document.getElementById, timers};
 }
 const unsaved = {state:'recording', device:'Pixel 8', bytes:4096, rows:32, unsaved:true, breaks:[]};
@@ -379,7 +379,7 @@ test('a window that does not close keeps its capture file', async () => {
   void r.listeners['close-held']({payload:{}}); await settle();
   r.$('captureDiscard').fire('click'); await settle();
   assert.deepEqual(r.calls.filter(c => ['answer_close', 'discard_capture'].includes(c[0])),
-    [['discard_capture', {datasetId:7, discard:true}], ['answer_close', {close:true}], ['discard_capture', {datasetId:7, discard:false}]]);
+    [['answer_close', {close:false}], ['discard_capture', {datasetId:7, discard:true}], ['answer_close', {close:true}], ['discard_capture', {datasetId:7, discard:false}]]);
 });
 
 test('dropped files and closing the window wait for the answer', async () => {
@@ -391,12 +391,180 @@ test('dropped files and closing the window wait for the answer', async () => {
   void r.listeners['drop-held']({payload:{token:4, count:1}}); await settle();
   r.$('captureDiscard').fire('click'); await settle();
   assert.deepEqual(r.calls.at(-1), ['finish_drop', {token:4, open:true}]);
+  // The page takes the question as it comes, so that closing again while it
+  // is open does not skip it (native code lets only a silent page be skipped).
   void r.listeners['close-held']({payload:{}}); await settle();
-  r.$('captureCancel').fire('click'); await settle();
   assert.deepEqual(r.calls.at(-1), ['answer_close', {close:false}]);
+  const before = r.calls.length;
+  r.$('captureCancel').fire('click'); await settle();
+  assert.deepEqual(r.calls.slice(before), []);
   r.logs.state = {...r.logs.state, capture:{...unsaved, unsaved:false}};
   void r.listeners['close-held']({payload:{}}); await settle();
   assert.deepEqual(r.calls.at(-1), ['answer_close', {close:true}]);
+});
+
+// A capture whose save is copying until `finish` (or `fail`) is called.
+function savingRig(options = {}) {
+  let finish, stop;
+  const r = rig({state:{capture:unsaved}, ...options, answers:{cancel_export:null, ...options.answers, save_capture:() => new Promise((resolve, reject) => {finish = resolve; stop = reject;})}});
+  return {r, finish:v => finish(v), stop:e => stop(e), asked:() => r.calls.filter(c => ['save_capture', 'discard_capture', 'cancel_export'].includes(c[0]))};
+}
+const buttons = r => ['captureDialogTitle', 'captureSaveAs', 'captureDiscard'].map(id => r.$(id).textContent);
+
+test('closing while a capture is saved waits for the save or stops it', async () => {
+  // The question says that it is being saved.
+  let {r, finish, stop, asked} = savingRig();
+  let saved = r.devices.save(); await settle();
+  let answer = r.devices.guard(); await settle();
+  assert.deepEqual(buttons(r), ['기기 로그를 저장하고 있습니다', '저장 끝나면 닫기', '저장 멈추고 닫기']);
+  assert.equal(r.$('captureDialogNote').textContent, '');
+  assert.equal(r.$('captureDialogNote').hidden, true);
+  // 저장 끝나면 닫기 waits for the save that runs, and starts no other.
+  r.$('captureForm').fire('submit'); await settle();
+  assert.equal(r.dialog.open, false);
+  assert.deepEqual(asked(), [['save_capture', {datasetId:7}]]);
+  finish({bytes:4096});
+  assert.equal(await saved, true);
+  assert.equal(await answer, 'asked');
+  assert.deepEqual(asked().at(-1), ['discard_capture', {datasetId:7, discard:false}]);
+  assert.equal(r.notes.at(-1), '기기 로그(4.0 KiB)를 저장했습니다. 그 뒤 들어온 줄이 있으면 저장하지 않은 기기 로그 목록에 전체 로그를 남겨 둡니다.');
+  // A save that fails, or that the user stops, keeps the log.
+  for (const why of ['Save failed', 'Save cancelled']) {
+    ({r, finish, stop, asked} = savingRig());
+    saved = r.devices.save(); await settle();
+    answer = r.devices.guard(); await settle();
+    r.$('captureForm').fire('submit'); await settle();
+    stop(why);
+    assert.equal(await answer, 'cancel');
+    assert.equal(asked().some(c => c[0] === 'discard_capture'), false);
+  }
+  // 저장 멈추고 닫기 stops the save, and the file goes once it stopped.
+  ({r, finish, stop, asked} = savingRig());
+  saved = r.devices.save(); await settle();
+  answer = r.devices.guard(); await settle();
+  r.$('captureDiscard').fire('click'); await settle();
+  assert.deepEqual(asked(), [['save_capture', {datasetId:7}], ['cancel_export', undefined]]);
+  stop('Save cancelled');
+  assert.equal(await answer, 'asked');
+  assert.deepEqual(asked().at(-1), ['discard_capture', {datasetId:7, discard:true}]);
+  assert.equal(await saved, false);
+  // 취소 keeps the log, and the save goes on.
+  ({r, finish, stop, asked} = savingRig());
+  saved = r.devices.save(); await settle();
+  answer = r.devices.guard(); await settle();
+  r.$('captureCancel').fire('click');
+  assert.equal(await answer, 'cancel');
+  finish({bytes:4096});
+  assert.equal(await saved, true);
+  assert.deepEqual(asked(), [['save_capture', {datasetId:7}]]);
+  // The next question is the plain one again.
+  answer = r.devices.guard(); await settle();
+  assert.deepEqual(buttons(r), ['기기 로그를 저장할까요?', '저장', '저장\u00a0안\u00a0함']);
+  assert.equal(r.$('captureDialogNote').hidden, false);
+  r.$('captureCancel').fire('click'); await answer;
+});
+
+test('a save that does not stop closes the log but keeps its rows', async () => {
+  const {r, asked} = savingRig();
+  void r.devices.save(); await settle();
+  const before = r.timers.length, answer = r.devices.guard(); await settle();
+  r.$('captureDiscard').fire('click'); await settle();
+  assert.deepEqual(asked(), [['save_capture', {datasetId:7}], ['cancel_export', undefined]]);
+  assert.equal(r.timers.length, before + 1);
+  r.timers.at(-1)();
+  assert.equal(await answer, 'asked');
+  assert.deepEqual(asked().at(-1), ['discard_capture', {datasetId:7, discard:false}]);
+  // It still runs under another capture's log, which it does not save.
+  r.logs.state = {...r.logs.state, datasetId:8};
+  const other = r.devices.guard(); await settle();
+  assert.equal(r.$('captureDialogTitle').textContent, '기기 로그를 저장할까요?');
+  r.$('captureCancel').fire('click'); await other;
+});
+
+test('closing while a saved capture is saved again asks, and closes as it would', async () => {
+  const again = () => savingRig({state:{capture:{...unsaved, unsaved:false}}});
+  // Stopped, its file goes or stays as native code sees its rows saved.
+  let {r, finish, stop, asked} = again();
+  let saved = r.devices.save(); await settle();
+  let answer = r.devices.guard(); await settle();
+  assert.equal(r.$('captureDialogTitle').textContent, '기기 로그를 저장하고 있습니다');
+  r.$('captureDiscard').fire('click'); await settle();
+  stop('Save cancelled');
+  assert.equal(await answer, 'asked');
+  assert.deepEqual(asked().slice(1), [['cancel_export', undefined], ['discard_capture', {datasetId:7, discard:false}]]);
+  await saved;
+  // It waits for the save, or keeps the log.
+  ({r, finish, stop, asked} = again());
+  saved = r.devices.save(); await settle();
+  answer = r.devices.guard(); await settle();
+  r.$('captureForm').fire('submit'); await settle();
+  finish({bytes:4096});
+  assert.equal(await answer, 'asked');
+  ({r, finish, stop, asked} = again());
+  saved = r.devices.save(); await settle();
+  answer = r.devices.guard(); await settle();
+  r.$('captureCancel').fire('click');
+  assert.equal(await answer, 'cancel');
+  // Once the save ended, it closes without a question.
+  finish({bytes:4096}); await saved;
+  assert.equal(await r.devices.guard(), 'none');
+});
+
+test('only the last close asked for goes on once its save ends', async () => {
+  const {r, finish, asked} = savingRig();
+  const closes = () => r.calls.filter(c => c[0] === 'answer_close' && c[1].close).length;
+  await settle();
+  void r.listeners['close-held']({payload:{}}); await settle();
+  r.$('captureForm').fire('submit'); await settle();
+  assert.deepEqual(asked(), [['save_capture', {datasetId:7}]]);
+  // Closing again while it saves, and then keeping the log.
+  void r.listeners['close-held']({payload:{}}); await settle();
+  assert.equal(r.$('captureDialogTitle').textContent, '기기 로그를 저장하고 있습니다');
+  r.$('captureCancel').fire('click'); await settle();
+  finish({bytes:4096}); await settle();
+  assert.equal(closes(), 0, 'the close kept is not made by the one before');
+  assert.equal(r.notes.at(-1), '기기 로그(4.0 KiB)를 저장했습니다.', 'nothing closes after the save');
+  assert.equal(asked().some(c => c[0] === 'discard_capture'), false);
+  // A drop replaced by another is let go without an error.
+  const second = savingRig({answers:{finish_drop:({token}) => {if (token === 1) throw 'The dropped files are gone; drop them again';}}});
+  await settle();
+  void second.r.listeners['drop-held']({payload:{token:1, count:1}}); await settle();
+  second.r.$('captureForm').fire('submit'); await settle();
+  void second.r.listeners['drop-held']({payload:{token:2, count:1}}); await settle();
+  second.r.$('captureForm').fire('submit'); await settle();
+  second.finish({bytes:4096}); await settle();
+  assert.deepEqual(second.r.calls.filter(c => c[0] === 'finish_drop').map(c => c[1]).sort((a, b) => a.token - b.token), [{token:1, open:false}, {token:2, open:true}]);
+  assert.deepEqual(second.r.reports, []);
+});
+
+test('closing a capture while its results are exported waits for the export', async () => {
+  let end;
+  const start = () => {const job = new Promise(resolve => {end = resolve;}); return rig({state:{capture:unsaved}, answers:{save_capture:{bytes:4096}}, exporting:() => job});};
+  const made = r => r.calls.filter(c => ['save_capture', 'discard_capture', 'cancel_export'].includes(c[0]));
+  // 저장 안 함 waits, then the file goes with its log.
+  let r = start();
+  let answer = r.devices.guard(); await settle();
+  assert.equal(r.$('captureDialogNote').textContent, 'Pixel 8에서 기록한 로그(4.0 KiB)가 아직 저장되지 않았습니다. 저장\u00a0안\u00a0함을 누르면 지워집니다.');
+  r.$('captureDiscard').fire('click'); await settle();
+  assert.deepEqual(made(r), []);
+  end(true);
+  assert.equal(await answer, 'asked');
+  assert.deepEqual(made(r), [['discard_capture', {datasetId:7, discard:true}]]);
+  // 저장 saves once the export left its place.
+  r = start();
+  answer = r.devices.guard(); await settle();
+  r.$('captureForm').fire('submit'); await settle();
+  assert.deepEqual(made(r), []);
+  end(true);
+  assert.equal(await answer, 'asked');
+  assert.deepEqual(made(r), [['save_capture', {datasetId:7}], ['discard_capture', {datasetId:7, discard:false}]]);
+  // An export that fails or is cancelled keeps the log.
+  r = start();
+  answer = r.devices.guard(); await settle();
+  r.$('captureDiscard').fire('click'); await settle();
+  end(false);
+  assert.equal(await answer, 'cancel');
+  assert.deepEqual(made(r), []);
 });
 
 test('the device menu fills in as adb answers, and a failed start keeps the shown capture file', async () => {
