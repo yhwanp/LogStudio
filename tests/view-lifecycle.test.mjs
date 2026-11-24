@@ -1981,6 +1981,17 @@ test('closing a capture log lists what it left once it closed',async t=>{
   assert.ok(closed>=0&&r.calls.findLastIndex(c=>c.action==='capture_leftovers')>closed);
 });
 
+test('a capture log closes once the export that runs ended well',async t=>{
+  const late=deferred(),r=await rig({exported:late.promise,capture:{state:'recording',device:'Pixel 8',bytes:4096,rows:32,unsaved:true,breaks:[]}});t.after(()=>r.controller.close());
+  const closed=()=>r.calls.some(c=>c.args.request?.action==='close');
+  await choose(r,'전체 로그 내보내기…');
+  await choose(r,'파일 닫기');
+  await r.get('captureDiscard').dispatch('click');await settle();
+  assert.equal(closed(),false);
+  late.resolve({rows:6});await settle();
+  assert.equal(closed(),true);
+});
+
 test('a capture keeps its file when the log to replace it does not open',async t=>{
   const refuse=error=>async()=>{throw error;};
   const r=await rig({capture:{state:'recording',device:'Pixel 8',bytes:4096,rows:32,unsaved:true,breaks:[]},answers:{open_text:refuse('Paste failed'),finish_file_paste:refuse('Paste grant expired; paste again')}});t.after(()=>r.controller.close());

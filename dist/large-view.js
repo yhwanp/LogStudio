@@ -130,7 +130,7 @@ export function mountLargeLogView(native, {transport, tips=null, help=null, docu
   const MOD=/Mac|iPhone|iPad/.test(window.navigator?.platform??'')?'⌘':'Ctrl+',FILTERS_KEY=MOD==='⌘'?'⌘⇧F':'Ctrl+Shift+F',MOD_KEY=MOD==='⌘'?'Meta':'Control';
   // Only macOS reads a copied file from the native pasteboard.
   if(MOD!=='⌘'){$('searchShortcut').textContent='Ctrl+F';$('pasteHint').textContent='로그 텍스트 붙여넣기';for(const key of document.querySelectorAll?.('.mod-key')??[])key.textContent='Ctrl';}
-  let toastTimer=null,toastAction=false,toastNext=null,exporting=false,exportTotal=0;
+  let toastTimer=null,toastAction=false,toastNext=null,exporting=false,exported=null,exportTotal=0;
   function hideToast(){
     if(toastTimer!==null)window.clearTimeout(toastTimer);toastTimer=null;ui.toast.hidden=true;toastAction=false;
     const next=toastNext;toastNext=null;if(next&&!disposed)notify(...next);
@@ -1227,17 +1227,20 @@ export function mountLargeLogView(native, {transport, tips=null, help=null, docu
   async function exportPane(owner,isSearch,format=null){
     const state=owner.getState();
     if(exporting||disposed||!state.queryComplete||!state.count)return;
+    // Resolves to whether the results were written.
+    let end,written=false;exported=new Promise(resolve=>{end=resolve;});
     exporting=true;exportTotal=state.count;ui.exportCancel.hidden=false;renderLogs(logs.getState());renderSearch(search.getState());
     const all=!isSearch&&wholeLog(state),stem=String(state.name||'log').replace(/\.[^.]*$/,'')||'log',extension={dlt:'dlt',text:'txt'}[format]??'log';
     try{
       const result=await native.core.invoke('export_results',{pane:isSearch?'search':'logs',datasetId:state.datasetId,queryId:state.queryId,suggestedName:`${stem}-${isSearch?'search':all?'all':'filtered'}.${extension}`,...(format?{format}:{})});
-      if(Number.isSafeInteger(result?.rows))notify(`${all?'전체 ':''}${formatNumber(result.rows)}행을 내보냈습니다.${Number.isSafeInteger(result.skipped)&&result.skipped>0?` DLT 메시지가 아닌 ${formatNumber(result.skipped)}행은 뺐습니다.`:''}`);
+      written=Number.isSafeInteger(result?.rows);
+      if(written)notify(`${all?'전체 ':''}${formatNumber(result.rows)}행을 내보냈습니다.${Number.isSafeInteger(result.skipped)&&result.skipped>0?` DLT 메시지가 아닌 ${formatNumber(result.skipped)}행은 뺐습니다.`:''}`);
     }catch(error){
       const text=String(error).slice(0,500);
       if(text==='Export cancelled')notify('내보내기를 취소했습니다.');
       else if(!pageGone){inputError=text;errors();}
     }finally{
-      exporting=false;ui.exportCancel.hidden=true;
+      exporting=false;exported=null;ui.exportCancel.hidden=true;end(written);
       if(!pageGone){renderLogs(logs.getState());renderSearch(search.getState());}
     }
   }
@@ -1289,7 +1292,7 @@ export function mountLargeLogView(native, {transport, tips=null, help=null, docu
     // A cleared capture's log replaces this one keeping the filters and search, as a reload does;
     // undoing a clear brings back the whole input `holdInput` took, bookmarks and places too.
     keepInput:(from,notice,noticeMs,noticeAction=null,whole=null)=>{reloadRequest={from,snapshot:{...(whole??{filters:currentFilters(),filtersOff,savedFilter:saved?.applied()??null}),notice,noticeMs,noticeAction}};return ()=>{if(reloadRequest?.from===from)reloadRequest=null;};},
-    holdInput:()=>reloadSnapshot(),dismiss});
+    holdInput:()=>reloadSnapshot(),dismiss,exporting:()=>exported});
   // A row an extension picks is selected in the upper logs, as a typed row
   // number is, without moving focus.
   extras=mountExtras({native,notify,isGone:()=>pageGone,
