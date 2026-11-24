@@ -10,6 +10,7 @@ use tauri_plugin_dialog::DialogExt;
 mod clipboard;
 mod devices;
 mod drag;
+mod exports;
 mod filters;
 mod geometry;
 mod recent;
@@ -116,35 +117,6 @@ fn open_dropped(app: &tauri::AppHandle, engine: &Arc<Engine>, paths: Vec<std::pa
             engine.emit_error(error);
         }
     });
-}
-/// Cancellation flag of the one export that may run at a time.
-#[derive(Default)]
-struct Exports(Mutex<Option<Arc<AtomicBool>>>);
-impl Exports {
-    /// Takes the one export slot until the returned export ends.
-    fn start(&self) -> Result<Running<'_>, String> {
-        let mut slot = self.0.lock().unwrap();
-        if slot.is_some() {
-            return Err("An export is already running".into());
-        }
-        let cancel = Arc::new(AtomicBool::new(false));
-        *slot = Some(cancel.clone());
-        Ok(Running {
-            exports: self,
-            cancel,
-        })
-    }
-}
-/// A running export or save; `cancel` stops it, and dropping it frees the
-/// slot even when the request itself is dropped.
-struct Running<'a> {
-    exports: &'a Exports,
-    cancel: Arc<AtomicBool>,
-}
-impl Drop for Running<'_> {
-    fn drop(&mut self) {
-        *self.exports.0.lock().unwrap() = None;
-    }
 }
 static ACTIVE: AtomicUsize = AtomicUsize::new(0);
 struct Permit;
@@ -255,7 +227,7 @@ async fn pick_file(
 async fn export_results(
     window: tauri::WebviewWindow,
     state: tauri::State<'_, AppState>,
-    exports: tauri::State<'_, Exports>,
+    exports: tauri::State<'_, exports::Exports>,
     pane: String,
     dataset_id: u64,
     query_id: u64,
@@ -273,7 +245,7 @@ async fn export_results(
         Some(_) => return Err("Invalid export format".into()),
     };
     let running = exports.start()?;
-    let cancel = running.cancel.clone();
+    let job = running.job.clone();
     // The name only seeds the save dialog; the user chooses the location.
     let name: String = suggested_name
         .chars()
@@ -308,6 +280,7 @@ async fn export_results(
         let path = path
             .into_path()
             .map_err(|_| "Select a local file".to_string())?;
+        let _writing = job.write().ok_or("Export cancelled")?;
         let mut last = std::time::Instant::now();
         engine
             .export_as(
@@ -316,7 +289,7 @@ async fn export_results(
                 query_id,
                 &path,
                 kind,
-                &cancel,
+                job.cancelled(),
                 |rows, bytes| {
                     if last.elapsed() >= std::time::Duration::from_millis(100) {
                         last = std::time::Instant::now();
@@ -330,13 +303,11 @@ async fn export_results(
     .map_err(|_| "Export failed".to_string())?
 }
 #[tauri::command]
-fn cancel_export(window: tauri::WebviewWindow, exports: tauri::State<'_, Exports>) {
+fn cancel_export(window: tauri::WebviewWindow, exports: tauri::State<'_, exports::Exports>) {
     if main_window(&window).is_err() {
         return;
     }
-    if let Some(cancel) = exports.0.lock().unwrap().as_ref() {
-        cancel.store(true, Ordering::Release);
-    }
+    exports.cancel();
 }
 #[tauri::command]
 async fn open_text(
@@ -770,7 +741,7 @@ fn capture_destination(
 async fn save_capture(
     window: tauri::WebviewWindow,
     state: tauri::State<'_, AppState>,
-    exports: tauri::State<'_, Exports>,
+    exports: tauri::State<'_, exports::Exports>,
     dataset_id: u64,
 ) -> Result<Value, String> {
     main_window(&window)?;
@@ -779,7 +750,7 @@ async fn save_capture(
         .capture(dataset_id)
         .ok_or("No device capture is open")?;
     let running = exports.start()?;
-    let cancel = running.cancel.clone();
+    let job = running.job.clone();
     let app = window.app_handle().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let name = capture
@@ -793,8 +764,9 @@ async fn save_capture(
         let path = path
             .into_path()
             .map_err(|_| "Select a local file".to_string())?;
+        let _writing = job.write().ok_or("Save cancelled")?;
         let bytes = capture
-            .save(&path, &cancel)
+            .save(&path, job.cancelled())
             .map_err(message_or("Save failed"))?;
         Ok(json!({"bytes":bytes,"capture":capture.json()}))
     })
@@ -1219,7 +1191,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState(engine))
         .manage(clipboard::Grants::default())
-        .manage(Exports::default())
+        .manage(exports::Exports::default())
         .manage(recent::Recent::default())
         .manage(geometry::Geometry::default())
         .manage(work::WorkStates::default())
@@ -1366,6 +1338,7 @@ fn main() {
                 }
                 tauri::WindowEvent::Destroyed => {
                     window.state::<clipboard::Grants>().clear();
+                    window.state::<exports::Exports>().end();
                     engine.close();
                     // The app ends with the main window, as it does with its
                     // last window.
@@ -1486,6 +1459,7 @@ fn main() {
         if matches!(event, tauri::RunEvent::Exit) {
             // Quitting from the Dock or logging out closes no window first.
             handle.state::<geometry::Geometry>().flush(handle);
+            handle.state::<exports::Exports>().end();
             handle.state::<AppState>().0.close();
         }
     });
