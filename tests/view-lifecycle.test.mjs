@@ -2009,6 +2009,12 @@ test('a capture keeps its file when the log to replace it does not open',async t
   await r.emit({status:'error',error:'Select a regular file; symbolic links are not supported'});await settle();
   assert.deepEqual(marks().at(-1),{datasetId:1,discard:false},'dropped files');
   assert.match(r.get('largeError').textContent,/심볼릭 링크/);
+  // Saved for the file picker, which is then cancelled: the capture goes on.
+  const opening=r.get('openFile').dispatch('click');await settle();
+  await r.get('captureForm').dispatch('submit',{preventDefault(){}});await opening;await settle();
+  assert.deepEqual(marks().at(-1),{datasetId:1,discard:true},'saved');
+  r.picker.resolve({cancelled:true});await settle();
+  assert.deepEqual(marks().at(-1),{datasetId:1,discard:false},'the picker cancelled');
 });
 
 test('Cmd/Ctrl+L with no rows says so instead of doing nothing',async t=>{

@@ -209,8 +209,8 @@ test('the capture bar names each state; breaks name where the device left and ca
   assert.equal(locked.title, '기기 잠금을 풀어 주세요. 준비되면 이어서 기록합니다. 멈춘 동안의 로그는 기록되지 않습니다.');
   assert.equal(describeCapture({...base, state:'stopped', recovered:true}).text, '남은 기기 로그 · 저장 안 됨');
   assert.equal(describeCapture({...base, state:'stopped', recovered:true, unsaved:false}).text, '남은 기기 로그 · 저장함');
-  // Left by an earlier run, or by a log closed in this one; also once saved.
-  for (const unsaved of [true, false]) assert.match(describeCapture({...base, state:'stopped', recovered:true, unsaved}).title, /^저장하지 않은 부분이 있어 남겨 두었던 기기 로그입니다\([^)]+\)\.$/);
+  // Saved or not, as the bar says.
+  for (const unsaved of [true, false]) assert.match(describeCapture({...base, state:'stopped', recovered:true, unsaved}).title, /^남은 기기 로그\([0-9.]+ MiB\)$/);
   // A failure's reason is a sentence: the bar keeps it to its title.
   const failed = describeCapture({...base, state:'failed', error:'Recording stopped: not enough disk space'});
   assert.equal(failed.text, '기록 중단 · 저장 안 됨 · Pixel 8');
@@ -351,9 +351,8 @@ test('a capture with unsaved rows asks; others close without a question', async 
   answer = r.devices.guard(); await settle(); r.$('captureCancel').fire('click');
   assert.equal(await answer, 'cancel');
   assert.equal(r.calls.some(c => c[0] === 'discard_capture'), false);
-  // 저장 saves first; a cancelled save dialog keeps the log. Rows may still
-  // arrive after the save, so the file is never marked to go: closing
-  // deletes it only when the save holds every row.
+  // 저장 saves first; a cancelled save dialog keeps the log. Rows that
+  // arrive after the save go with the file: the save holds what was there.
   r = rig({state:{capture:unsaved}, answers:{save_capture:{cancelled:true}}});
   answer = r.devices.guard(); await settle(); r.$('captureForm').fire('submit');
   assert.equal(await answer, 'cancel');
@@ -361,8 +360,8 @@ test('a capture with unsaved rows asks; others close without a question', async 
   r = rig({state:{capture:unsaved}, answers:{save_capture:{bytes:4096}}});
   answer = r.devices.guard(); await settle(); r.$('captureForm').fire('submit');
   assert.equal(await answer, 'asked');
-  assert.deepEqual(r.calls.filter(c => c[0].endsWith('_capture')), [['save_capture', {datasetId:7}], ['discard_capture', {datasetId:7, discard:false}]]);
-  assert.equal(r.notes.at(-1), '기기 로그(4.0 KiB)를 저장했습니다. 그 뒤 들어온 줄이 있으면 저장하지 않은 기기 로그 목록에 전체 로그를 남겨 둡니다.');
+  assert.deepEqual(r.calls.filter(c => c[0].endsWith('_capture')), [['save_capture', {datasetId:7}], ['discard_capture', {datasetId:7, discard:true}]]);
+  assert.equal(r.notes.at(-1), '기기 로그(4.0 KiB)를 저장했습니다.');
   // A stopped capture gets no more rows, and one saved in place goes on.
   r = rig({state:{capture:{...unsaved, state:'stopped'}}, answers:{save_capture:{bytes:4096}}});
   answer = r.devices.guard(); await settle(); r.$('captureForm').fire('submit');
@@ -426,8 +425,8 @@ test('closing while a capture is saved waits for the save or stops it', async ()
   finish({bytes:4096});
   assert.equal(await saved, true);
   assert.equal(await answer, 'asked');
-  assert.deepEqual(asked().at(-1), ['discard_capture', {datasetId:7, discard:false}]);
-  assert.equal(r.notes.at(-1), '기기 로그(4.0 KiB)를 저장했습니다. 그 뒤 들어온 줄이 있으면 저장하지 않은 기기 로그 목록에 전체 로그를 남겨 둡니다.');
+  assert.deepEqual(asked().at(-1), ['discard_capture', {datasetId:7, discard:true}]);
+  assert.equal(r.notes.at(-1), '기기 로그(4.0 KiB)를 저장했습니다.');
   // A save that fails, or that the user stops, keeps the log.
   for (const why of ['Save failed', 'Save cancelled']) {
     ({r, finish, stop, asked} = savingRig());
@@ -557,7 +556,7 @@ test('closing a capture while its results are exported waits for the export', as
   assert.deepEqual(made(r), []);
   end(true);
   assert.equal(await answer, 'asked');
-  assert.deepEqual(made(r), [['save_capture', {datasetId:7}], ['discard_capture', {datasetId:7, discard:false}]]);
+  assert.deepEqual(made(r), [['save_capture', {datasetId:7}], ['discard_capture', {datasetId:7, discard:true}]]);
   // An export that fails or is cancelled keeps the log.
   r = start();
   answer = r.devices.guard(); await settle();
