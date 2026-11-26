@@ -536,7 +536,6 @@ mark{background:var(--mark);color:var(--mark-text);padding:0;border-radius:2px}
 .recent-open span{font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .recent-remove{background:none;color:var(--faint);font-size:16px;width:34px;height:34px;border-radius:6px;margin-right:4px}
 .recent-remove:hover{background:var(--surface-3);color:var(--text)}
-.leftover-note{margin:0 0 8px;text-align:left}
 .leftover-remove{background:none;color:var(--muted);font-size:12px;font-weight:600;padding:5px 10px;margin-right:6px;border-radius:6px;white-space:nowrap}
 .leftover-remove:hover{background:var(--error-bg);color:var(--error-text)}
 .leftover-remove[data-armed]{background:var(--error-text);color:var(--surface)}
